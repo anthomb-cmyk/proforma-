@@ -15,11 +15,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MODEL = "gpt-4.1-mini";
 
-// LOGIN
-const APP_USERNAME = process.env.APP_USERNAME;
-const APP_PASSWORD = process.env.APP_PASSWORD;
+const APP_USERNAME = process.env.APP_USERNAME || "admin";
+const APP_PASSWORD = process.env.APP_PASSWORD || "1234";
 
-// LOAD LISTINGS
 const listingsPath = path.join(__dirname, "listings.json");
 let listings = [];
 
@@ -32,60 +30,37 @@ try {
 
 app.use(cors());
 app.use(express.json());
-
-// 🔒 AUTH MIDDLEWARE
-app.use((req, res, next) => {
-  if (
-    req.path.startsWith("/api/login") ||
-    req.path.startsWith("/login") ||
-    req.path === "/"
-  ) {
-    return next();
-  }
-
-  const auth = req.headers.authorization || "";
-  const expected =
-    "Basic " +
-    Buffer.from(`${APP_USERNAME}:${APP_PASSWORD}`).toString("base64");
-
-  if (auth === expected) return next();
-
-  return res.status(401).json({ error: "Unauthorized" });
-});
-
-// STATIC
 app.use(express.static(__dirname));
 
-// OPENAI
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// LOGIN API
 app.post("/api/login", (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
 
   if (username === APP_USERNAME && password === APP_PASSWORD) {
-    const token = Buffer.from(`${username}:${password}`).toString("base64");
-    return res.json({ ok: true, token });
+    return res.json({ ok: true });
   }
 
-  return res.status(401).json({ ok: false });
+  return res.status(401).json({
+    ok: false,
+    error: "Identifiants invalides."
+  });
 });
 
-// HEALTH
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
 
-// LISTINGS
 app.get("/api/listings", (req, res) => {
   const map = {};
-  listings.forEach((l) => (map[l.ref] = l));
+  listings.forEach((l) => {
+    map[l.ref] = l;
+  });
   res.json({ listings: map });
 });
 
-// CHAT
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, mode } = req.body;
@@ -97,21 +72,26 @@ app.post("/api/chat", async (req, res) => {
           {
             role: "system",
             content:
-              "Transforme ce texte en français international clair et professionnel."
+              "Transforme ce texte en français international clair, professionnel et naturel. Si l'utilisateur demande une autre langue, traduis vers cette langue. Si la question concerne un immeuble ou un logement, réponds exactement : Pour toute question liée aux immeubles ou aux logements, veuillez utiliser le mode Assistant des immeubles."
           },
           { role: "user", content: message }
         ]
       });
 
       return res.json({
-        reply: response.output_text
+        reply: response.output_text || "Erreur de réponse.",
+        label: "Traducteur",
+        variant: "success"
       });
     }
 
     const refMatch = message.match(/\bL-\d{4}\b/i);
+
     if (!refMatch) {
       return res.json({
-        reply: "Veuillez inclure une référence (ex: L-1001)."
+        reply: "Veuillez inclure une référence (ex: L-1001).",
+        label: "Assistant des immeubles",
+        variant: "error"
       });
     }
 
@@ -120,7 +100,9 @@ app.post("/api/chat", async (req, res) => {
 
     if (!listing) {
       return res.json({
-        reply: "Référence non trouvée."
+        reply: "Référence non trouvée.",
+        label: "Assistant des immeubles",
+        variant: "error"
       });
     }
 
@@ -129,21 +111,35 @@ app.post("/api/chat", async (req, res) => {
       input: [
         {
           role: "system",
-          content: `Tu réponds uniquement avec ces infos:\n${JSON.stringify(
-            listing
-          )}`
+          content: `Tu réponds uniquement avec ces informations sur l'immeuble :
+Référence : ${listing.ref}
+Adresse : ${listing.address}
+Ville : ${listing.city}
+Loyer : ${listing.rent}
+Chambres : ${listing.bedrooms}
+Disponibilité : ${listing.availability}
+Statut : ${listing.status}
+Description : ${listing.description}
+Notes : ${listing.notes}
+
+Règles :
+- Réponds seulement avec ces infos
+- N'invente rien
+- Sois court, clair et professionnel`
         },
         { role: "user", content: message }
       ]
     });
 
-    res.json({
-      reply: response.output_text,
+    return res.json({
+      reply: response.output_text || "Erreur de réponse.",
+      label: "Assistant des immeubles",
+      variant: "success",
       reference: ref
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Server error" });
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
