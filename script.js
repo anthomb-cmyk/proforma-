@@ -97,17 +97,6 @@ function renderMessages() {
   const history = currentHistory();
   chatMessages.innerHTML = "";
 
-  if (!history.length) {
-    history.push({
-      sender: "bot",
-      label: "Système",
-      text:
-        chatState.currentMode === "listing"
-          ? "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
-          : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
-    });
-  }
-
   history.forEach((message) => addMessageToDOM(message));
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -117,10 +106,7 @@ function pushMessage(sender, label, text, variant = "") {
   currentHistory().push(message);
   addMessageToDOM(message);
 
-  if (chatMessages) {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
+  chatMessages.scrollTop = chatMessages.scrollHeight;
   return message;
 }
 
@@ -142,36 +128,13 @@ function replaceLastLoading(text, variant = "success", label = "Assistant") {
 function switchMode(mode) {
   chatState.currentMode = mode;
 
-  if (listingModeBtn) listingModeBtn.classList.toggle("active", mode === "listing");
-  if (translatorModeBtn) translatorModeBtn.classList.toggle("active", mode === "translator");
-
-  if (mode === "listing") {
-    if (modeStatus) {
-      modeStatus.textContent =
-        "Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.";
-    }
-    if (chatInput) {
-      chatInput.placeholder = "Exemple : L-1001 - Quel est le loyer ?";
-    }
-    if (modePill) {
-      modePill.textContent = "Mode actif : Assistant des immeubles";
-    }
-  } else {
-    if (modeStatus) {
-      modeStatus.textContent =
-        "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
-    }
-    if (chatInput) {
-      chatInput.placeholder = "Exemple : yer tu dispo le logi";
-    }
-    if (modePill) {
-      modePill.textContent = "Mode actif : Traducteur";
-    }
-  }
+  listingModeBtn.classList.toggle("active", mode === "listing");
+  translatorModeBtn.classList.toggle("active", mode === "translator");
 
   renderMessages();
 }
 
+/* 🔥 FIX ICI */
 function updateListingPreview(ref) {
   if (!listingPreview) return;
 
@@ -179,22 +142,31 @@ function updateListingPreview(ref) {
 
   if (!listing) {
     listingPreview.textContent = "Numéro de référence introuvable.";
-    listingPreview.classList.remove("muted");
     return;
   }
 
+  const adresse = listing.adresse ?? listing.address ?? "Non précisée";
+  const ville = listing.ville ?? listing.city ?? "Non précisée";
+  const typeLogement = listing.type_logement ?? "Non précisé";
+  const chambres = listing.chambres ?? listing.bedrooms ?? "Non précisé";
+  const superficie = listing.superficie ?? "Non précisée";
+  const loyer = listing.loyer ?? listing.rent ?? "Non précisé";
+  const disponibilite = listing.disponibilite ?? listing.availability ?? "Non précisée";
+  const statut = listing.statut ?? listing.status ?? "Non précisé";
+  const notes = listing.notes ?? "Aucune note";
+
   listingPreview.innerHTML = `
     <strong>${listing.ref}</strong><br>
-    ${listing.address}<br>
-    ${listing.city}<br><br>
-    Loyer : ${listing.rent}<br>
-    Chambres : ${listing.bedrooms}<br>
-    Disponibilité : ${listing.availability}<br>
-    Statut : ${listing.status}<br>
-    Notes : ${listing.notes}
+    ${adresse}<br>
+    ${ville}<br><br>
+    Type : ${typeLogement}<br>
+    Chambres : ${chambres}<br>
+    Superficie : ${superficie}<br>
+    Loyer : ${loyer}${loyer === "Non précisé" ? "" : " $"}<br>
+    Disponibilité : ${disponibilite}<br>
+    Statut : ${statut}<br>
+    Notes : ${notes}
   `;
-
-  listingPreview.classList.remove("muted");
 }
 
 function extractListingRef(text) {
@@ -206,17 +178,11 @@ function prevalidateListing(input) {
   const ref = extractListingRef(input);
 
   if (!ref) {
-    return {
-      ok: false,
-      error: "Veuillez entrer un numéro de référence valide au format L-1001"
-    };
+    return { ok: false, error: "Format invalide (ex: L-1001)" };
   }
 
   if (!chatState.listings[ref]) {
-    return {
-      ok: false,
-      error: "Numéro de référence introuvable. Veuillez vérifier le numéro de l'immeuble et réessayer."
-    };
+    return { ok: false, error: "Référence introuvable." };
   }
 
   return { ok: true, ref };
@@ -225,40 +191,23 @@ function prevalidateListing(input) {
 async function fetchJSON(url, options = {}) {
   const response = await fetch(url, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
+    headers: { "Content-Type": "application/json" }
   });
 
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || "Une erreur est survenue.");
-  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Erreur");
 
   return data;
 }
 
 async function checkServer() {
   try {
-    const res = await fetch("/api/health");
-
-    if (res.ok) {
-      chatState.serverReady = true;
-      if (serverStatus) {
-        serverStatus.textContent = "Serveur connecté";
-        serverStatus.className = "server-pill ok";
-      }
-    } else {
-      throw new Error("Health check failed");
-    }
-  } catch (error) {
+    const res = await fetchJSON("/api/health");
+    chatState.serverReady = res.ok;
+    serverStatus.textContent = "Serveur connecté";
+  } catch {
     chatState.serverReady = false;
-    if (serverStatus) {
-      serverStatus.textContent = "Serveur non connecté";
-      serverStatus.className = "server-pill error";
-    }
+    serverStatus.textContent = "Serveur non connecté";
   }
 }
 
@@ -278,109 +227,35 @@ async function sendToAI(input) {
   });
 }
 
-if (chatForm) {
-  chatForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
+chatForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
 
-    const input = chatInput.value.trim();
-    if (!input || chatState.pending) return;
+  const input = chatInput.value.trim();
+  if (!input) return;
 
-    if (!chatState.serverReady) {
-      pushMessage(
-        "bot",
-        "Système",
-        "Le serveur n'est pas connecté. Lancez le backend puis réessayez.",
-        "error"
-      );
-      return;
-    }
+  pushMessage("user", "Employé", input);
+  chatInput.value = "";
 
-    pushMessage("user", "Employé", input);
-    chatInput.value = "";
+  const validation = prevalidateListing(input);
 
-    if (chatState.currentMode === "listing") {
-      const validation = prevalidateListing(input);
-
-      if (!validation.ok) {
-        pushMessage("bot", "Système", validation.error, "error");
-        return;
-      }
-
-      updateListingPreview(validation.ref);
-    }
-
-    setPending(true);
-    pushMessage("bot", "Système", "Traitement en cours…", "loading");
-
-    try {
-      const result = await sendToAI(input);
-
-      if (
-        chatState.currentMode === "listing" &&
-        result.reference &&
-        chatState.listings[result.reference]
-      ) {
-        updateListingPreview(result.reference);
-      }
-
-      replaceLastLoading(
-        result.reply || "Aucune réponse reçue.",
-        result.variant || "success",
-        result.label ||
-          (chatState.currentMode === "listing"
-            ? "Assistant des immeubles"
-            : "Traducteur")
-      );
-    } catch (error) {
-      replaceLastLoading(
-        error.message || "Une erreur est survenue.",
-        "error",
-        "Système"
-      );
-    } finally {
-      setPending(false);
-    }
-  });
-}
-
-if (chatInput) {
-  chatInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      if (chatForm) chatForm.requestSubmit();
-    }
-  });
-}
-
-if (clearChatBtn) {
-  clearChatBtn.addEventListener("click", () => {
-    if (chatState.currentMode === "listing") {
-      chatState.listingHistory = [];
-    } else {
-      chatState.translatorHistory = [];
-    }
-
-    renderMessages();
-  });
-}
-
-if (listingModeBtn) {
-  listingModeBtn.addEventListener("click", () => switchMode("listing"));
-}
-
-if (translatorModeBtn) {
-  translatorModeBtn.addEventListener("click", () => switchMode("translator"));
-}
-
-(async function init() {
-  try {
-    await Promise.all([checkServer(), loadListings()]);
-  } catch (error) {
-    if (serverStatus) {
-      serverStatus.textContent = "Serveur non connecté";
-      serverStatus.className = "server-pill error";
-    }
+  if (!validation.ok) {
+    pushMessage("bot", "Erreur", validation.error, "error");
+    return;
   }
 
+  updateListingPreview(validation.ref);
+
+  pushMessage("bot", "Système", "Chargement...", "loading");
+
+  try {
+    const result = await sendToAI(input);
+    replaceLastLoading(result.reply);
+  } catch (error) {
+    replaceLastLoading(error.message, "error");
+  }
+});
+
+(async function init() {
+  await Promise.all([checkServer(), loadListings()]);
   renderMessages();
 })();
