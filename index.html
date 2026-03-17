@@ -65,7 +65,7 @@
       <section class="status-row">
         <div class="status-wrapper">
           <div class="status-card" id="modeStatus">
-            Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.
+            Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
           </div>
 
           <select id="listingSelect" class="listing-select">
@@ -85,19 +85,12 @@
           <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
         </div>
 
-        <div class="chat-messages" id="chatMessages">
-          <div class="message bot">
-            <div class="message-label">Système</div>
-            <div class="message-bubble">
-              Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
-            </div>
-          </div>
-        </div>
+        <div class="chat-messages" id="chatMessages"></div>
 
         <form class="chat-form" id="chatForm">
           <textarea
             id="chatInput"
-            placeholder="Entrez votre message ici..."
+            placeholder="Entrez votre question ici..."
             rows="3"
           ></textarea>
 
@@ -110,6 +103,7 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="script.js"></script>
 </body>
 </html>
