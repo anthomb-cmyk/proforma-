@@ -2,9 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import OpenAI from "openai";
-import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,29 +19,22 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(__dirname));
 
-const listingsPath = path.join(__dirname, "listings.json");
-let listings = [];
-
-try {
-  if (fs.existsSync(listingsPath)) {
-    const raw = JSON.parse(fs.readFileSync(listingsPath, "utf8"));
-    listings = Array.isArray(raw) ? raw : raw.listings || [];
-  } else {
-    console.warn("listings.json introuvable, liste vide utilisée.");
-    listings = [];
-  }
-} catch (error) {
-  console.error("Erreur lors du chargement de listings.json :", error);
-  listings = [];
-}
-
 if (!process.env.OPENAI_API_KEY) {
   console.error("OPENAI_API_KEY manquante.");
 }
 
-const client = new OpenAI({
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("Variables Supabase manquantes.");
+}
+
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 function extractListingRef(text = "") {
   const match = text.match(/\bL-\d{4}\b/i);
@@ -56,33 +49,77 @@ N'invente rien.
 Sois court, clair et professionnel.
 
 Référence : ${listing.ref}
-Adresse : ${listing.address}
-Ville : ${listing.city}
-Loyer : ${listing.rent}
-Chambres : ${listing.bedrooms}
-Disponibilité : ${listing.availability}
-Statut : ${listing.status}
-Description : ${listing.description}
-Notes : ${listing.notes}`;
+Adresse : ${listing.adresse}
+Ville : ${listing.ville}
+Type de logement : ${listing.type_logement ?? ""}
+Chambres : ${listing.chambres ?? ""}
+Superficie : ${listing.superficie ?? ""}
+Loyer : ${listing.loyer ?? ""}
+Inclusions : ${listing.inclusions ?? ""}
+Disponibilité : ${listing.disponibilite ?? ""}
+Statut : ${listing.statut ?? ""}
+Stationnement : ${listing.stationnement === true ? "Oui" : listing.stationnement === false ? "Non" : ""}
+Animaux acceptés : ${listing.animaux_acceptes === true ? "Oui" : listing.animaux_acceptes === false ? "Non" : ""}
+Meublé : ${listing.meuble === true ? "Oui" : listing.meuble === false ? "Non" : ""}
+Description : ${listing.description ?? ""}
+Notes : ${listing.notes ?? ""}`;
 }
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    message: "Serveur connecté"
-  });
+async function getAllListings() {
+  const { data, error } = await supabase
+    .from("apartments")
+    .select("*")
+    .order("ref", { ascending: true });
+
+  if (error) throw error;
+  return data || [];
+}
+
+async function getListingByRef(ref) {
+  const { data, error } = await supabase
+    .from("apartments")
+    .select("*")
+    .eq("ref", ref)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+app.get("/api/health", async (req, res) => {
+  try {
+    const { error } = await supabase.from("apartments").select("ref").limit(1);
+    if (error) throw error;
+
+    res.json({
+      ok: true,
+      message: "Serveur connecté"
+    });
+  } catch (error) {
+    console.error("Erreur /api/health :", error);
+    res.status(500).json({
+      ok: false,
+      error: "Connexion Supabase impossible."
+    });
+  }
 });
 
-app.get("/api/listings", (req, res) => {
-  const map = {};
+app.get("/api/listings", async (req, res) => {
+  try {
+    const listings = await getAllListings();
+    const map = {};
 
-  for (const listing of listings) {
-    if (listing?.ref) {
-      map[listing.ref] = listing;
+    for (const listing of listings) {
+      if (listing?.ref) {
+        map[listing.ref] = listing;
+      }
     }
-  }
 
-  res.json({ listings: map });
+    res.json({ listings: map });
+  } catch (error) {
+    console.error("Erreur /api/listings :", error);
+    res.status(500).json({ error: "Erreur chargement appartements." });
+  }
 });
 
 app.post("/api/chat", async (req, res) => {
@@ -102,7 +139,7 @@ app.post("/api/chat", async (req, res) => {
     }
 
     if (mode === "translator") {
-      const response = await client.responses.create({
+      const response = await openai.responses.create({
         model: MODEL,
         input: [
           {
@@ -134,7 +171,7 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const listing = listings.find((item) => item.ref === ref);
+    const listing = await getListingByRef(ref);
 
     if (!listing) {
       return res.json({
@@ -144,7 +181,7 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const response = await client.responses.create({
+    const response = await openai.responses.create({
       model: MODEL,
       input: [
         {
