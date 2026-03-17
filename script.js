@@ -1,7 +1,3 @@
-if (localStorage.getItem("fluxlocatif_logged_in") !== "true") {
-  window.location.href = "/login.html";
-}
-
 const chatState = {
   currentMode: "listing",
   listingHistory: [
@@ -44,7 +40,6 @@ function currentHistory() {
 
 function setPending(isPending) {
   chatState.pending = isPending;
-
   if (sendBtn) sendBtn.disabled = isPending;
   if (clearChatBtn) clearChatBtn.disabled = isPending;
   if (listingModeBtn) listingModeBtn.disabled = isPending;
@@ -66,12 +61,8 @@ function initSampleRefs() {
       if (chatState.currentMode !== "listing") {
         switchMode("listing");
       }
-
-      if (chatInput) {
-        chatInput.value = `${ref} - `;
-        chatInput.focus();
-      }
-
+      chatInput.value = `${ref} - `;
+      chatInput.focus();
       updateListingPreview(ref);
     });
 
@@ -92,10 +83,7 @@ function addMessageToDOM(message) {
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
 
-  if (message.variant) {
-    bubble.classList.add(message.variant);
-  }
-
+  if (message.variant) bubble.classList.add(message.variant);
   bubble.textContent = message.text;
 
   wrapper.appendChild(label);
@@ -110,15 +98,13 @@ function renderMessages() {
   chatMessages.innerHTML = "";
 
   if (!history.length) {
-    const emptyText =
-      chatState.currentMode === "listing"
-        ? "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
-        : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
-
     history.push({
       sender: "bot",
       label: "Système",
-      text: emptyText
+      text:
+        chatState.currentMode === "listing"
+          ? "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
+          : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
     });
   }
 
@@ -150,31 +136,23 @@ function replaceLastLoading(text, variant = "success", label = "Assistant") {
   last.text = text;
   last.variant = variant;
   last.label = label;
-
   renderMessages();
 }
 
 function switchMode(mode) {
   chatState.currentMode = mode;
 
-  if (listingModeBtn) {
-    listingModeBtn.classList.toggle("active", mode === "listing");
-  }
-
-  if (translatorModeBtn) {
-    translatorModeBtn.classList.toggle("active", mode === "translator");
-  }
+  if (listingModeBtn) listingModeBtn.classList.toggle("active", mode === "listing");
+  if (translatorModeBtn) translatorModeBtn.classList.toggle("active", mode === "translator");
 
   if (mode === "listing") {
     if (modeStatus) {
       modeStatus.textContent =
         "Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.";
     }
-
     if (chatInput) {
       chatInput.placeholder = "Exemple : L-1001 - Quel est le loyer ?";
     }
-
     if (modePill) {
       modePill.textContent = "Mode actif : Assistant des immeubles";
     }
@@ -183,11 +161,9 @@ function switchMode(mode) {
       modeStatus.textContent =
         "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
     }
-
     if (chatInput) {
       chatInput.placeholder = "Exemple : yer tu dispo le logi";
     }
-
     if (modePill) {
       modePill.textContent = "Mode actif : Traducteur";
     }
@@ -239,8 +215,7 @@ function prevalidateListing(input) {
   if (!chatState.listings[ref]) {
     return {
       ok: false,
-      error:
-        "Numéro de référence introuvable. Veuillez vérifier le numéro de l'immeuble et réessayer."
+      error: "Numéro de référence introuvable. Veuillez vérifier le numéro de l'immeuble et réessayer."
     };
   }
 
@@ -248,28 +223,17 @@ function prevalidateListing(input) {
 }
 
 async function fetchJSON(url, options = {}) {
-  const token = localStorage.getItem("fluxlocatif_auth") || "";
-
-  const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-    ...(token ? { Authorization: `Basic ${token}` } : {})
-  };
-
   const response = await fetch(url, {
     ...options,
-    headers
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
   });
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    if (response.status === 401) {
-      localStorage.removeItem("fluxlocatif_auth");
-      window.location.href = "/";
-      throw new Error("Session expirée.");
-    }
-
     throw new Error(data.error || "Une erreur est survenue.");
   }
 
@@ -278,15 +242,10 @@ async function fetchJSON(url, options = {}) {
 
 async function checkServer() {
   try {
-    const res = await fetch("/api/health", {
-      headers: {
-        Authorization: `Basic ${localStorage.getItem("fluxlocatif_auth") || ""}`
-      }
-    });
+    const res = await fetch("/api/health");
 
     if (res.ok) {
       chatState.serverReady = true;
-
       if (serverStatus) {
         serverStatus.textContent = "Serveur connecté";
         serverStatus.className = "server-pill ok";
@@ -296,7 +255,6 @@ async function checkServer() {
     }
   } catch (error) {
     chatState.serverReady = false;
-
     if (serverStatus) {
       serverStatus.textContent = "Serveur non connecté";
       serverStatus.className = "server-pill error";
@@ -311,23 +269,20 @@ async function loadListings() {
 }
 
 async function sendToAI(input) {
-  const data = await fetchJSON("/api/chat", {
+  return fetchJSON("/api/chat", {
     method: "POST",
     body: JSON.stringify({
       mode: chatState.currentMode,
       message: input
     })
   });
-
-  return data;
 }
 
 if (chatForm) {
   chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const input = chatInput ? chatInput.value.trim() : "";
-
+    const input = chatInput.value.trim();
     if (!input || chatState.pending) return;
 
     if (!chatState.serverReady) {
@@ -341,10 +296,7 @@ if (chatForm) {
     }
 
     pushMessage("user", "Employé", input);
-
-    if (chatInput) {
-      chatInput.value = "";
-    }
+    chatInput.value = "";
 
     if (chatState.currentMode === "listing") {
       const validation = prevalidateListing(input);
@@ -395,10 +347,7 @@ if (chatInput) {
   chatInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-
-      if (chatForm) {
-        chatForm.requestSubmit();
-      }
+      if (chatForm) chatForm.requestSubmit();
     }
   });
 }
@@ -424,13 +373,6 @@ if (translatorModeBtn) {
 }
 
 (async function init() {
-  const token = localStorage.getItem("fluxlocatif_auth");
-
-  if (!token) {
-    window.location.href = "/";
-    return;
-  }
-
   try {
     await Promise.all([checkServer(), loadListings()]);
   } catch (error) {
