@@ -8,6 +8,7 @@
 </head>
 <body>
   <div class="page-bg"></div>
+
   <div class="app-shell">
     <aside class="sidebar glass-card">
       <div class="brand-block">
@@ -22,7 +23,7 @@
         <span class="eyebrow">Mode d’emploi</span>
         <h2>Deux outils. Un seul espace.</h2>
         <ul>
-          <li><strong>Assistant des immeubles</strong> : exige une référence comme <code>L-1001</code>.</li>
+          <li><strong>Assistant des immeubles</strong> : choisissez un appartement puis posez une question.</li>
           <li><strong>Traducteur</strong> : traduit ou explique uniquement le texte fourni.</li>
           <li>Les employés ont un accès en lecture seule.</li>
         </ul>
@@ -38,7 +39,7 @@
         <span class="eyebrow">Lecture seule</span>
         <h2>Aperçu de l’immeuble</h2>
         <div id="listingPreview" class="listing-preview muted">
-          Sélectionnez le mode Assistant des immeubles et posez une question avec une référence valide.
+          Sélectionnez un appartement pour afficher ses informations.
         </div>
       </div>
     </aside>
@@ -52,15 +53,26 @@
         </div>
 
         <div class="mode-switch" role="tablist" aria-label="Changement de mode">
-          <button class="mode-btn active" id="listingModeBtn" data-mode="listing">Assistant des immeubles</button>
-          <button class="mode-btn" id="translatorModeBtn" data-mode="translator">Traducteur</button>
+          <button type="button" class="mode-btn active" id="listingModeBtn" data-mode="listing">
+            Assistant des immeubles
+          </button>
+          <button type="button" class="mode-btn" id="translatorModeBtn" data-mode="translator">
+            Traducteur
+          </button>
         </div>
       </header>
 
       <section class="status-row">
-        <div class="status-card" id="modeStatus">
-          Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.
+        <div class="status-wrapper">
+          <div class="status-card" id="modeStatus">
+            Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.
+          </div>
+
+          <select id="listingSelect" class="listing-select">
+            <option value="">Sélectionnez un appartement</option>
+          </select>
         </div>
+
         <div class="server-pill" id="serverStatus">Connexion serveur en cours…</div>
       </section>
 
@@ -77,14 +89,18 @@
           <div class="message bot">
             <div class="message-label">Système</div>
             <div class="message-bubble">
-              Le mode Assistant des immeubles est actif. Entrez une demande comme : <br>
-              <code>L-1001 - Quel est le loyer ?</code>
+              Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
             </div>
           </div>
         </div>
 
         <form class="chat-form" id="chatForm">
-          <textarea id="chatInput" placeholder="Entrez votre message ici..." rows="3"></textarea>
+          <textarea
+            id="chatInput"
+            placeholder="Entrez votre message ici..."
+            rows="3"
+          ></textarea>
+
           <div class="chat-actions">
             <button type="button" class="secondary-btn" id="clearChatBtn">Effacer</button>
             <button type="submit" class="primary-btn" id="sendBtn">Envoyer</button>
