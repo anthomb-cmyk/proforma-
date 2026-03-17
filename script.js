@@ -1,3 +1,7 @@
+const SUPABASE_URL = "METS_TON_SUPABASE_URL_ICI";
+const SUPABASE_KEY = "METS_TON_SUPABASE_ANON_KEY_ICI";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const chatState = {
   currentMode: "listing",
   listingHistory: [
@@ -49,6 +53,15 @@ function normalizeRefKey(ref) {
   const value = String(ref ?? "").trim();
   if (!value) return "";
   return value.replace(/^L-/i, "");
+}
+
+async function requireLogin() {
+  const { data } = await supabaseClient.auth.getSession();
+
+  if (!data.session) {
+    window.location.href = "/login.html";
+    throw new Error("Not logged in");
+  }
 }
 
 function setPending(isPending) {
@@ -242,14 +255,14 @@ function updateListingPreview(ref) {
     return;
   }
 
-  const adresse = listing.adresse ?? listing.address ?? "Non précisée";
-  const ville = listing.ville ?? listing.city ?? "Non précisée";
+  const adresse = listing.adresse ?? "Non précisée";
+  const ville = listing.ville ?? "Non précisée";
   const typeLogement = listing.type_logement ?? "Non précisé";
-  const chambres = listing.chambres ?? listing.bedrooms ?? "Non précisé";
+  const chambres = listing.chambres ?? "Non précisé";
   const superficie = listing.superficie ?? "Non précisée";
-  const loyer = listing.loyer ?? listing.rent ?? "Non précisé";
-  const disponibilite = listing.disponibilite ?? listing.availability ?? "Non précisée";
-  const statut = listing.statut ?? listing.status ?? "Non précisé";
+  const loyer = listing.loyer ?? "Non précisé";
+  const disponibilite = listing.disponibilite ?? "Non précisée";
+  const statut = listing.statut ?? "Non précisé";
   const notes = listing.notes ?? "Aucune note";
 
   listingPreview.innerHTML = `
@@ -485,6 +498,7 @@ if (translatorModeBtn) {
 
 (async function init() {
   try {
+    await requireLogin();
     await Promise.all([checkServer(), loadListings()]);
   } catch (error) {
     if (serverStatus) {
