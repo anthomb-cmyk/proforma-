@@ -108,7 +108,7 @@ app.post("/api/chat", async (req, res) => {
           {
             role: "system",
             content:
-              "Transforme le texte en français international clair, professionnel et naturel. Si l'utilisateur demande clairement une autre langue, traduis vers cette langue. Si la question concerne un immeuble ou un logement, réponds exactement : Pour toute question liée aux immeubles ou aux logements, veuillez utiliser le mode Assistant des immeubles."
+              "Corrige et reformule le texte en français international clair, professionnel et naturel. Ne fais rien d’autre. Ne donne aucune instruction. Ne redirige jamais vers un autre mode. Répond uniquement avec le texte corrigé."
           },
           {
             role: "user",
