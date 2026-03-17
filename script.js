@@ -7,7 +7,13 @@ const chatState = {
       text: "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
     }
   ],
-  translatorHistory: [],
+  translatorHistory: [
+    {
+      sender: "bot",
+      label: "Système",
+      text: "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
+    }
+  ],
   listings: {},
   serverReady: false,
   pending: false
@@ -27,35 +33,51 @@ const serverStatus = document.getElementById("serverStatus");
 const sendBtn = document.getElementById("sendBtn");
 
 function currentHistory() {
-  return chatState.currentMode === "listing" ? chatState.listingHistory : chatState.translatorHistory;
+  return chatState.currentMode === "listing"
+    ? chatState.listingHistory
+    : chatState.translatorHistory;
 }
 
 function setPending(isPending) {
   chatState.pending = isPending;
-  sendBtn.disabled = isPending;
-  clearChatBtn.disabled = isPending;
-  listingModeBtn.disabled = isPending;
-  translatorModeBtn.disabled = isPending;
+
+  if (sendBtn) sendBtn.disabled = isPending;
+  if (clearChatBtn) clearChatBtn.disabled = isPending;
+  if (listingModeBtn) listingModeBtn.disabled = isPending;
+  if (translatorModeBtn) translatorModeBtn.disabled = isPending;
 }
 
 function initSampleRefs() {
+  if (!sampleRefs) return;
+
   sampleRefs.innerHTML = "";
+
   Object.keys(chatState.listings).forEach((ref) => {
     const chip = document.createElement("button");
     chip.className = "sample-chip";
     chip.type = "button";
     chip.textContent = ref;
+
     chip.addEventListener("click", () => {
-      if (chatState.currentMode !== "listing") switchMode("listing");
-      chatInput.value = `${ref} - `;
-      chatInput.focus();
+      if (chatState.currentMode !== "listing") {
+        switchMode("listing");
+      }
+
+      if (chatInput) {
+        chatInput.value = `${ref} - `;
+        chatInput.focus();
+      }
+
       updateListingPreview(ref);
     });
+
     sampleRefs.appendChild(chip);
   });
 }
 
 function addMessageToDOM(message) {
+  if (!chatMessages) return;
+
   const wrapper = document.createElement("div");
   wrapper.className = `message ${message.sender}`;
 
@@ -65,7 +87,11 @@ function addMessageToDOM(message) {
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
-  if (message.variant) bubble.classList.add(message.variant);
+
+  if (message.variant) {
+    bubble.classList.add(message.variant);
+  }
+
   bubble.textContent = message.text;
 
   wrapper.appendChild(label);
@@ -74,15 +100,22 @@ function addMessageToDOM(message) {
 }
 
 function renderMessages() {
+  if (!chatMessages) return;
+
   const history = currentHistory();
   chatMessages.innerHTML = "";
 
   if (!history.length) {
-    const emptyText = chatState.currentMode === "listing"
-      ? "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
-      : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
+    const emptyText =
+      chatState.currentMode === "listing"
+        ? "Le mode Assistant des immeubles est actif. Entrez une demande comme :\nL-1001 - Quel est le loyer ?"
+        : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
 
-    history.push({ sender: "bot", label: "Système", text: emptyText });
+    history.push({
+      sender: "bot",
+      label: "Système",
+      text: emptyText
+    });
   }
 
   history.forEach((message) => addMessageToDOM(message));
@@ -93,43 +126,77 @@ function pushMessage(sender, label, text, variant = "") {
   const message = { sender, label, text, variant };
   currentHistory().push(message);
   addMessageToDOM(message);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  if (chatMessages) {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
   return message;
 }
 
 function replaceLastLoading(text, variant = "success", label = "Assistant") {
   const history = currentHistory();
   const last = history[history.length - 1];
+
   if (!last || last.variant !== "loading") {
     pushMessage("bot", label, text, variant);
     return;
   }
+
   last.text = text;
   last.variant = variant;
   last.label = label;
+
   renderMessages();
 }
 
 function switchMode(mode) {
   chatState.currentMode = mode;
-  listingModeBtn.classList.toggle("active", mode === "listing");
-  translatorModeBtn.classList.toggle("active", mode === "translator");
+
+  if (listingModeBtn) {
+    listingModeBtn.classList.toggle("active", mode === "listing");
+  }
+
+  if (translatorModeBtn) {
+    translatorModeBtn.classList.toggle("active", mode === "translator");
+  }
 
   if (mode === "listing") {
-    modeStatus.textContent = "Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.";
-    chatInput.placeholder = "Exemple : L-1001 - Quel est le loyer ?";
-    modePill.textContent = "Mode actif : Assistant des immeubles";
+    if (modeStatus) {
+      modeStatus.textContent =
+        "Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.";
+    }
+
+    if (chatInput) {
+      chatInput.placeholder = "Exemple : L-1001 - Quel est le loyer ?";
+    }
+
+    if (modePill) {
+      modePill.textContent = "Mode actif : Assistant des immeubles";
+    }
   } else {
-    modeStatus.textContent = "Le mode Traducteur est actif. Collez un texte à traduire ou posez une question uniquement sur le texte fourni.";
-    chatInput.placeholder = "Exemple : Traduis en anglais : Bonjour, le logement est disponible.";
-    modePill.textContent = "Mode actif : Traducteur";
+    if (modeStatus) {
+      modeStatus.textContent =
+        "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
+    }
+
+    if (chatInput) {
+      chatInput.placeholder = "Exemple : yer tu dispo le logi";
+    }
+
+    if (modePill) {
+      modePill.textContent = "Mode actif : Traducteur";
+    }
   }
 
   renderMessages();
 }
 
 function updateListingPreview(ref) {
+  if (!listingPreview) return;
+
   const listing = chatState.listings[ref];
+
   if (!listing) {
     listingPreview.textContent = "Numéro de référence introuvable.";
     listingPreview.classList.remove("muted");
@@ -146,6 +213,7 @@ function updateListingPreview(ref) {
     Statut : ${listing.status}<br>
     Notes : ${listing.notes}
   `;
+
   listingPreview.classList.remove("muted");
 }
 
@@ -156,30 +224,79 @@ function extractListingRef(text) {
 
 function prevalidateListing(input) {
   const ref = extractListingRef(input);
-  if (!ref) return { ok: false, error: "Veuillez entrer un numéro de référence valide au format L-1001" };
-  if (!chatState.listings[ref]) return { ok: false, error: "Numéro de référence introuvable. Veuillez vérifier le numéro de l'immeuble et réessayer." };
+
+  if (!ref) {
+    return {
+      ok: false,
+      error: "Veuillez entrer un numéro de référence valide au format L-1001"
+    };
+  }
+
+  if (!chatState.listings[ref]) {
+    return {
+      ok: false,
+      error:
+        "Numéro de référence introuvable. Veuillez vérifier le numéro de l'immeuble et réessayer."
+    };
+  }
+
   return { ok: true, ref };
 }
 
 async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, options);
+  const token = localStorage.getItem("fluxlocatif_auth") || "";
+
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Basic ${token}` } : {})
+  };
+
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
+
   const data = await response.json().catch(() => ({}));
+
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem("fluxlocatif_auth");
+      window.location.href = "/";
+      throw new Error("Session expirée.");
+    }
+
     throw new Error(data.error || "Une erreur est survenue.");
   }
+
   return data;
 }
 
 async function checkServer() {
   try {
-    const data = await fetchJSON("/api/health");
-    chatState.serverReady = true;
-    serverStatus.textContent = data.message || "Serveur connecté";
-    serverStatus.className = "server-pill ok";
+    const res = await fetch("/api/health", {
+      headers: {
+        Authorization: `Basic ${localStorage.getItem("fluxlocatif_auth") || ""}`
+      }
+    });
+
+    if (res.ok) {
+      chatState.serverReady = true;
+
+      if (serverStatus) {
+        serverStatus.textContent = "Serveur connecté";
+        serverStatus.className = "server-pill ok";
+      }
+    } else {
+      throw new Error("Health check failed");
+    }
   } catch (error) {
     chatState.serverReady = false;
-    serverStatus.textContent = "Serveur non connecté";
-    serverStatus.className = "server-pill error";
+
+    if (serverStatus) {
+      serverStatus.textContent = "Serveur non connecté";
+      serverStatus.className = "server-pill error";
+    }
   }
 }
 
@@ -192,71 +309,132 @@ async function loadListings() {
 async function sendToAI(input) {
   const data = await fetchJSON("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       mode: chatState.currentMode,
       message: input
     })
   });
+
   return data;
 }
 
-chatForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const input = chatInput.value.trim();
-  if (!input || chatState.pending) return;
+if (chatForm) {
+  chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
 
-  if (!chatState.serverReady) {
-    pushMessage("bot", "Système", "Le serveur n'est pas connecté. Lancez le backend puis réessayez.", "error");
+    const input = chatInput ? chatInput.value.trim() : "";
+
+    if (!input || chatState.pending) return;
+
+    if (!chatState.serverReady) {
+      pushMessage(
+        "bot",
+        "Système",
+        "Le serveur n'est pas connecté. Lancez le backend puis réessayez.",
+        "error"
+      );
+      return;
+    }
+
+    pushMessage("user", "Employé", input);
+
+    if (chatInput) {
+      chatInput.value = "";
+    }
+
+    if (chatState.currentMode === "listing") {
+      const validation = prevalidateListing(input);
+
+      if (!validation.ok) {
+        pushMessage("bot", "Système", validation.error, "error");
+        return;
+      }
+
+      updateListingPreview(validation.ref);
+    }
+
+    setPending(true);
+    pushMessage("bot", "Système", "Traitement en cours…", "loading");
+
+    try {
+      const result = await sendToAI(input);
+
+      if (
+        chatState.currentMode === "listing" &&
+        result.reference &&
+        chatState.listings[result.reference]
+      ) {
+        updateListingPreview(result.reference);
+      }
+
+      replaceLastLoading(
+        result.reply || "Aucune réponse reçue.",
+        result.variant || "success",
+        result.label ||
+          (chatState.currentMode === "listing"
+            ? "Assistant des immeubles"
+            : "Traducteur")
+      );
+    } catch (error) {
+      replaceLastLoading(
+        error.message || "Une erreur est survenue.",
+        "error",
+        "Système"
+      );
+    } finally {
+      setPending(false);
+    }
+  });
+}
+
+if (chatInput) {
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+
+      if (chatForm) {
+        chatForm.requestSubmit();
+      }
+    }
+  });
+}
+
+if (clearChatBtn) {
+  clearChatBtn.addEventListener("click", () => {
+    if (chatState.currentMode === "listing") {
+      chatState.listingHistory = [];
+    } else {
+      chatState.translatorHistory = [];
+    }
+
+    renderMessages();
+  });
+}
+
+if (listingModeBtn) {
+  listingModeBtn.addEventListener("click", () => switchMode("listing"));
+}
+
+if (translatorModeBtn) {
+  translatorModeBtn.addEventListener("click", () => switchMode("translator"));
+}
+
+(async function init() {
+  const token = localStorage.getItem("fluxlocatif_auth");
+
+  if (!token) {
+    window.location.href = "/";
     return;
   }
 
-  pushMessage("user", "Employé", input);
-  chatInput.value = "";
-
-  if (chatState.currentMode === "listing") {
-    const validation = prevalidateListing(input);
-    if (!validation.ok) {
-      pushMessage("bot", "Système", validation.error, "error");
-      return;
-    }
-    updateListingPreview(validation.ref);
-  }
-
-  setPending(true);
-  pushMessage("bot", "Système", "Traitement en cours…", "loading");
-
-  try {
-    const result = await sendToAI(input);
-    if (chatState.currentMode === "listing" && result.reference && chatState.listings[result.reference]) {
-      updateListingPreview(result.reference);
-    }
-    replaceLastLoading(result.reply || "Aucune réponse reçue.", result.variant || "success", result.label || (chatState.currentMode === "listing" ? "Assistant des immeubles" : "Traducteur"));
-  } catch (error) {
-    replaceLastLoading(error.message || "Une erreur est survenue.", "error", "Système");
-  } finally {
-    setPending(false);
-  }
-});
-
-clearChatBtn.addEventListener("click", () => {
-  if (chatState.currentMode === "listing") {
-    chatState.listingHistory = [];
-  } else {
-    chatState.translatorHistory = [];
-  }
-  renderMessages();
-});
-
-listingModeBtn.addEventListener("click", () => switchMode("listing"));
-translatorModeBtn.addEventListener("click", () => switchMode("translator"));
-
-(async function init() {
   try {
     await Promise.all([checkServer(), loadListings()]);
   } catch (error) {
-    serverStatus.textContent = "Serveur non connecté";
-    serverStatus.className = "server-pill error";
+    if (serverStatus) {
+      serverStatus.textContent = "Serveur non connecté";
+      serverStatus.className = "server-pill error";
+    }
   }
+
   renderMessages();
 })();
