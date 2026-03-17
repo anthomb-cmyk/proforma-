@@ -1,3 +1,7 @@
+if (localStorage.getItem("fluxlocatif_logged_in") !== "true") {
+  window.location.href = "/login.html";
+}
+
 const chatState = {
   currentMode: "listing",
   listingHistory: [
