@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FluxLocatif — Espace IA employés</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page-bg"></div>
+  <div class="app-shell">
+    <aside class="sidebar glass-card">
+      <div class="brand-block">
+        <div class="brand-mark">F</div>
+        <div>
+          <h1>FluxLocatif</h1>
+          <p>Assistant interne pour l’équipe locative</p>
+        </div>
+      </div>
+
+      <div class="panel compact gradient-panel">
+        <span class="eyebrow">Mode d’emploi</span>
+        <h2>Deux outils. Un seul espace.</h2>
+        <ul>
+          <li><strong>Assistant des immeubles</strong> : exige une référence comme <code>L-1001</code>.</li>
+          <li><strong>Traducteur</strong> : traduit ou explique uniquement le texte fourni.</li>
+          <li>Les employés ont un accès en lecture seule.</li>
+        </ul>
+      </div>
+
+      <div class="panel compact">
+        <span class="eyebrow">Références</span>
+        <h2>Références d’exemple</h2>
+        <div class="sample-list" id="sampleRefs"></div>
+      </div>
+
+      <div class="panel compact preview-panel">
+        <span class="eyebrow">Lecture seule</span>
+        <h2>Aperçu de l’immeuble</h2>
+        <div id="listingPreview" class="listing-preview muted">
+          Sélectionnez le mode Assistant des immeubles et posez une question avec une référence valide.
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar glass-card">
+        <div>
+          <span class="eyebrow">Espace de travail</span>
+          <h2>Assistant locatif interne</h2>
+          <p>Une seule interface, avec un mode immeuble et un mode traduction.</p>
+        </div>
+
+        <div class="mode-switch" role="tablist" aria-label="Changement de mode">
+          <button class="mode-btn active" id="listingModeBtn" data-mode="listing">Assistant des immeubles</button>
+          <button class="mode-btn" id="translatorModeBtn" data-mode="translator">Traducteur</button>
+        </div>
+      </header>
+
+      <section class="status-row">
+        <div class="status-card" id="modeStatus">
+          Le mode Assistant des immeubles est actif. Incluez un numéro de référence valide.
+        </div>
+        <div class="server-pill" id="serverStatus">Connexion serveur en cours…</div>
+      </section>
+
+      <section class="chat-card glass-card">
+        <div class="chat-card-header">
+          <div>
+            <span class="eyebrow">Console</span>
+            <h3>Conversation</h3>
+          </div>
+          <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+          <div class="message bot">
+            <div class="message-label">Système</div>
+            <div class="message-bubble">
+              Le mode Assistant des immeubles est actif. Entrez une demande comme : <br>
+              <code>L-1001 - Quel est le loyer ?</code>
+            </div>
+          </div>
+        </div>
+
+        <form class="chat-form" id="chatForm">
+          <textarea id="chatInput" placeholder="Entrez votre message ici..." rows="3"></textarea>
+          <div class="chat-actions">
+            <button type="button" class="secondary-btn" id="clearChatBtn">Effacer</button>
+            <button type="submit" class="primary-btn" id="sendBtn">Envoyer</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

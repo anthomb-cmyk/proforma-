@@ -1,0 +1,35 @@
+{
+  "L-1001": {
+    "ref": "L-1001",
+    "address": "4912 Rue Foster, Waterloo",
+    "city": "Waterloo",
+    "rent": "1 250 $",
+    "bedrooms": "3 1/2",
+    "availability": "Disponible maintenant",
+    "status": "Actif",
+    "notes": "Chauffage non inclus. Stationnement disponible.",
+    "description": "Logement lumineux de 3 1/2 près des services locaux."
+  },
+  "L-1002": {
+    "ref": "L-1002",
+    "address": "123 Rue King Ouest, Sherbrooke",
+    "city": "Sherbrooke",
+    "rent": "1 395 $",
+    "bedrooms": "4 1/2",
+    "availability": "2026-04-01",
+    "status": "Actif",
+    "notes": "Entrées laveuse-sécheuse. Non-fumeur.",
+    "description": "4 1/2 rénové dans un secteur central."
+  },
+  "L-1003": {
+    "ref": "L-1003",
+    "address": "800 Boulevard Taschereau, Longueuil",
+    "city": "Longueuil",
+    "rent": "1 650 $",
+    "bedrooms": "5 1/2",
+    "availability": "2026-05-01",
+    "status": "En attente",
+    "notes": "Restrictions pour les animaux.",
+    "description": "Grand logement familial près du transport en commun."
+  }
+}
