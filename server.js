@@ -36,33 +36,74 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+function normalizeText(value = "") {
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function formatListingRef(ref) {
+  if (ref === null || ref === undefined || ref === "") return "";
+  const clean = String(ref).replace(/^L-/i, "").trim();
+  return `L-${clean}`;
+}
+
 function extractListingRef(text = "") {
-  const match = text.match(/\bL-\d{4}\b/i);
-  return match ? match[0].toUpperCase() : null;
+  const direct = String(text).match(/\bL-(\d{1,10})\b/i);
+  if (direct) return parseInt(direct[1], 10);
+
+  const loose = String(text).match(/\b(\d{3,10})\b/);
+  if (loose) return parseInt(loose[1], 10);
+
+  return null;
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "Non indiqué";
+  }
+
+  if (Array.isArray(value)) {
+    return value.length ? value.join(", ") : "Non indiqué";
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Oui" : "Non";
+  }
+
+  return String(value);
+}
+
+function buildListingContext(listing) {
+  return Object.entries(listing)
+    .map(([key, value]) => `${key} : ${formatValue(value)}`)
+    .join("\n");
 }
 
 function getListingPrompt(listing) {
+  const listingContext = buildListingContext(listing);
+
   return `Tu es l'Assistant des immeubles de FluxLocatif.
 
-Tu dois répondre uniquement avec les informations ci-dessous.
-N'invente rien.
-Sois court, clair et professionnel.
+Tu réponds uniquement à partir des informations présentes dans la fiche ci-dessous.
+Tu peux utiliser TOUTES les colonnes de la fiche.
 
-Référence : ${listing.ref}
-Adresse : ${listing.adresse}
-Ville : ${listing.ville}
-Type de logement : ${listing.type_logement ?? ""}
-Chambres : ${listing.chambres ?? ""}
-Superficie : ${listing.superficie ?? ""}
-Loyer : ${listing.loyer ?? ""}
-Inclusions : ${listing.inclusions ?? ""}
-Disponibilité : ${listing.disponibilite ?? ""}
-Statut : ${listing.statut ?? ""}
-Stationnement : ${listing.stationnement === true ? "Oui" : listing.stationnement === false ? "Non" : ""}
-Animaux acceptés : ${listing.animaux_acceptes === true ? "Oui" : listing.animaux_acceptes === false ? "Non" : ""}
-Meublé : ${listing.meuble === true ? "Oui" : listing.meuble === false ? "Non" : ""}
-Description : ${listing.description ?? ""}
-Notes : ${listing.notes ?? ""}`;
+Règles :
+- N'invente rien
+- Réponds en français
+- Réponds de façon courte, claire et naturelle
+- Si l'information n'est pas présente, réponds exactement : "Cette information n'est pas indiquée dans la fiche."
+- Tu peux comprendre les variantes de langage comme :
+  - électricité / electricite / hydro / courant / lumiere
+  - eau chaude / hot water
+  - animaux / chien / chat
+  - parking / stationnement
+- Si une information est présente dans inclusions, notes, electricite, statut, disponibilite, tu peux t'en servir
+
+FICHE DU LOGEMENT :
+${listingContext}`;
 }
 
 async function getAllListings() {
@@ -76,14 +117,136 @@ async function getAllListings() {
 }
 
 async function getListingByRef(ref) {
+  const numericRef = Number(ref);
+
   const { data, error } = await supabase
     .from("apartments")
     .select("*")
-    .eq("ref", ref)
+    .eq("ref", numericRef)
     .maybeSingle();
 
   if (error) throw error;
   return data;
+}
+
+function quickFieldAnswer(listing, question) {
+  const q = normalizeText(question);
+  const refLabel = formatListingRef(listing.ref);
+
+  const inclusionsText = normalizeText(
+    Array.isArray(listing.inclusions)
+      ? listing.inclusions.join(", ")
+      : listing.inclusions || ""
+  );
+
+  const electriciteText = normalizeText(listing.electricite || "");
+  const notesText = normalizeText(listing.notes || "");
+  const fullText = [
+    inclusionsText,
+    electriciteText,
+    notesText,
+    normalizeText(listing.disponibilite || ""),
+    normalizeText(listing.statut || "")
+  ].join(" ");
+
+  if (
+    q.includes("electric") ||
+    q.includes("hydro") ||
+    q.includes("courant") ||
+    q.includes("lumiere")
+  ) {
+    if (listing.electricite) {
+      return `Pour ${refLabel}, l'électricité est : ${listing.electricite}.`;
+    }
+
+    if (fullText.includes("electric") || fullText.includes("hydro")) {
+      return `Pour ${refLabel}, l'information liée à l'électricité est : ${listing.electricite || "mentionnée dans la fiche"}.`;
+    }
+
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (q.includes("eau chaude") || q.includes("hot water")) {
+    if (fullText.includes("eau chaude")) {
+      return `Oui, ${refLabel} inclut l'eau chaude.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (q.includes("chauffage")) {
+    if (fullText.includes("chauffage")) {
+      return `Oui, ${refLabel} inclut le chauffage.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("animal") ||
+    q.includes("chien") ||
+    q.includes("chat")
+  ) {
+    if (listing.animaux_acceptes) {
+      return `Pour ${refLabel}, animaux acceptés : ${listing.animaux_acceptes}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("stationnement") ||
+    q.includes("parking") ||
+    q.includes("garage")
+  ) {
+    if (listing.stationnement) {
+      return `Pour ${refLabel}, stationnement : ${listing.stationnement}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("disponib") ||
+    q.includes("date") ||
+    q.includes("quand")
+  ) {
+    if (listing.disponibilite) {
+      return `Pour ${refLabel}, disponibilité : ${listing.disponibilite}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("prix") ||
+    q.includes("loyer") ||
+    q.includes("combien")
+  ) {
+    if (listing.loyer !== null && listing.loyer !== undefined && listing.loyer !== "") {
+      return `Le loyer de ${refLabel} est de ${listing.loyer} $.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("superficie") ||
+    q.includes("pi2") ||
+    q.includes("sqft") ||
+    q.includes("grandeur")
+  ) {
+    if (listing.superficie) {
+      return `La superficie de ${refLabel} est de ${listing.superficie}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  if (
+    q.includes("chambre") ||
+    q.includes("combien de chambre")
+  ) {
+    if (listing.chambres !== null && listing.chambres !== undefined && listing.chambres !== "") {
+      return `${refLabel} a ${listing.chambres} chambre${Number(listing.chambres) > 1 ? "s" : ""}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
+
+  return null;
 }
 
 app.get("/api/health", async (req, res) => {
@@ -110,8 +273,11 @@ app.get("/api/listings", async (req, res) => {
     const map = {};
 
     for (const listing of listings) {
-      if (listing?.ref) {
-        map[listing.ref] = listing;
+      if (listing?.ref !== null && listing?.ref !== undefined) {
+        map[String(listing.ref)] = {
+          ...listing,
+          ref: String(listing.ref)
+        };
       }
     }
 
@@ -181,6 +347,17 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
+    const directAnswer = quickFieldAnswer(listing, message);
+
+    if (directAnswer) {
+      return res.json({
+        reply: directAnswer,
+        label: "Assistant des immeubles",
+        variant: "success",
+        reference: String(ref)
+      });
+    }
+
     const response = await openai.responses.create({
       model: MODEL,
       input: [
@@ -199,12 +376,13 @@ app.post("/api/chat", async (req, res) => {
       reply: response.output_text || "Erreur de réponse.",
       label: "Assistant des immeubles",
       variant: "success",
-      reference: ref
+      reference: String(ref)
     });
   } catch (error) {
     console.error("Erreur /api/chat :", error);
     return res.status(500).json({
-      error: "Server error"
+      error: "Server error",
+      details: error.message || String(error)
     });
   }
 });
