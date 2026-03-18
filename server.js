@@ -239,6 +239,10 @@ function quickFieldAnswer(listing, question) {
   return null;
 }
 
+/* =========================
+   HEALTH + LISTINGS
+========================= */
+
 app.get("/api/health", async (req, res) => {
   try {
     const { error } = await supabase.from("apartments").select("ref").limit(1);
@@ -277,6 +281,10 @@ app.get("/api/listings", async (req, res) => {
     res.status(500).json({ error: "Erreur chargement appartements." });
   }
 });
+
+/* =========================
+   CHAT SESSIONS / ACTIVITY / MESSAGES
+========================= */
 
 app.post("/api/chat-sessions", async (req, res) => {
   try {
@@ -494,6 +502,10 @@ app.get("/api/user-time-summary", async (req, res) => {
   }
 });
 
+/* =========================
+   ADMIN ROUTES
+========================= */
+
 app.get("/api/admin/chat-sessions", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -660,12 +672,18 @@ app.put("/api/admin/apartments/:ref", async (req, res) => {
 
     if ("ref" in updates) delete updates.ref;
 
-    if ("chambres" in updates && updates.chambres !== "" && updates.chambres !== null) {
-      updates.chambres = Number(updates.chambres);
+    if ("chambres" in updates) {
+      updates.chambres =
+        updates.chambres !== "" && updates.chambres !== null && updates.chambres !== undefined
+          ? Number(updates.chambres)
+          : null;
     }
 
-    if ("loyer" in updates && updates.loyer !== "" && updates.loyer !== null) {
-      updates.loyer = Number(updates.loyer);
+    if ("loyer" in updates) {
+      updates.loyer =
+        updates.loyer !== "" && updates.loyer !== null && updates.loyer !== undefined
+          ? Number(updates.loyer)
+          : null;
     }
 
     const { data, error } = await supabase
@@ -686,6 +704,36 @@ app.put("/api/admin/apartments/:ref", async (req, res) => {
     });
   }
 });
+
+app.delete("/api/admin/apartments/:ref", async (req, res) => {
+  try {
+    const { ref } = req.params;
+    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+
+    if (!numericRef) {
+      return res.status(400).json({ error: "Référence invalide." });
+    }
+
+    const { error } = await supabase
+      .from("apartments")
+      .delete()
+      .eq("ref", numericRef);
+
+    if (error) throw error;
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments DELETE :", error);
+    res.status(500).json({
+      error: "Erreur suppression appartement.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+/* =========================
+   CHAT AI
+========================= */
 
 app.post("/api/chat", async (req, res) => {
   try {
