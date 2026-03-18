@@ -8,10 +8,10 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
-    "cors": "^2.8.6",
+    "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "express": "^4.22.1",
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.16",
     "openai": "^4.104.0"
   }
 }
-npm install nodemailer
