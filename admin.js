@@ -19,30 +19,29 @@ const messagesBody = document.getElementById("messagesBody");
 const apartmentsBody = document.getElementById("apartmentsBody");
 const messageUserId = document.getElementById("messageUserId");
 const loadMessagesBtn = document.getElementById("loadMessagesBtn");
-
 const apartmentForm = document.getElementById("apartmentForm");
 const apartmentFormStatus = document.getElementById("apartmentFormStatus");
 
 let currentTab = "users";
 
 async function requireAdmin() {
-  const { data: userData, error: userError } = await supabaseClient.auth.getUser();
+  const { data: sessionData } = await supabaseClient.auth.getSession();
 
-  if (userError || !userData?.user) {
+  if (!sessionData?.session) {
     window.location.href = "/login.html";
-    throw new Error("Not logged in");
+    throw new Error("No session");
   }
 
-  const userId = userData.user.id;
+  const userId = sessionData.session.user.id;
 
-  const { data: adminRow, error: adminError } = await supabaseClient
+  const { data, error } = await supabaseClient
     .from("admin_users")
     .select("user_id")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (adminError || !adminRow) {
-    alert("Accès refusé. Vous n’êtes pas administrateur.");
+  if (error || !data) {
+    alert("Accès refusé.");
     window.location.href = "/";
     throw new Error("Not admin");
   }
@@ -215,7 +214,6 @@ async function createApartment(event) {
 
     apartmentFormStatus.textContent = `Appartement ajouté avec succès. Référence générée : ${result.generated_ref}`;
     apartmentFormStatus.style.color = "green";
-
     apartmentForm.reset();
     await loadApartments();
   } catch (error) {
@@ -248,7 +246,7 @@ if (apartmentForm) {
   apartmentForm.addEventListener("submit", createApartment);
 }
 
-supabaseClient.auth.onAuthStateChange(async (event) => {
+supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
     window.location.href = "/login.html";
   }
@@ -260,6 +258,6 @@ supabaseClient.auth.onAuthStateChange(async (event) => {
     switchTab("users");
     await loadUsers();
   } catch (error) {
-    console.error("Erreur admin init:", error);
+    console.error(error);
   }
 })();
