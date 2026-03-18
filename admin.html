@@ -41,11 +41,11 @@
           <table>
             <thead>
               <tr>
-                <th>User ID</th>
-                <th>Total sessions</th>
-                <th>Première connexion</th>
-                <th>Dernière activité</th>
-                <th>Temps total</th>
+                <th>Nom</th>
+                <th>Jour</th>
+                <th>Heartbeats</th>
+                <th>Total secondes</th>
+                <th>Total minutes</th>
               </tr>
             </thead>
             <tbody id="usersBody"></tbody>
@@ -93,7 +93,38 @@
       </section>
 
       <section class="card hidden" id="apartmentsTab">
-        <div class="table-wrap">
+        <div class="form-card">
+          <h3>Ajouter un appartement</h3>
+
+          <form id="apartmentForm" class="admin-form">
+            <div class="form-grid">
+              <input id="aptRef" type="text" placeholder="Ref (ex: L-1004)" required />
+              <input id="aptAdresse" type="text" placeholder="Adresse" required />
+              <input id="aptVille" type="text" placeholder="Ville" required />
+              <input id="aptType" type="text" placeholder="Type logement" />
+              <input id="aptChambres" type="number" placeholder="Chambres" />
+              <input id="aptSuperficie" type="text" placeholder="Superficie" />
+              <input id="aptLoyer" type="number" placeholder="Loyer" />
+              <input id="aptInclusions" type="text" placeholder="Inclusions" />
+              <input id="aptStatut" type="text" placeholder="Statut" />
+              <input id="aptStationnement" type="text" placeholder="Stationnement" />
+              <input id="aptAnimaux" type="text" placeholder="Animaux acceptés" />
+              <input id="aptMeuble" type="text" placeholder="Meublé" />
+              <input id="aptDisponibilite" type="text" placeholder="Disponibilité" />
+              <input id="aptElectricite" type="text" placeholder="Électricité" />
+            </div>
+
+            <textarea id="aptNotes" placeholder="Notes"></textarea>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-btn">Ajouter l’appartement</button>
+            </div>
+          </form>
+
+          <div id="apartmentFormStatus"></div>
+        </div>
+
+        <div class="table-wrap" style="margin-top: 22px;">
           <table>
             <thead>
               <tr>
