@@ -24,6 +24,7 @@
         <button class="menu-btn" data-tab="sessions">Sessions</button>
         <button class="menu-btn" data-tab="messages">Conversations</button>
         <button class="menu-btn" data-tab="apartments">Appartements</button>
+        <button class="menu-btn" data-tab="candidates">Candidats</button>
       </div>
     </aside>
 
@@ -241,27 +242,53 @@
           </table>
         </div>
       </section>
+
+      <section class="card hidden" id="candidatesTab">
+        <div class="filters">
+          <select id="candidateStatusFilter">
+            <option value="">Tous les statuts</option>
+            <option value="en attente">En attente</option>
+            <option value="approuvé">Approuvé</option>
+            <option value="refusé">Refusé</option>
+            <option value="en suivi">En suivi</option>
+          </select>
+
+          <input id="candidateSearch" type="text" placeholder="Recherche: nom, appartement, téléphone..." />
+
+          <button id="clearCandidateFiltersBtn" type="button" class="secondary-btn">Réinitialiser</button>
+        </div>
+
+        <div class="table-wrap" style="margin-top:22px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Appartement</th>
+                <th>Nom</th>
+                <th>Téléphone</th>
+                <th>Email</th>
+                <th>Emploi</th>
+                <th>Employeur</th>
+                <th>Depuis</th>
+                <th>Statut emploi</th>
+                <th>Revenu</th>
+                <th>Crédit</th>
+                <th>TAL</th>
+                <th>Occupants</th>
+                <th>Animaux</th>
+                <th>Notes employé</th>
+                <th>Note admin</th>
+                <th>Statut</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="candidatesBody"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="admin.js?v=8"></script>
+  <script src="admin.js?v=10"></script>
 </body>
 </html>
-<button class="menu-btn" data-tab="candidates">Candidats</button>
-<section class="card hidden" id="candidatesTab">
-  <table>
-    <thead>
-      <tr>
-        <th>Nom</th>
-        <th>Appartement</th>
-        <th>Revenu</th>
-        <th>Crédit</th>
-        <th>TAL</th>
-        <th>Statut</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody id="candidatesBody"></tbody>
-  </table>
-</section>
