@@ -1,32 +1,72 @@
-const form = document.getElementById("loginForm");
-const errorText = document.getElementById("loginError");
+const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
+const SUPABASE_KEY = "METS_TA_SUPABASE_ANON_KEY_ICI";
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  const username = document.getElementById("username").value.trim();
-  const password = document.getElementById("password").value;
+const loginForm = document.getElementById("loginForm");
+const emailInput = document.getElementById("email");
+const passwordInput = document.getElementById("password");
+const loginStatus = document.getElementById("loginStatus");
 
-  errorText.textContent = "";
+function setLoginStatus(message = "", type = "") {
+  if (!loginStatus) return;
 
-  try {
-    const res = await fetch("/api/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ username, password })
-    });
+  loginStatus.textContent = message;
+  loginStatus.className = "login-status";
 
-    const data = await res.json();
+  if (type) {
+    loginStatus.classList.add(type);
+  }
+}
 
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || "Erreur de connexion.");
+async function redirectIfLoggedIn() {
+  const { data } = await supabaseClient.auth.getSession();
+
+  if (data?.session) {
+    window.location.href = "/";
+  }
+}
+
+if (loginForm) {
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    setLoginStatus("", "");
+
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!email || !password) {
+      setLoginStatus("Veuillez entrer votre email et votre mot de passe.", "error");
+      return;
     }
 
-    localStorage.setItem("fluxlocatif_logged_in", "true");
-    window.location.href = "/index.html";
-  } catch (error) {
-    errorText.textContent = error.message || "Connexion impossible.";
-  }
-});
+    const submitBtn = loginForm.querySelector('button[type="submit"]');
+
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Connexion...";
+    }
+
+    try {
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) throw error;
+
+      setLoginStatus("Connexion réussie. Redirection...", "success");
+      window.location.href = "/";
+    } catch (error) {
+      setLoginStatus(error.message || "Erreur de connexion.", "error");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Se connecter";
+      }
+    }
+  });
+}
+
+redirectIfLoggedIn();
