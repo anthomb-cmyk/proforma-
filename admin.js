@@ -1,3 +1,9 @@
+const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
+const SUPABASE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51dXprdmd5b2x4YmF3dnF5dWd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3Njc1NzYsImV4cCI6MjA4OTM0MzU3Nn0.zjltrYd38fypIAm1DIr0wj69eS9T7xpi_4p2aWsNYyw";
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const tabs = {
   users: document.getElementById("usersTab"),
   sessions: document.getElementById("sessionsTab"),
@@ -18,6 +24,29 @@ const apartmentForm = document.getElementById("apartmentForm");
 const apartmentFormStatus = document.getElementById("apartmentFormStatus");
 
 let currentTab = "users";
+
+async function requireAdmin() {
+  const { data: userData, error: userError } = await supabaseClient.auth.getUser();
+
+  if (userError || !userData?.user) {
+    window.location.href = "/login.html";
+    throw new Error("Not logged in");
+  }
+
+  const userId = userData.user.id;
+
+  const { data: adminRow, error: adminError } = await supabaseClient
+    .from("admin_users")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (adminError || !adminRow) {
+    alert("Accès refusé. Vous n’êtes pas administrateur.");
+    window.location.href = "/";
+    throw new Error("Not admin");
+  }
+}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -219,7 +248,18 @@ if (apartmentForm) {
   apartmentForm.addEventListener("submit", createApartment);
 }
 
+supabaseClient.auth.onAuthStateChange(async (event) => {
+  if (event === "SIGNED_OUT") {
+    window.location.href = "/login.html";
+  }
+});
+
 (async function init() {
-  switchTab("users");
-  await loadUsers();
+  try {
+    await requireAdmin();
+    switchTab("users");
+    await loadUsers();
+  } catch (error) {
+    console.error("Erreur admin init:", error);
+  }
 })();
