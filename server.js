@@ -141,10 +141,14 @@ function quickFieldAnswer(listing, question) {
 
   const electriciteText = normalizeText(listing.electricite || "");
   const notesText = normalizeText(listing.notes || "");
+  const stationnementText = normalizeText(listing.stationnement || "");
+  const animauxText = normalizeText(listing.animaux_acceptes || "");
   const fullText = [
     inclusionsText,
     electriciteText,
     notesText,
+    stationnementText,
+    animauxText,
     normalizeText(listing.disponibilite || ""),
     normalizeText(listing.statut || "")
   ].join(" ");
@@ -249,6 +253,10 @@ function quickFieldAnswer(listing, question) {
   return null;
 }
 
+/* =========================
+   HEALTH + LISTINGS
+========================= */
+
 app.get("/api/health", async (req, res) => {
   try {
     const { error } = await supabase.from("apartments").select("ref").limit(1);
@@ -287,6 +295,232 @@ app.get("/api/listings", async (req, res) => {
     res.status(500).json({ error: "Erreur chargement appartements." });
   }
 });
+
+/* =========================
+   CHAT HISTORY + ACTIVITY
+========================= */
+
+app.post("/api/chat-sessions", async (req, res) => {
+  try {
+    const { user_id, page_path } = req.body || {};
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id manquant." });
+    }
+
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .insert({
+        user_id,
+        page_path: page_path || "/",
+        last_seen_at: new Date().toISOString()
+      })
+      .select("id, user_id, started_at, last_seen_at")
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ ok: true, session: data });
+  } catch (error) {
+    console.error("Erreur /api/chat-sessions :", error);
+    return res.status(500).json({
+      error: "Erreur création session.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.patch("/api/chat-sessions/:id/heartbeat", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+
+    if (!id || !user_id) {
+      return res.status(400).json({ error: "id ou user_id manquant." });
+    }
+
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .update({
+        last_seen_at: new Date().toISOString()
+      })
+      .eq("id", id)
+      .eq("user_id", user_id)
+      .select("id, last_seen_at")
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ ok: true, session: data });
+  } catch (error) {
+    console.error("Erreur /api/chat-sessions/:id/heartbeat :", error);
+    return res.status(500).json({
+      error: "Erreur heartbeat session.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.patch("/api/chat-sessions/:id/end", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    const now = new Date().toISOString();
+
+    if (!id || !user_id) {
+      return res.status(400).json({ error: "id ou user_id manquant." });
+    }
+
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .update({
+        ended_at: now,
+        last_seen_at: now
+      })
+      .eq("id", id)
+      .eq("user_id", user_id)
+      .select("id, ended_at, last_seen_at")
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ ok: true, session: data });
+  } catch (error) {
+    console.error("Erreur /api/chat-sessions/:id/end :", error);
+    return res.status(500).json({
+      error: "Erreur fermeture session.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.post("/api/activity-log", async (req, res) => {
+  try {
+    const { user_id, session_id, event_type, page_path } = req.body || {};
+
+    if (!user_id || !event_type) {
+      return res.status(400).json({ error: "user_id ou event_type manquant." });
+    }
+
+    const { data, error } = await supabase
+      .from("user_activity_logs")
+      .insert({
+        user_id,
+        session_id: session_id || null,
+        event_type,
+        page_path: page_path || "/"
+      })
+      .select("id, event_type, created_at")
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ ok: true, activity: data });
+  } catch (error) {
+    console.error("Erreur /api/activity-log :", error);
+    return res.status(500).json({
+      error: "Erreur activity log.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.post("/api/chat-messages", async (req, res) => {
+  try {
+    const { session_id, user_id, mode, sender, label, text } = req.body || {};
+
+    if (!session_id || !user_id || !mode || !sender || !text) {
+      return res.status(400).json({
+        error: "session_id, user_id, mode, sender ou text manquant."
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("chat_messages")
+      .insert({
+        session_id,
+        user_id,
+        mode,
+        sender,
+        label: label || null,
+        text
+      })
+      .select("id, created_at")
+      .single();
+
+    if (error) throw error;
+
+    return res.json({ ok: true, message: data });
+  } catch (error) {
+    console.error("Erreur /api/chat-messages :", error);
+    return res.status(500).json({
+      error: "Erreur sauvegarde message.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.get("/api/chat-messages", async (req, res) => {
+  try {
+    const { user_id, session_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id manquant." });
+    }
+
+    let query = supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("user_id", user_id)
+      .order("created_at", { ascending: true });
+
+    if (session_id) {
+      query = query.eq("session_id", session_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    return res.json({ ok: true, messages: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/chat-messages GET :", error);
+    return res.status(500).json({
+      error: "Erreur lecture messages.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.get("/api/user-time-summary", async (req, res) => {
+  try {
+    const { user_id } = req.query;
+
+    let query = supabase
+      .from("user_time_summary")
+      .select("*");
+
+    if (user_id) {
+      query = query.eq("user_id", user_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    return res.json({ ok: true, summary: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/user-time-summary :", error);
+    return res.status(500).json({
+      error: "Erreur lecture résumé temps.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+/* =========================
+   CHAT AI
+========================= */
 
 app.post("/api/chat", async (req, res) => {
   try {
