@@ -185,11 +185,7 @@ function quickFieldAnswer(listing, question) {
     return "Cette information n'est pas indiquée dans la fiche.";
   }
 
-  if (
-    q.includes("animal") ||
-    q.includes("chien") ||
-    q.includes("chat")
-  ) {
+  if (q.includes("animal") || q.includes("chien") || q.includes("chat")) {
     if (listing.animaux_acceptes) {
       return `Pour ${refLabel}, animaux acceptés : ${listing.animaux_acceptes}.`;
     }
@@ -207,22 +203,14 @@ function quickFieldAnswer(listing, question) {
     return "Cette information n'est pas indiquée dans la fiche.";
   }
 
-  if (
-    q.includes("disponib") ||
-    q.includes("date") ||
-    q.includes("quand")
-  ) {
+  if (q.includes("disponib") || q.includes("date") || q.includes("quand")) {
     if (listing.disponibilite) {
       return `Pour ${refLabel}, disponibilité : ${listing.disponibilite}.`;
     }
     return "Cette information n'est pas indiquée dans la fiche.";
   }
 
-  if (
-    q.includes("prix") ||
-    q.includes("loyer") ||
-    q.includes("combien")
-  ) {
+  if (q.includes("prix") || q.includes("loyer") || q.includes("combien")) {
     if (listing.loyer !== null && listing.loyer !== undefined && listing.loyer !== "") {
       return `Le loyer de ${refLabel} est de ${listing.loyer} $.`;
     }
@@ -241,10 +229,7 @@ function quickFieldAnswer(listing, question) {
     return "Cette information n'est pas indiquée dans la fiche.";
   }
 
-  if (
-    q.includes("chambre") ||
-    q.includes("combien de chambre")
-  ) {
+  if (q.includes("chambre") || q.includes("combien de chambre")) {
     if (listing.chambres !== null && listing.chambres !== undefined && listing.chambres !== "") {
       return `${refLabel} a ${listing.chambres} chambre${Number(listing.chambres) > 1 ? "s" : ""}.`;
     }
@@ -558,6 +543,153 @@ app.get("/api/admin/chat-messages", async (req, res) => {
   } catch (error) {
     console.error("Erreur /api/admin/chat-messages :", error);
     res.status(500).json({ error: "Erreur chargement messages." });
+  }
+});
+
+app.get("/api/admin/user-daily-time", async (req, res) => {
+  try {
+    const { day, user_id } = req.query;
+
+    let query = supabase
+      .from("user_daily_time_from_heartbeat_named")
+      .select("*")
+      .order("day", { ascending: false });
+
+    if (day) {
+      query = query.eq("day", day);
+    }
+
+    if (user_id) {
+      query = query.eq("user_id", user_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json({ summary: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/admin/user-daily-time :", error);
+    res.status(500).json({
+      error: "Erreur chargement temps heartbeat.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.post("/api/admin/apartments", async (req, res) => {
+  try {
+    const {
+      ref,
+      adresse,
+      ville,
+      type_logement,
+      chambres,
+      superficie,
+      loyer,
+      inclusions,
+      statut,
+      stationnement,
+      animaux_acceptes,
+      meuble,
+      disponibilite,
+      notes,
+      electricite
+    } = req.body || {};
+
+    if (!ref || !adresse || !ville) {
+      return res.status(400).json({
+        error: "ref, adresse et ville sont requis."
+      });
+    }
+
+    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+
+    if (!numericRef) {
+      return res.status(400).json({
+        error: "Référence invalide."
+      });
+    }
+
+    const payload = {
+      ref: numericRef,
+      adresse,
+      ville,
+      type_logement: type_logement || null,
+      chambres:
+        chambres !== "" && chambres !== null && chambres !== undefined
+          ? Number(chambres)
+          : null,
+      superficie: superficie || null,
+      loyer:
+        loyer !== "" && loyer !== null && loyer !== undefined
+          ? Number(loyer)
+          : null,
+      inclusions: inclusions || null,
+      statut: statut || null,
+      stationnement: stationnement || null,
+      animaux_acceptes: animaux_acceptes || null,
+      meuble: meuble || null,
+      disponibilite: disponibilite || null,
+      notes: notes || null,
+      electricite: electricite || null
+    };
+
+    const { data, error } = await supabase
+      .from("apartments")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    res.json({ ok: true, apartment: data });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments POST :", error);
+    res.status(500).json({
+      error: "Erreur création appartement.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.put("/api/admin/apartments/:ref", async (req, res) => {
+  try {
+    const { ref } = req.params;
+    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+
+    if (!numericRef) {
+      return res.status(400).json({ error: "Référence invalide." });
+    }
+
+    const updates = { ...req.body };
+
+    if ("ref" in updates) delete updates.ref;
+
+    if ("chambres" in updates && updates.chambres !== "" && updates.chambres !== null) {
+      updates.chambres = Number(updates.chambres);
+    }
+
+    if ("loyer" in updates && updates.loyer !== "" && updates.loyer !== null) {
+      updates.loyer = Number(updates.loyer);
+    }
+
+    const { data, error } = await supabase
+      .from("apartments")
+      .update(updates)
+      .eq("ref", numericRef)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    res.json({ ok: true, apartment: data });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments PUT :", error);
+    res.status(500).json({
+      error: "Erreur modification appartement.",
+      details: error.message || String(error)
+    });
   }
 });
 
