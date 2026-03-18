@@ -22,14 +22,8 @@ const chatState = {
   ],
   listings: {},
   serverReady: false,
-  pending: false,
-  authUserId: null,
-  authUserEmail: null,
-  chatSessionId: null,
-  heartbeatTimer: null
+  pending: false
 };
-
-const HEARTBEAT_MS = 60000;
 
 const sampleRefs = document.getElementById("sampleRefs");
 const listingPreview = document.getElementById("listingPreview");
@@ -44,6 +38,10 @@ const modePill = document.getElementById("modePill");
 const serverStatus = document.getElementById("serverStatus");
 const sendBtn = document.getElementById("sendBtn");
 const listingSelect = document.getElementById("listingSelect");
+const listingSelectorCard = document.getElementById("listingSelectorCard");
+
+const candidateForm = document.getElementById("candidateForm");
+const candidateStatus = document.getElementById("candidateStatus");
 
 function currentHistory() {
   return chatState.currentMode === "listing"
@@ -62,195 +60,6 @@ function normalizeRefKey(ref) {
   if (!value) return "";
   return value.replace(/^L-/i, "");
 }
-
-async function requireLogin() {
-  const { data, error } = await supabaseClient.auth.getUser();
-
-  if (error || !data?.user) {
-    window.location.href = "/login.html";
-    throw new Error("Not logged in");
-  }
-
-  chatState.authUserId = data.user.id;
-  chatState.authUserEmail = data.user.email || "";
-}
-
-async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || "Une erreur est survenue.");
-  }
-
-  return data;
-}
-
-/* =========================
-   TRACKING / HISTORY
-========================= */
-
-async function startTrackedSession() {
-  if (!chatState.authUserId) return;
-
-  try {
-    const data = await fetchJSON("/api/chat-sessions", {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: chatState.authUserId,
-        page_path: window.location.pathname
-      })
-    });
-
-    if (data?.session?.id) {
-      chatState.chatSessionId = data.session.id;
-    }
-
-    await logActivity("login");
-    startHeartbeat();
-  } catch (error) {
-    console.error("Erreur startTrackedSession:", error);
-  }
-}
-
-function startHeartbeat() {
-  stopHeartbeat();
-
-  chatState.heartbeatTimer = window.setInterval(async () => {
-    await heartbeat();
-  }, HEARTBEAT_MS);
-}
-
-function stopHeartbeat() {
-  if (chatState.heartbeatTimer) {
-    clearInterval(chatState.heartbeatTimer);
-    chatState.heartbeatTimer = null;
-  }
-}
-
-async function heartbeat() {
-  if (!chatState.authUserId || !chatState.chatSessionId) return;
-
-  try {
-    await fetchJSON(`/api/chat-sessions/${chatState.chatSessionId}/heartbeat`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        user_id: chatState.authUserId
-      })
-    });
-
-    await logActivity("heartbeat");
-  } catch (error) {
-    console.error("Erreur heartbeat:", error);
-  }
-}
-
-async function endTrackedSession() {
-  if (!chatState.authUserId || !chatState.chatSessionId) return;
-
-  try {
-    await fetchJSON(`/api/chat-sessions/${chatState.chatSessionId}/end`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        user_id: chatState.authUserId
-      })
-    });
-
-    await logActivity("logout");
-  } catch (error) {
-    console.error("Erreur endTrackedSession:", error);
-  } finally {
-    stopHeartbeat();
-  }
-}
-
-async function logActivity(eventType) {
-  if (!chatState.authUserId) return;
-
-  try {
-    await fetchJSON("/api/activity-log", {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: chatState.authUserId,
-        session_id: chatState.chatSessionId,
-        event_type: eventType,
-        page_path: window.location.pathname
-      })
-    });
-  } catch (error) {
-    console.error("Erreur logActivity:", error);
-  }
-}
-
-async function saveChatMessage(sender, label, text, mode) {
-  if (!chatState.authUserId || !chatState.chatSessionId || !text) return;
-
-  try {
-    await fetchJSON("/api/chat-messages", {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: chatState.chatSessionId,
-        user_id: chatState.authUserId,
-        mode,
-        sender,
-        label,
-        text
-      })
-    });
-  } catch (error) {
-    console.error("Erreur saveChatMessage:", error);
-  }
-}
-
-async function loadChatHistory() {
-  if (!chatState.authUserId) return;
-
-  try {
-    const data = await fetchJSON(
-      `/api/chat-messages?user_id=${encodeURIComponent(chatState.authUserId)}`
-    );
-
-    const messages = data.messages || [];
-    const listingHistory = [];
-    const translatorHistory = [];
-
-    for (const msg of messages) {
-      const item = {
-        sender: msg.sender === "user" ? "user" : "bot",
-        label: msg.label || (msg.sender === "user" ? "Employé" : "Assistant"),
-        text: msg.text,
-        variant: ""
-      };
-
-      if (msg.mode === "translator") {
-        translatorHistory.push(item);
-      } else {
-        listingHistory.push(item);
-      }
-    }
-
-    if (listingHistory.length) {
-      chatState.listingHistory = listingHistory;
-    }
-
-    if (translatorHistory.length) {
-      chatState.translatorHistory = translatorHistory;
-    }
-  } catch (error) {
-    console.error("Erreur loadChatHistory:", error);
-  }
-}
-
-/* =========================
-   UI
-========================= */
 
 function setPending(isPending) {
   chatState.pending = isPending;
@@ -354,7 +163,7 @@ function renderMessages() {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-async function pushMessage(sender, label, text, variant = "") {
+function pushMessage(sender, label, text, variant = "") {
   const message = { sender, label, text, variant };
   currentHistory().push(message);
   addMessageToDOM(message);
@@ -363,17 +172,15 @@ async function pushMessage(sender, label, text, variant = "") {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  await saveChatMessage(sender === "user" ? "user" : "bot", label, text, chatState.currentMode);
-
   return message;
 }
 
-async function replaceLastLoading(text, variant = "success", label = "Assistant") {
+function replaceLastLoading(text, variant = "success", label = "Assistant") {
   const history = currentHistory();
   const last = history[history.length - 1];
 
   if (!last || last.variant !== "loading") {
-    await pushMessage("bot", label, text, variant);
+    pushMessage("bot", label, text, variant);
     return;
   }
 
@@ -381,8 +188,6 @@ async function replaceLastLoading(text, variant = "success", label = "Assistant"
   last.variant = variant;
   last.label = label;
   renderMessages();
-
-  await saveChatMessage("bot", label, text, chatState.currentMode);
 }
 
 function switchMode(mode) {
@@ -410,8 +215,8 @@ function switchMode(mode) {
       modePill.textContent = "Mode actif : Assistant des immeubles";
     }
 
-    if (listingSelect) {
-      listingSelect.style.display = "block";
+    if (listingSelectorCard) {
+      listingSelectorCard.style.display = "block";
     }
   } else {
     if (modeStatus) {
@@ -427,8 +232,8 @@ function switchMode(mode) {
       modePill.textContent = "Mode actif : Traducteur";
     }
 
-    if (listingSelect) {
-      listingSelect.style.display = "none";
+    if (listingSelectorCard) {
+      listingSelectorCard.style.display = "none";
     }
   }
 
@@ -493,9 +298,23 @@ function prevalidateListing() {
   return { ok: true, ref };
 }
 
-/* =========================
-   API APP
-========================= */
+async function fetchJSON(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || "Une erreur est survenue.");
+  }
+
+  return data;
+}
 
 async function checkServer() {
   try {
@@ -557,9 +376,60 @@ async function sendToAI(input, ref = "") {
   });
 }
 
-/* =========================
-   EVENTS
-========================= */
+function setCandidateStatus(message = "", type = "") {
+  if (!candidateStatus) return;
+
+  candidateStatus.textContent = message;
+  candidateStatus.className = "candidate-status";
+
+  if (type) {
+    candidateStatus.classList.add(type);
+  }
+}
+
+async function handleCandidateSubmit(event) {
+  event.preventDefault();
+
+  setCandidateStatus("", "");
+
+  const apartmentRef = normalizeRefKey(document.getElementById("aptRef").value.trim());
+
+  const payload = {
+    apartment_ref: apartmentRef ? Number(apartmentRef) : null,
+    candidate_name: document.getElementById("name").value.trim(),
+    phone: document.getElementById("phone").value.trim(),
+    email: document.getElementById("email").value.trim(),
+    job_title: document.getElementById("job").value.trim(),
+    employer_name: document.getElementById("employer").value.trim(),
+    employment_length: document.getElementById("employmentLength").value.trim(),
+    employment_status: document.getElementById("employmentStatus").value,
+    monthly_income: document.getElementById("income").value || null,
+    credit_level: document.getElementById("credit").value,
+    occupants_total: document.getElementById("occupants").value || null,
+    tal_record: document.getElementById("tal").value,
+    pets: document.getElementById("pets").value,
+    employee_notes: document.getElementById("notes").value.trim(),
+    status: "en attente",
+    employee_user_id: "employee-manuel"
+  };
+
+  if (!payload.apartment_ref) {
+    setCandidateStatus("Veuillez entrer un appartement visé valide.", "error");
+    return;
+  }
+
+  try {
+    await fetchJSON("/api/admin/candidates", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+
+    setCandidateStatus("Fiche locataire envoyée avec succès.", "success");
+    candidateForm.reset();
+  } catch (error) {
+    setCandidateStatus(error.message || "Erreur envoi fiche locataire.", "error");
+  }
+}
 
 if (listingSelect) {
   listingSelect.addEventListener("change", () => {
@@ -578,7 +448,7 @@ if (chatForm) {
     if (!input || chatState.pending) return;
 
     if (!chatState.serverReady) {
-      await pushMessage(
+      pushMessage(
         "bot",
         "Système",
         "Le serveur n'est pas connecté. Lancez le backend puis réessayez.",
@@ -593,7 +463,7 @@ if (chatForm) {
       const validation = prevalidateListing();
 
       if (!validation.ok) {
-        await pushMessage("bot", "Système", validation.error, "error");
+        pushMessage("bot", "Système", validation.error, "error");
         return;
       }
 
@@ -606,18 +476,11 @@ if (chatForm) {
         ? `${formatDisplayRef(selectedRef)} - ${input}`
         : input;
 
-    await pushMessage("user", "Employé", userText);
+    pushMessage("user", "Employé", userText);
     chatInput.value = "";
 
     setPending(true);
-
-    currentHistory().push({
-      sender: "bot",
-      label: "Système",
-      text: "Traitement en cours…",
-      variant: "loading"
-    });
-    renderMessages();
+    pushMessage("bot", "Système", "Traitement en cours…", "loading");
 
     try {
       const result = await sendToAI(input, selectedRef);
@@ -634,7 +497,7 @@ if (chatForm) {
         }
       }
 
-      await replaceLastLoading(
+      replaceLastLoading(
         result.reply || "Aucune réponse reçue.",
         result.variant || "success",
         result.label ||
@@ -643,7 +506,7 @@ if (chatForm) {
             : "Traducteur")
       );
     } catch (error) {
-      await replaceLastLoading(
+      replaceLastLoading(
         error.message || "Une erreur est survenue.",
         "error",
         "Système"
@@ -668,21 +531,9 @@ if (chatInput) {
 if (clearChatBtn) {
   clearChatBtn.addEventListener("click", () => {
     if (chatState.currentMode === "listing") {
-      chatState.listingHistory = [
-        {
-          sender: "bot",
-          label: "Système",
-          text: "Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question."
-        }
-      ];
+      chatState.listingHistory = [];
     } else {
-      chatState.translatorHistory = [
-        {
-          sender: "bot",
-          label: "Système",
-          text: "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
-        }
-      ];
+      chatState.translatorHistory = [];
     }
 
     renderMessages();
@@ -697,40 +548,14 @@ if (translatorModeBtn) {
   translatorModeBtn.addEventListener("click", () => switchMode("translator"));
 }
 
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState === "visible") {
-    await heartbeat();
-  }
-});
-
-window.addEventListener("beforeunload", () => {
-  stopHeartbeat();
-});
-
-window.addEventListener("pagehide", () => {
-  stopHeartbeat();
-});
-
-supabaseClient.auth.onAuthStateChange(async (event) => {
-  if (event === "SIGNED_OUT") {
-    stopHeartbeat();
-    window.location.href = "/login.html";
-  }
-});
-
-/* =========================
-   INIT
-========================= */
+if (candidateForm) {
+  candidateForm.addEventListener("submit", handleCandidateSubmit);
+}
 
 (async function init() {
   try {
-    await requireLogin();
-    await loadChatHistory();
     await Promise.all([checkServer(), loadListings()]);
-    await startTrackedSession();
   } catch (error) {
-    console.error("Erreur init:", error);
-
     if (serverStatus) {
       serverStatus.textContent = "Serveur non connecté";
       serverStatus.className = "server-pill error";
@@ -740,38 +565,3 @@ supabaseClient.auth.onAuthStateChange(async (event) => {
   switchMode("listing");
   renderMessages();
 })();
-document.getElementById("candidateForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const payload = {
-    apartment_ref: document.getElementById("aptRef").value,
-    candidate_name: document.getElementById("name").value,
-    phone: document.getElementById("phone").value,
-    email: document.getElementById("email").value,
-
-    job_title: document.getElementById("job").value,
-    employer_name: document.getElementById("employer").value,
-    employment_length: document.getElementById("employmentLength").value,
-    employment_status: document.getElementById("employmentStatus").value,
-
-    monthly_income: document.getElementById("income").value,
-    credit_level: document.getElementById("credit").value,
-
-    occupants_total: document.getElementById("occupants").value,
-
-    tal_record: document.getElementById("tal").value,
-    pets: document.getElementById("pets").value,
-
-    employee_notes: document.getElementById("notes").value,
-    status: "en attente"
-  };
-
-  await fetch("/api/admin/candidates", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  alert("Candidat ajouté");
-  location.reload();
-});
