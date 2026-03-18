@@ -98,20 +98,82 @@
 
           <form id="apartmentForm" class="admin-form">
             <div class="form-grid">
-              <input id="aptRef" type="text" placeholder="Ref (ex: L-1004)" required />
               <input id="aptAdresse" type="text" placeholder="Adresse" required />
               <input id="aptVille" type="text" placeholder="Ville" required />
-              <input id="aptType" type="text" placeholder="Type logement" />
-              <input id="aptChambres" type="number" placeholder="Chambres" />
+
+              <select id="aptType">
+                <option value="">Type logement</option>
+                <option value="1 1/2">1 1/2</option>
+                <option value="2 1/2">2 1/2</option>
+                <option value="3 1/2">3 1/2</option>
+                <option value="4 1/2">4 1/2</option>
+                <option value="5 1/2">5 1/2</option>
+                <option value="6 1/2">6 1/2</option>
+                <option value="Studio">Studio</option>
+                <option value="Loft">Loft</option>
+              </select>
+
+              <select id="aptChambres">
+                <option value="">Chambres</option>
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+
               <input id="aptSuperficie" type="text" placeholder="Superficie" />
               <input id="aptLoyer" type="number" placeholder="Loyer" />
-              <input id="aptInclusions" type="text" placeholder="Inclusions" />
-              <input id="aptStatut" type="text" placeholder="Statut" />
-              <input id="aptStationnement" type="text" placeholder="Stationnement" />
-              <input id="aptAnimaux" type="text" placeholder="Animaux acceptés" />
-              <input id="aptMeuble" type="text" placeholder="Meublé" />
+
+              <select id="aptInclusions">
+                <option value="">Inclusions</option>
+                <option value="aucune">Aucune</option>
+                <option value="chauffage inclus">Chauffage inclus</option>
+                <option value="eau chaude incluse">Eau chaude incluse</option>
+                <option value="chauffage et eau chaude inclus">Chauffage et eau chaude inclus</option>
+                <option value="électricité incluse">Électricité incluse</option>
+                <option value="tout inclus">Tout inclus</option>
+              </select>
+
+              <select id="aptStatut">
+                <option value="">Statut</option>
+                <option value="disponible">Disponible</option>
+                <option value="loué">Loué</option>
+                <option value="réservé">Réservé</option>
+              </select>
+
+              <select id="aptStationnement">
+                <option value="">Stationnement</option>
+                <option value="aucun">Aucun</option>
+                <option value="extérieur">Extérieur</option>
+                <option value="intérieur">Intérieur</option>
+                <option value="garage">Garage</option>
+                <option value="inclus">Inclus</option>
+              </select>
+
+              <select id="aptAnimaux">
+                <option value="">Animaux acceptés</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+                <option value="chats seulement">Chats seulement</option>
+                <option value="petits chiens seulement">Petits chiens seulement</option>
+              </select>
+
+              <select id="aptMeuble">
+                <option value="">Meublé</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
               <input id="aptDisponibilite" type="text" placeholder="Disponibilité" />
-              <input id="aptElectricite" type="text" placeholder="Électricité" />
+
+              <select id="aptElectricite">
+                <option value="">Électricité</option>
+                <option value="incluse">Incluse</option>
+                <option value="non incluse">Non incluse</option>
+                <option value="hydro aux frais du locataire">Hydro aux frais du locataire</option>
+              </select>
             </div>
 
             <textarea id="aptNotes" placeholder="Notes"></textarea>
