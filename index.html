@@ -116,3 +116,54 @@
   <script src="script.js"></script>
 </body>
 </html>
+<section class="card">
+  <h3>Nouveau locataire potentiel</h3>
+
+  <form id="candidateForm">
+    <input id="aptRef" placeholder="Appartement (ex: 1001)" required />
+
+    <input id="name" placeholder="Nom complet" />
+    <input id="phone" placeholder="Téléphone" />
+    <input id="email" placeholder="Email" />
+
+    <input id="job" placeholder="Emploi" />
+    <input id="employer" placeholder="Employeur" />
+    <input id="employmentLength" placeholder="Depuis combien de temps" />
+
+    <select id="employmentStatus">
+      <option value="">Statut emploi</option>
+      <option>temps plein</option>
+      <option>temps partiel</option>
+      <option>autonome</option>
+      <option>étudiant</option>
+      <option>sans emploi</option>
+    </select>
+
+    <input id="income" type="number" placeholder="Revenu mensuel" />
+
+    <select id="credit">
+      <option value="">Crédit</option>
+      <option>basse</option>
+      <option>moyenne</option>
+      <option>haute</option>
+    </select>
+
+    <select id="tal">
+      <option value="">TAL</option>
+      <option>oui</option>
+      <option>non</option>
+    </select>
+
+    <input id="occupants" type="number" placeholder="Nombre de personnes" />
+
+    <select id="pets">
+      <option value="">Animaux</option>
+      <option>oui</option>
+      <option>non</option>
+    </select>
+
+    <textarea id="notes" placeholder="Notes employé"></textarea>
+
+    <button type="submit">Envoyer</button>
+  </form>
+</section>
