@@ -239,10 +239,6 @@ function quickFieldAnswer(listing, question) {
   return null;
 }
 
-/* =========================
-   HEALTH + LISTINGS
-========================= */
-
 app.get("/api/health", async (req, res) => {
   try {
     const { error } = await supabase.from("apartments").select("ref").limit(1);
@@ -281,10 +277,6 @@ app.get("/api/listings", async (req, res) => {
     res.status(500).json({ error: "Erreur chargement appartements." });
   }
 });
-
-/* =========================
-   CHAT SESSIONS / ACTIVITY / MESSAGES
-========================= */
 
 app.post("/api/chat-sessions", async (req, res) => {
   try {
@@ -502,10 +494,6 @@ app.get("/api/user-time-summary", async (req, res) => {
   }
 });
 
-/* =========================
-   ADMIN ROUTES
-========================= */
-
 app.get("/api/admin/chat-sessions", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -580,7 +568,6 @@ app.get("/api/admin/user-daily-time", async (req, res) => {
 app.post("/api/admin/apartments", async (req, res) => {
   try {
     const {
-      ref,
       adresse,
       ville,
       type_logement,
@@ -597,22 +584,25 @@ app.post("/api/admin/apartments", async (req, res) => {
       electricite
     } = req.body || {};
 
-    if (!ref || !adresse || !ville) {
+    if (!adresse || !ville) {
       return res.status(400).json({
-        error: "ref, adresse et ville sont requis."
+        error: "adresse et ville sont requis."
       });
     }
 
-    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+    const { data: existing, error: existingError } = await supabase
+      .from("apartments")
+      .select("ref")
+      .order("ref", { ascending: false })
+      .limit(1);
 
-    if (!numericRef) {
-      return res.status(400).json({
-        error: "Référence invalide."
-      });
-    }
+    if (existingError) throw existingError;
+
+    const lastRef = existing?.[0]?.ref ? Number(existing[0].ref) : 1000;
+    const nextRef = lastRef + 1;
 
     const payload = {
-      ref: numericRef,
+      ref: nextRef,
       adresse,
       ville,
       type_logement: type_logement || null,
@@ -643,7 +633,11 @@ app.post("/api/admin/apartments", async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ ok: true, apartment: data });
+    res.json({
+      ok: true,
+      apartment: data,
+      generated_ref: `L-${nextRef}`
+    });
   } catch (error) {
     console.error("Erreur /api/admin/apartments POST :", error);
     res.status(500).json({
@@ -692,10 +686,6 @@ app.put("/api/admin/apartments/:ref", async (req, res) => {
     });
   }
 });
-
-/* =========================
-   CHAT AI
-========================= */
 
 app.post("/api/chat", async (req, res) => {
   try {
