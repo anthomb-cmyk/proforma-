@@ -647,3 +647,14 @@ code {
     font-size: 0.98rem;
   }
 }
+/* ===== HIDE SELECT IN TRANSLATOR MODE (CSS OVERRIDE) ===== */
+
+/* Quand le bouton Traducteur est actif → cacher la box */
+body:has(.mode-btn[data-mode="translator"].active) #listingSelectBox {
+  display: none !important;
+}
+
+/* Quand mode immeuble → forcer visible */
+body:has(.mode-btn[data-mode="listing"].active) #listingSelectBox {
+  display: block !important;
+}
