@@ -740,3 +740,38 @@ supabaseClient.auth.onAuthStateChange(async (event) => {
   switchMode("listing");
   renderMessages();
 })();
+document.getElementById("candidateForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    apartment_ref: document.getElementById("aptRef").value,
+    candidate_name: document.getElementById("name").value,
+    phone: document.getElementById("phone").value,
+    email: document.getElementById("email").value,
+
+    job_title: document.getElementById("job").value,
+    employer_name: document.getElementById("employer").value,
+    employment_length: document.getElementById("employmentLength").value,
+    employment_status: document.getElementById("employmentStatus").value,
+
+    monthly_income: document.getElementById("income").value,
+    credit_level: document.getElementById("credit").value,
+
+    occupants_total: document.getElementById("occupants").value,
+
+    tal_record: document.getElementById("tal").value,
+    pets: document.getElementById("pets").value,
+
+    employee_notes: document.getElementById("notes").value,
+    status: "en attente"
+  };
+
+  await fetch("/api/admin/candidates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  alert("Candidat ajouté");
+  location.reload();
+});
