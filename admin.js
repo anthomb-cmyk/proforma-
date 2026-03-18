@@ -31,26 +31,28 @@ function showFatalError(message) {
       <div style="padding:16px 18px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:700;">
         ${message}
       </div>
-      <p style="margin-top:16px;color:#374151;">Ouvre aussi la console du navigateur pour voir le détail.</p>
+      <p style="margin-top:16px;color:#374151;">Retournez sur <strong>login.html</strong> pour vous reconnecter si nécessaire.</p>
     </div>
   `;
 }
 
 async function requireAdmin() {
-  const { data: userData, error: userError } = await supabaseClient.auth.getUser();
+  const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
 
-  console.log("DEBUG getUser()", { userData, userError });
+  console.log("DEBUG sessionData:", sessionData);
+  console.log("DEBUG sessionError:", sessionError);
 
-  if (userError) {
-    throw new Error(`Erreur getUser: ${userError.message}`);
+  if (sessionError) {
+    throw new Error("Session error: " + sessionError.message);
   }
 
-  if (!userData?.user) {
-    throw new Error("Aucun utilisateur connecté. Retourne sur login.html et reconnecte-toi.");
+  if (!sessionData?.session) {
+    window.location.href = "/login.html";
+    throw new Error("No active session. You must log in first.");
   }
 
-  const userId = userData.user.id;
-  console.log("DEBUG userId =", userId);
+  const userId = sessionData.session.user.id;
+  console.log("DEBUG userId:", userId);
 
   const { data: adminRow, error: adminError } = await supabaseClient
     .from("admin_users")
@@ -58,19 +60,20 @@ async function requireAdmin() {
     .eq("user_id", userId)
     .maybeSingle();
 
-  console.log("DEBUG admin_users query", { adminRow, adminError });
+  console.log("DEBUG adminRow:", adminRow);
+  console.log("DEBUG adminError:", adminError);
 
   if (adminError) {
-    throw new Error(`Erreur lecture admin_users: ${adminError.message}`);
+    throw new Error("Erreur lecture admin_users: " + adminError.message);
   }
 
   if (!adminRow) {
     throw new Error(
-      `Ton compte est bien connecté, mais il n'existe pas dans admin_users. UUID actuel: ${userId}`
+      `Votre compte est connecté, mais n'existe pas dans admin_users. UUID actuel: ${userId}`
     );
   }
 
-  return userData.user;
+  return sessionData.session.user;
 }
 
 function formatDate(value) {
@@ -157,8 +160,8 @@ async function loadSessions() {
   for (const row of data.sessions || []) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.id}</td>
-      <td>${row.user_id}</td>
+      <td>${row.id || "-"}</td>
+      <td>${row.user_id || "-"}</td>
       <td>${formatDate(row.started_at)}</td>
       <td>${formatDate(row.ended_at)}</td>
       <td>${formatDate(row.last_seen_at)}</td>
@@ -169,7 +172,7 @@ async function loadSessions() {
 
 async function loadMessages() {
   let url = "/api/admin/chat-messages";
-  const userId = messageUserId.value.trim();
+  const userId = messageUserId?.value?.trim() || "";
 
   if (userId) {
     url += `?user_id=${encodeURIComponent(userId)}`;
@@ -240,6 +243,7 @@ async function createApartment(event) {
 
     apartmentFormStatus.textContent = `Appartement ajouté avec succès. Référence générée : ${result.generated_ref}`;
     apartmentFormStatus.style.color = "green";
+
     apartmentForm.reset();
     await loadApartments();
   } catch (error) {
@@ -262,9 +266,17 @@ document.querySelectorAll(".menu-btn").forEach((btn) => {
   });
 });
 
-refreshBtn?.addEventListener("click", refreshCurrentTab);
-loadMessagesBtn?.addEventListener("click", loadMessages);
-apartmentForm?.addEventListener("submit", createApartment);
+if (refreshBtn) {
+  refreshBtn.addEventListener("click", refreshCurrentTab);
+}
+
+if (loadMessagesBtn) {
+  loadMessagesBtn.addEventListener("click", loadMessages);
+}
+
+if (apartmentForm) {
+  apartmentForm.addEventListener("submit", createApartment);
+}
 
 supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
