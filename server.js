@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
+import nodemailer from "nodemailer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +36,17 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+const mailer =
+  process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
+    ? nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.GMAIL_USER,
+          pass: process.env.GMAIL_APP_PASSWORD
+        }
+      })
+    : null;
 
 function normalizeText(value = "") {
   return String(value)
@@ -127,6 +139,67 @@ async function getListingByRef(ref) {
 
   if (error) throw error;
   return data;
+}
+
+async function sendCandidateNotificationEmail(candidate) {
+  if (!mailer || !process.env.EMAIL_NOTIFY_TO) {
+    console.warn("Email notification non configurée.");
+    return;
+  }
+
+  const subject = `Nouveau locataire potentiel — L-${candidate.apartment_ref}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+      <h2>Nouveau locataire potentiel</h2>
+      <p><strong>Appartement :</strong> L-${candidate.apartment_ref || "-"}</p>
+      <p><strong>Nom :</strong> ${candidate.candidate_name || "-"}</p>
+      <p><strong>Téléphone :</strong> ${candidate.phone || "-"}</p>
+      <p><strong>Email :</strong> ${candidate.email || "-"}</p>
+      <p><strong>Emploi :</strong> ${candidate.job_title || "-"}</p>
+      <p><strong>Employeur :</strong> ${candidate.employer_name || "-"}</p>
+      <p><strong>Depuis combien de temps :</strong> ${candidate.employment_length || "-"}</p>
+      <p><strong>Statut emploi :</strong> ${candidate.employment_status || "-"}</p>
+      <p><strong>Revenu mensuel :</strong> ${candidate.monthly_income || "-"}</p>
+      <p><strong>Crédit :</strong> ${candidate.credit_level || "-"}</p>
+      <p><strong>Dossier TAL :</strong> ${candidate.tal_record || "-"}</p>
+      <p><strong>Nombre de personnes :</strong> ${candidate.occupants_total || "-"}</p>
+      <p><strong>Animaux :</strong> ${candidate.pets || "-"}</p>
+      <p><strong>Notes employé :</strong> ${candidate.employee_notes || "-"}</p>
+      <hr />
+      <p><a href="https://fluxlocatif.up.railway.app/admin.html">Ouvrir l’admin FluxLocatif</a></p>
+    </div>
+  `;
+
+  const text = `
+Nouveau locataire potentiel
+
+Appartement : L-${candidate.apartment_ref || "-"}
+Nom : ${candidate.candidate_name || "-"}
+Téléphone : ${candidate.phone || "-"}
+Email : ${candidate.email || "-"}
+Emploi : ${candidate.job_title || "-"}
+Employeur : ${candidate.employer_name || "-"}
+Depuis combien de temps : ${candidate.employment_length || "-"}
+Statut emploi : ${candidate.employment_status || "-"}
+Revenu mensuel : ${candidate.monthly_income || "-"}
+Crédit : ${candidate.credit_level || "-"}
+Dossier TAL : ${candidate.tal_record || "-"}
+Nombre de personnes : ${candidate.occupants_total || "-"}
+Animaux : ${candidate.pets || "-"}
+Notes employé : ${candidate.employee_notes || "-"}
+
+Admin :
+https://fluxlocatif.up.railway.app/admin.html
+  `;
+
+  await mailer.sendMail({
+    from: `"FluxLocatif" <${process.env.GMAIL_USER}>`,
+    to: process.env.EMAIL_NOTIFY_TO,
+    subject,
+    text,
+    html
+  });
 }
 
 function quickFieldAnswer(listing, question) {
@@ -239,10 +312,6 @@ function quickFieldAnswer(listing, question) {
   return null;
 }
 
-/* =========================
-   HEALTH + LISTINGS
-========================= */
-
 app.get("/api/health", async (req, res) => {
   try {
     const { error } = await supabase.from("apartments").select("ref").limit(1);
@@ -282,458 +351,90 @@ app.get("/api/listings", async (req, res) => {
   }
 });
 
-/* =========================
-   CHAT SESSIONS / ACTIVITY / MESSAGES
-========================= */
-
-app.post("/api/chat-sessions", async (req, res) => {
+app.post("/api/admin/candidates", async (req, res) => {
   try {
-    const { user_id, page_path } = req.body || {};
+    const payload = { ...req.body };
 
-    if (!user_id) {
-      return res.status(400).json({ error: "user_id manquant." });
+    if (!payload.apartment_ref) {
+      return res.status(400).json({ error: "apartment_ref manquant." });
+    }
+
+    if (payload.monthly_income !== "" && payload.monthly_income !== null && payload.monthly_income !== undefined) {
+      payload.monthly_income = Number(payload.monthly_income);
+    } else {
+      payload.monthly_income = null;
+    }
+
+    if (payload.occupants_total !== "" && payload.occupants_total !== null && payload.occupants_total !== undefined) {
+      payload.occupants_total = Number(payload.occupants_total);
+    } else {
+      payload.occupants_total = null;
     }
 
     const { data, error } = await supabase
-      .from("chat_sessions")
-      .insert({
-        user_id,
-        page_path: page_path || "/",
-        last_seen_at: new Date().toISOString()
-      })
-      .select("id, user_id, started_at, last_seen_at")
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ ok: true, session: data });
-  } catch (error) {
-    console.error("Erreur /api/chat-sessions :", error);
-    return res.status(500).json({
-      error: "Erreur création session.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.patch("/api/chat-sessions/:id/heartbeat", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { user_id } = req.body || {};
-
-    if (!id || !user_id) {
-      return res.status(400).json({ error: "id ou user_id manquant." });
-    }
-
-    const { data, error } = await supabase
-      .from("chat_sessions")
-      .update({
-        last_seen_at: new Date().toISOString()
-      })
-      .eq("id", id)
-      .eq("user_id", user_id)
-      .select("id, last_seen_at")
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ ok: true, session: data });
-  } catch (error) {
-    console.error("Erreur /api/chat-sessions/:id/heartbeat :", error);
-    return res.status(500).json({
-      error: "Erreur heartbeat session.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.patch("/api/chat-sessions/:id/end", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { user_id } = req.body || {};
-    const now = new Date().toISOString();
-
-    if (!id || !user_id) {
-      return res.status(400).json({ error: "id ou user_id manquant." });
-    }
-
-    const { data, error } = await supabase
-      .from("chat_sessions")
-      .update({
-        ended_at: now,
-        last_seen_at: now
-      })
-      .eq("id", id)
-      .eq("user_id", user_id)
-      .select("id, ended_at, last_seen_at")
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ ok: true, session: data });
-  } catch (error) {
-    console.error("Erreur /api/chat-sessions/:id/end :", error);
-    return res.status(500).json({
-      error: "Erreur fermeture session.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.post("/api/activity-log", async (req, res) => {
-  try {
-    const { user_id, session_id, event_type, page_path } = req.body || {};
-
-    if (!user_id || !event_type) {
-      return res.status(400).json({ error: "user_id ou event_type manquant." });
-    }
-
-    const { data, error } = await supabase
-      .from("user_activity_logs")
-      .insert({
-        user_id,
-        session_id: session_id || null,
-        event_type,
-        page_path: page_path || "/"
-      })
-      .select("id, event_type, created_at")
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ ok: true, activity: data });
-  } catch (error) {
-    console.error("Erreur /api/activity-log :", error);
-    return res.status(500).json({
-      error: "Erreur activity log.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.post("/api/chat-messages", async (req, res) => {
-  try {
-    const { session_id, user_id, mode, sender, label, text } = req.body || {};
-
-    if (!session_id || !user_id || !mode || !sender || !text) {
-      return res.status(400).json({
-        error: "session_id, user_id, mode, sender ou text manquant."
-      });
-    }
-
-    const { data, error } = await supabase
-      .from("chat_messages")
-      .insert({
-        session_id,
-        user_id,
-        mode,
-        sender,
-        label: label || null,
-        text
-      })
-      .select("id, created_at")
-      .single();
-
-    if (error) throw error;
-
-    return res.json({ ok: true, message: data });
-  } catch (error) {
-    console.error("Erreur /api/chat-messages :", error);
-    return res.status(500).json({
-      error: "Erreur sauvegarde message.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.get("/api/chat-messages", async (req, res) => {
-  try {
-    const { user_id, session_id } = req.query;
-
-    if (!user_id) {
-      return res.status(400).json({ error: "user_id manquant." });
-    }
-
-    let query = supabase
-      .from("chat_messages")
-      .select("*")
-      .eq("user_id", user_id)
-      .order("created_at", { ascending: true });
-
-    if (session_id) {
-      query = query.eq("session_id", session_id);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    return res.json({ ok: true, messages: data || [] });
-  } catch (error) {
-    console.error("Erreur /api/chat-messages GET :", error);
-    return res.status(500).json({
-      error: "Erreur lecture messages.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.get("/api/user-time-summary", async (req, res) => {
-  try {
-    const { user_id } = req.query;
-
-    let query = supabase.from("user_time_summary").select("*");
-
-    if (user_id) {
-      query = query.eq("user_id", user_id);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    return res.json({ ok: true, summary: data || [] });
-  } catch (error) {
-    console.error("Erreur /api/user-time-summary :", error);
-    return res.status(500).json({
-      error: "Erreur lecture résumé temps.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-/* =========================
-   ADMIN ROUTES
-========================= */
-
-app.get("/api/admin/chat-sessions", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("chat_sessions")
-      .select("*")
-      .order("started_at", { ascending: false });
-
-    if (error) throw error;
-
-    res.json({ sessions: data || [] });
-  } catch (error) {
-    console.error("Erreur /api/admin/chat-sessions :", error);
-    res.status(500).json({ error: "Erreur chargement sessions." });
-  }
-});
-
-app.get("/api/admin/chat-messages", async (req, res) => {
-  try {
-    const { user_id } = req.query;
-
-    let query = supabase
-      .from("chat_messages")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (user_id) {
-      query = query.eq("user_id", user_id);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    res.json({ messages: data || [] });
-  } catch (error) {
-    console.error("Erreur /api/admin/chat-messages :", error);
-    res.status(500).json({ error: "Erreur chargement messages." });
-  }
-});
-
-app.get("/api/admin/user-daily-time", async (req, res) => {
-  try {
-    const { day, user_id } = req.query;
-
-    let query = supabase
-      .from("user_daily_time_from_heartbeat_named")
-      .select("*")
-      .order("day", { ascending: false });
-
-    if (day) {
-      query = query.eq("day", day);
-    }
-
-    if (user_id) {
-      query = query.eq("user_id", user_id);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    res.json({ summary: data || [] });
-  } catch (error) {
-    console.error("Erreur /api/admin/user-daily-time :", error);
-    res.status(500).json({
-      error: "Erreur chargement temps heartbeat.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-app.post("/api/admin/apartments", async (req, res) => {
-  try {
-    const {
-      adresse,
-      ville,
-      type_logement,
-      chambres,
-      superficie,
-      loyer,
-      inclusions,
-      statut,
-      stationnement,
-      animaux_acceptes,
-      meuble,
-      disponibilite,
-      notes,
-      electricite
-    } = req.body || {};
-
-    if (!adresse || !ville) {
-      return res.status(400).json({
-        error: "adresse et ville sont requis."
-      });
-    }
-
-    const { data: existing, error: existingError } = await supabase
-      .from("apartments")
-      .select("ref")
-      .order("ref", { ascending: false })
-      .limit(1);
-
-    if (existingError) throw existingError;
-
-    const lastRef = existing?.[0]?.ref ? Number(existing[0].ref) : 1000;
-    const nextRef = lastRef + 1;
-
-    const payload = {
-      ref: nextRef,
-      adresse,
-      ville,
-      type_logement: type_logement || null,
-      chambres:
-        chambres !== "" && chambres !== null && chambres !== undefined
-          ? Number(chambres)
-          : null,
-      superficie: superficie || null,
-      loyer:
-        loyer !== "" && loyer !== null && loyer !== undefined
-          ? Number(loyer)
-          : null,
-      inclusions: inclusions || null,
-      statut: statut || null,
-      stationnement: stationnement || null,
-      animaux_acceptes: animaux_acceptes || null,
-      meuble: meuble || null,
-      disponibilite: disponibilite || null,
-      notes: notes || null,
-      electricite: electricite || null
-    };
-
-    const { data, error } = await supabase
-      .from("apartments")
+      .from("rental_applications")
       .insert(payload)
       .select("*")
       .single();
 
     if (error) throw error;
 
-    res.json({
-      ok: true,
-      apartment: data,
-      generated_ref: `L-${nextRef}`
-    });
-  } catch (error) {
-    console.error("Erreur /api/admin/apartments POST :", error);
-    res.status(500).json({
-      error: "Erreur création appartement.",
-      details: error.message || String(error)
-    });
+    try {
+      await sendCandidateNotificationEmail(data);
+    } catch (mailError) {
+      console.error("Erreur envoi email candidat :", mailError);
+    }
+
+    res.json({ ok: true, candidate: data });
+  } catch (err) {
+    console.error("Erreur création candidat :", err);
+    res.status(500).json({ error: "Erreur création candidat" });
   }
 });
 
-app.put("/api/admin/apartments/:ref", async (req, res) => {
+app.get("/api/admin/candidates", async (req, res) => {
   try {
-    const { ref } = req.params;
-    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+    const { status } = req.query;
 
-    if (!numericRef) {
-      return res.status(400).json({ error: "Référence invalide." });
+    let query = supabase
+      .from("rental_applications")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (status) {
+      query = query.eq("status", status);
     }
 
-    const updates = { ...req.body };
+    const { data, error } = await query;
 
-    if ("ref" in updates) delete updates.ref;
+    if (error) throw error;
 
-    if ("chambres" in updates) {
-      updates.chambres =
-        updates.chambres !== "" && updates.chambres !== null && updates.chambres !== undefined
-          ? Number(updates.chambres)
-          : null;
-    }
+    res.json({ candidates: data || [] });
+  } catch (err) {
+    console.error("Erreur candidats :", err);
+    res.status(500).json({ error: "Erreur candidats" });
+  }
+});
 
-    if ("loyer" in updates) {
-      updates.loyer =
-        updates.loyer !== "" && updates.loyer !== null && updates.loyer !== undefined
-          ? Number(updates.loyer)
-          : null;
-    }
+app.put("/api/admin/candidates/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
     const { data, error } = await supabase
-      .from("apartments")
-      .update(updates)
-      .eq("ref", numericRef)
+      .from("rental_applications")
+      .update(req.body)
+      .eq("id", id)
       .select("*")
       .single();
 
     if (error) throw error;
 
-    res.json({ ok: true, apartment: data });
-  } catch (error) {
-    console.error("Erreur /api/admin/apartments PUT :", error);
-    res.status(500).json({
-      error: "Erreur modification appartement.",
-      details: error.message || String(error)
-    });
+    res.json({ ok: true, candidate: data });
+  } catch (err) {
+    console.error("Erreur update candidat :", err);
+    res.status(500).json({ error: "Erreur update candidat" });
   }
 });
-
-app.delete("/api/admin/apartments/:ref", async (req, res) => {
-  try {
-    const { ref } = req.params;
-    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
-
-    if (!numericRef) {
-      return res.status(400).json({ error: "Référence invalide." });
-    }
-
-    const { error } = await supabase
-      .from("apartments")
-      .delete()
-      .eq("ref", numericRef);
-
-    if (error) throw error;
-
-    res.json({ ok: true });
-  } catch (error) {
-    console.error("Erreur /api/admin/apartments DELETE :", error);
-    res.status(500).json({
-      error: "Erreur suppression appartement.",
-      details: error.message || String(error)
-    });
-  }
-});
-
-/* =========================
-   CHAT AI
-========================= */
 
 app.post("/api/chat", async (req, res) => {
   try {
@@ -837,58 +538,4 @@ app.post("/api/chat", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-app.post("/api/admin/candidates", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("rental_applications")
-      .insert(req.body)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    res.json({ ok: true, candidate: data });
-  } catch (err) {
-    res.status(500).json({ error: "Erreur création candidat" });
-  }
-});
-app.get("/api/admin/candidates", async (req, res) => {
-  try {
-    const { status } = req.query;
-
-    let query = supabase
-      .from("rental_applications")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (status) {
-      query = query.eq("status", status);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    res.json({ candidates: data });
-  } catch (err) {
-    res.status(500).json({ error: "Erreur candidats" });
-  }
-});
-app.put("/api/admin/candidates/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { data, error } = await supabase
-      .from("rental_applications")
-      .update(req.body)
-      .eq("id", id)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    res.json({ ok: true, candidate: data });
-  } catch (err) {
-    res.status(500).json({ error: "Erreur update candidat" });
-  }
-});
+npm install nodemailer
