@@ -658,3 +658,88 @@ body:has(.mode-btn[data-mode="translator"].active) #listingSelectBox {
 body:has(.mode-btn[data-mode="listing"].active) #listingSelectBox {
   display: block !important;
 }
+.candidate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.candidate-form input,
+.candidate-form select,
+.candidate-form textarea {
+  width: 100%;
+  border: 1px solid rgba(79, 70, 229, 0.14);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.96);
+  outline: none;
+}
+
+.candidate-form input:focus,
+.candidate-form select:focus,
+.candidate-form textarea:focus {
+  border-color: rgba(79, 70, 229, 0.4);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.10);
+}
+
+.candidate-form textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.candidate-submit-btn {
+  width: 100%;
+}
+
+.candidate-status {
+  display: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+.candidate-status.success {
+  display: block;
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.candidate-status.error {
+  display: block;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.listing-selector-card {
+  width: 100%;
+  background: var(--brand-gradient);
+  border-radius: 24px;
+  padding: 18px;
+  box-shadow: var(--shadow-lg);
+}
+
+.listing-selector-title {
+  color: white;
+  font-size: 1.35rem;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.listing-selector-subtitle {
+  color: rgba(255,255,255,0.9);
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+
+.listing-selector-card .listing-select {
+  background: rgba(255,255,255,0.22);
+  color: white;
+  border: 2px solid rgba(255,255,255,0.55);
+  box-shadow: none;
+}
+
+.listing-selector-card .listing-select option {
+  color: #111827;
+}
