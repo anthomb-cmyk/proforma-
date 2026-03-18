@@ -24,27 +24,53 @@ const apartmentFormStatus = document.getElementById("apartmentFormStatus");
 
 let currentTab = "users";
 
-async function requireAdmin() {
-  const { data: sessionData } = await supabaseClient.auth.getSession();
+function showFatalError(message) {
+  document.body.innerHTML = `
+    <div style="font-family: Inter, Arial, sans-serif; padding: 40px; max-width: 900px; margin: 0 auto;">
+      <h1 style="margin-bottom: 12px;">Accès admin bloqué</h1>
+      <div style="padding:16px 18px;border-radius:14px;background:#fee2e2;color:#991b1b;font-weight:700;">
+        ${message}
+      </div>
+      <p style="margin-top:16px;color:#374151;">Ouvre aussi la console du navigateur pour voir le détail.</p>
+    </div>
+  `;
+}
 
-  if (!sessionData?.session) {
-    window.location.href = "/login.html";
-    throw new Error("No session");
+async function requireAdmin() {
+  const { data: userData, error: userError } = await supabaseClient.auth.getUser();
+
+  console.log("DEBUG getUser()", { userData, userError });
+
+  if (userError) {
+    throw new Error(`Erreur getUser: ${userError.message}`);
   }
 
-  const userId = sessionData.session.user.id;
+  if (!userData?.user) {
+    throw new Error("Aucun utilisateur connecté. Retourne sur login.html et reconnecte-toi.");
+  }
 
-  const { data, error } = await supabaseClient
+  const userId = userData.user.id;
+  console.log("DEBUG userId =", userId);
+
+  const { data: adminRow, error: adminError } = await supabaseClient
     .from("admin_users")
-    .select("user_id")
+    .select("*")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error || !data) {
-    alert("Accès refusé.");
-    window.location.href = "/";
-    throw new Error("Not admin");
+  console.log("DEBUG admin_users query", { adminRow, adminError });
+
+  if (adminError) {
+    throw new Error(`Erreur lecture admin_users: ${adminError.message}`);
   }
+
+  if (!adminRow) {
+    throw new Error(
+      `Ton compte est bien connecté, mais il n'existe pas dans admin_users. UUID actuel: ${userId}`
+    );
+  }
+
+  return userData.user;
 }
 
 function formatDate(value) {
@@ -236,15 +262,9 @@ document.querySelectorAll(".menu-btn").forEach((btn) => {
   });
 });
 
-refreshBtn.addEventListener("click", refreshCurrentTab);
-
-if (loadMessagesBtn) {
-  loadMessagesBtn.addEventListener("click", loadMessages);
-}
-
-if (apartmentForm) {
-  apartmentForm.addEventListener("submit", createApartment);
-}
+refreshBtn?.addEventListener("click", refreshCurrentTab);
+loadMessagesBtn?.addEventListener("click", loadMessages);
+apartmentForm?.addEventListener("submit", createApartment);
 
 supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
@@ -258,6 +278,7 @@ supabaseClient.auth.onAuthStateChange((event) => {
     switchTab("users");
     await loadUsers();
   } catch (error) {
-    console.error(error);
+    console.error("ADMIN INIT ERROR:", error);
+    showFatalError(error.message || "Erreur admin inconnue.");
   }
 })();
