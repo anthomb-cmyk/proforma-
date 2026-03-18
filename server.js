@@ -37,16 +37,24 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const mailer =
-  process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD
-    ? nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: process.env.GMAIL_USER,
-          pass: process.env.GMAIL_APP_PASSWORD
-        }
-      })
-    : null;
+let mailer = null;
+
+try {
+  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+    mailer = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD
+      }
+    });
+    console.log("Mailer prêt");
+  } else {
+    console.log("Mailer non configuré");
+  }
+} catch (error) {
+  console.error("Erreur initialisation mailer :", error);
+}
 
 function normalizeText(value = "") {
   return String(value)
@@ -112,6 +120,7 @@ Règles :
   - eau chaude / hot water
   - animaux / chien / chat
   - parking / stationnement
+  - meublé / meuble
 - Si une information est présente dans inclusions, notes, electricite, statut, disponibilite, tu peux t'en servir
 
 FICHE DU LOGEMENT :
@@ -216,6 +225,7 @@ function quickFieldAnswer(listing, question) {
   const notesText = normalizeText(listing.notes || "");
   const stationnementText = normalizeText(listing.stationnement || "");
   const animauxText = normalizeText(listing.animaux_acceptes || "");
+  const meubleText = normalizeText(listing.meuble || "");
 
   const fullText = [
     inclusionsText,
@@ -223,9 +233,23 @@ function quickFieldAnswer(listing, question) {
     notesText,
     stationnementText,
     animauxText,
+    meubleText,
     normalizeText(listing.disponibilite || ""),
     normalizeText(listing.statut || "")
   ].join(" ");
+
+  if (
+    q.includes("meubl") ||
+    q.includes("meuble")
+  ) {
+    if (listing.meuble) {
+      const answer = normalizeText(listing.meuble);
+      if (answer === "oui") return `Oui, ${refLabel} est meublé.`;
+      if (answer === "non") return `Non, ${refLabel} n'est pas meublé.`;
+      return `Pour ${refLabel}, meublé : ${listing.meuble}.`;
+    }
+    return "Cette information n'est pas indiquée dans la fiche.";
+  }
 
   if (
     q.includes("electric") ||
@@ -312,6 +336,10 @@ function quickFieldAnswer(listing, question) {
   return null;
 }
 
+/* =========================
+   API ROUTES
+========================= */
+
 app.get("/api/health", async (req, res) => {
   try {
     const { error } = await supabase.from("apartments").select("ref").limit(1);
@@ -351,6 +379,231 @@ app.get("/api/listings", async (req, res) => {
   }
 });
 
+app.get("/api/admin/user-daily-time", async (req, res) => {
+  try {
+    const { day, user_id } = req.query;
+
+    let query = supabase
+      .from("user_daily_time_from_heartbeat_named")
+      .select("*")
+      .order("day", { ascending: false });
+
+    if (day) {
+      query = query.eq("day", day);
+    }
+
+    if (user_id) {
+      query = query.eq("user_id", user_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json({ summary: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/admin/user-daily-time :", error);
+    res.status(500).json({
+      error: "Erreur chargement temps heartbeat.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.get("/api/admin/chat-sessions", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("chat_sessions")
+      .select("*")
+      .order("started_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ sessions: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/admin/chat-sessions :", error);
+    res.status(500).json({ error: "Erreur chargement sessions." });
+  }
+});
+
+app.get("/api/admin/chat-messages", async (req, res) => {
+  try {
+    const { user_id } = req.query;
+
+    let query = supabase
+      .from("chat_messages")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (user_id) {
+      query = query.eq("user_id", user_id);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    res.json({ messages: data || [] });
+  } catch (error) {
+    console.error("Erreur /api/admin/chat-messages :", error);
+    res.status(500).json({ error: "Erreur chargement messages." });
+  }
+});
+
+app.post("/api/admin/apartments", async (req, res) => {
+  try {
+    const {
+      adresse,
+      ville,
+      type_logement,
+      chambres,
+      superficie,
+      loyer,
+      inclusions,
+      statut,
+      stationnement,
+      animaux_acceptes,
+      meuble,
+      disponibilite,
+      notes,
+      electricite
+    } = req.body || {};
+
+    if (!adresse || !ville) {
+      return res.status(400).json({
+        error: "adresse et ville sont requis."
+      });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from("apartments")
+      .select("ref")
+      .order("ref", { ascending: false })
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    const lastRef = existing?.[0]?.ref ? Number(existing[0].ref) : 1000;
+    const nextRef = lastRef + 1;
+
+    const payload = {
+      ref: nextRef,
+      adresse,
+      ville,
+      type_logement: type_logement || null,
+      chambres:
+        chambres !== "" && chambres !== null && chambres !== undefined
+          ? Number(chambres)
+          : null,
+      superficie: superficie || null,
+      loyer:
+        loyer !== "" && loyer !== null && loyer !== undefined
+          ? Number(loyer)
+          : null,
+      inclusions: inclusions || null,
+      statut: statut || null,
+      stationnement: stationnement || null,
+      animaux_acceptes: animaux_acceptes || null,
+      meuble: meuble || null,
+      disponibilite: disponibilite || null,
+      notes: notes || null,
+      electricite: electricite || null
+    };
+
+    const { data, error } = await supabase
+      .from("apartments")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      ok: true,
+      apartment: data,
+      generated_ref: `L-${nextRef}`
+    });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments POST :", error);
+    res.status(500).json({
+      error: "Erreur création appartement.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.put("/api/admin/apartments/:ref", async (req, res) => {
+  try {
+    const { ref } = req.params;
+    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+
+    if (!numericRef) {
+      return res.status(400).json({ error: "Référence invalide." });
+    }
+
+    const updates = { ...req.body };
+
+    if ("ref" in updates) delete updates.ref;
+
+    if ("chambres" in updates) {
+      updates.chambres =
+        updates.chambres !== "" && updates.chambres !== null && updates.chambres !== undefined
+          ? Number(updates.chambres)
+          : null;
+    }
+
+    if ("loyer" in updates) {
+      updates.loyer =
+        updates.loyer !== "" && updates.loyer !== null && updates.loyer !== undefined
+          ? Number(updates.loyer)
+          : null;
+    }
+
+    const { data, error } = await supabase
+      .from("apartments")
+      .update(updates)
+      .eq("ref", numericRef)
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    res.json({ ok: true, apartment: data });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments PUT :", error);
+    res.status(500).json({
+      error: "Erreur modification appartement.",
+      details: error.message || String(error)
+    });
+  }
+});
+
+app.delete("/api/admin/apartments/:ref", async (req, res) => {
+  try {
+    const { ref } = req.params;
+    const numericRef = Number(String(ref).replace(/^L-/i, "").trim());
+
+    if (!numericRef) {
+      return res.status(400).json({ error: "Référence invalide." });
+    }
+
+    const { error } = await supabase
+      .from("apartments")
+      .delete()
+      .eq("ref", numericRef);
+
+    if (error) throw error;
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("Erreur /api/admin/apartments DELETE :", error);
+    res.status(500).json({
+      error: "Erreur suppression appartement.",
+      details: error.message || String(error)
+    });
+  }
+});
+
 app.post("/api/admin/candidates", async (req, res) => {
   try {
     const payload = { ...req.body };
@@ -359,17 +612,17 @@ app.post("/api/admin/candidates", async (req, res) => {
       return res.status(400).json({ error: "apartment_ref manquant." });
     }
 
-    if (payload.monthly_income !== "" && payload.monthly_income !== null && payload.monthly_income !== undefined) {
-      payload.monthly_income = Number(payload.monthly_income);
-    } else {
-      payload.monthly_income = null;
-    }
+    payload.apartment_ref = Number(payload.apartment_ref);
 
-    if (payload.occupants_total !== "" && payload.occupants_total !== null && payload.occupants_total !== undefined) {
-      payload.occupants_total = Number(payload.occupants_total);
-    } else {
-      payload.occupants_total = null;
-    }
+    payload.monthly_income =
+      payload.monthly_income !== "" && payload.monthly_income !== null && payload.monthly_income !== undefined
+        ? Number(payload.monthly_income)
+        : null;
+
+    payload.occupants_total =
+      payload.occupants_total !== "" && payload.occupants_total !== null && payload.occupants_total !== undefined
+        ? Number(payload.occupants_total)
+        : null;
 
     const { data, error } = await supabase
       .from("rental_applications")
@@ -535,7 +788,27 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+/* =========================
+   FRONTEND ROUTES
+========================= */
+
+app.get("/admin.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "admin.html"));
+});
+
+app.get("/login.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "login.html"));
+});
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+// fallback SEULEMENT pour les routes non-api
+app.get(/^\/(?!api\/).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-npm install nodemailer
