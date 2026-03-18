@@ -68,9 +68,18 @@
             Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
           </div>
 
-          <select id="listingSelect" class="listing-select">
-            <option value="">Sélectionnez un appartement</option>
-          </select>
+          <div class="listing-select-box" id="listingSelectBox">
+            <label for="listingSelect" class="listing-select-label">
+              Sélectionnez votre appartement
+            </label>
+            <div class="listing-select-help">
+              Choisissez d’abord un logement dans la liste avant d’écrire votre question.
+            </div>
+
+            <select id="listingSelect" class="listing-select">
+              <option value="">Choisir un appartement</option>
+            </select>
+          </div>
         </div>
 
         <div class="server-pill" id="serverStatus">Connexion serveur en cours…</div>
