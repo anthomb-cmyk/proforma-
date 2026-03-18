@@ -21,18 +21,18 @@ function formatDate(value) {
   return new Date(value).toLocaleString("fr-CA");
 }
 
-function formatDuration(seconds) {
-  const total = Number(seconds || 0);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return `${h}h ${m}m ${s}s`;
+function formatMinutes(value) {
+  return `${Number(value || 0).toFixed(2)} min`;
 }
 
 async function fetchJSON(url) {
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Erreur");
+
+  if (!res.ok) {
+    throw new Error(data.error || "Erreur");
+  }
+
   return data;
 }
 
@@ -58,17 +58,30 @@ function switchTab(tabName) {
 }
 
 async function loadUsers() {
-  const data = await fetchJSON("/api/user-time-summary");
+  const today = new Date().toISOString().split("T")[0];
+  const data = await fetchJSON(`/api/admin/user-daily-time?day=${today}`);
+
   usersBody.innerHTML = "";
 
-  for (const row of (data.summary || [])) {
+  const rows = data.summary || [];
+
+  if (!rows.length) {
+    usersBody.innerHTML = `
+      <tr>
+        <td colspan="5">Aucune donnée aujourd’hui.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  for (const row of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.user_id || "-"}</td>
-      <td>${row.total_sessions ?? 0}</td>
-      <td>${formatDate(row.first_login)}</td>
-      <td>${formatDate(row.last_seen)}</td>
-      <td>${formatDuration(row.total_seconds)}</td>
+      <td>${row.full_name || row.user_id || "-"}</td>
+      <td>${row.day || "-"}</td>
+      <td>${row.heartbeat_count ?? 0}</td>
+      <td>${row.total_seconds ?? 0} s</td>
+      <td>${formatMinutes(row.total_minutes)}</td>
     `;
     usersBody.appendChild(tr);
   }
@@ -78,7 +91,7 @@ async function loadSessions() {
   const data = await fetchJSON("/api/admin/chat-sessions");
   sessionsBody.innerHTML = "";
 
-  for (const row of (data.sessions || [])) {
+  for (const row of data.sessions || []) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${row.id}</td>
@@ -102,7 +115,7 @@ async function loadMessages() {
   const data = await fetchJSON(url);
   messagesBody.innerHTML = "";
 
-  for (const row of (data.messages || [])) {
+  for (const row of data.messages || []) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDate(row.created_at)}</td>
