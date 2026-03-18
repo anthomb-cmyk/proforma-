@@ -42,6 +42,61 @@
           Sélectionnez un appartement pour afficher ses informations.
         </div>
       </div>
+
+      <div class="panel compact">
+        <span class="eyebrow">Préqualification</span>
+        <h2>Nouveau locataire potentiel</h2>
+
+        <form id="candidateForm" class="candidate-form">
+          <input id="aptRef" type="text" placeholder="Appartement visé (ex: 1001)" required />
+          <input id="name" type="text" placeholder="Nom complet" />
+          <input id="phone" type="text" placeholder="Téléphone" />
+          <input id="email" type="email" placeholder="Email" />
+
+          <input id="job" type="text" placeholder="Emploi" />
+          <input id="employer" type="text" placeholder="Employeur" />
+          <input id="employmentLength" type="text" placeholder="Travaille là depuis combien de temps" />
+
+          <select id="employmentStatus">
+            <option value="">Statut emploi</option>
+            <option value="temps plein">Temps plein</option>
+            <option value="temps partiel">Temps partiel</option>
+            <option value="autonome">Autonome</option>
+            <option value="étudiant">Étudiant</option>
+            <option value="sans emploi">Sans emploi</option>
+            <option value="retraité">Retraité</option>
+          </select>
+
+          <input id="income" type="number" placeholder="Revenu mensuel" />
+
+          <select id="credit">
+            <option value="">Crédit</option>
+            <option value="basse">Basse</option>
+            <option value="moyenne">Moyenne</option>
+            <option value="haute">Haute</option>
+          </select>
+
+          <select id="tal">
+            <option value="">Dossier au TAL</option>
+            <option value="oui">Oui</option>
+            <option value="non">Non</option>
+          </select>
+
+          <input id="occupants" type="number" placeholder="Nombre de personnes dans l'appartement" />
+
+          <select id="pets">
+            <option value="">Animaux</option>
+            <option value="oui">Oui</option>
+            <option value="non">Non</option>
+          </select>
+
+          <textarea id="notes" placeholder="Notes employé"></textarea>
+
+          <div id="candidateStatus" class="candidate-status"></div>
+
+          <button type="submit" class="primary-btn candidate-submit-btn">Envoyer la fiche</button>
+        </form>
+      </div>
     </aside>
 
     <main class="main-panel">
@@ -68,16 +123,12 @@
             Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
           </div>
 
-          <div class="listing-select-box" id="listingSelectBox">
-            <label for="listingSelect" class="listing-select-label">
-              Sélectionnez votre appartement
-            </label>
-            <div class="listing-select-help">
-              Choisissez d’abord un logement dans la liste avant d’écrire votre question.
-            </div>
+          <div id="listingSelectorCard" class="listing-selector-card">
+            <div class="listing-selector-title">Sélectionnez votre appartement</div>
+            <div class="listing-selector-subtitle">Choisissez d’abord un logement avant d’écrire votre question.</div>
 
             <select id="listingSelect" class="listing-select">
-              <option value="">Choisir un appartement</option>
+              <option value="">Sélectionnez un appartement</option>
             </select>
           </div>
         </div>
@@ -113,57 +164,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="script.js"></script>
+  <script src="script.js?v=9"></script>
 </body>
 </html>
-<section class="card">
-  <h3>Nouveau locataire potentiel</h3>
-
-  <form id="candidateForm">
-    <input id="aptRef" placeholder="Appartement (ex: 1001)" required />
-
-    <input id="name" placeholder="Nom complet" />
-    <input id="phone" placeholder="Téléphone" />
-    <input id="email" placeholder="Email" />
-
-    <input id="job" placeholder="Emploi" />
-    <input id="employer" placeholder="Employeur" />
-    <input id="employmentLength" placeholder="Depuis combien de temps" />
-
-    <select id="employmentStatus">
-      <option value="">Statut emploi</option>
-      <option>temps plein</option>
-      <option>temps partiel</option>
-      <option>autonome</option>
-      <option>étudiant</option>
-      <option>sans emploi</option>
-    </select>
-
-    <input id="income" type="number" placeholder="Revenu mensuel" />
-
-    <select id="credit">
-      <option value="">Crédit</option>
-      <option>basse</option>
-      <option>moyenne</option>
-      <option>haute</option>
-    </select>
-
-    <select id="tal">
-      <option value="">TAL</option>
-      <option>oui</option>
-      <option>non</option>
-    </select>
-
-    <input id="occupants" type="number" placeholder="Nombre de personnes" />
-
-    <select id="pets">
-      <option value="">Animaux</option>
-      <option>oui</option>
-      <option>non</option>
-    </select>
-
-    <textarea id="notes" placeholder="Notes employé"></textarea>
-
-    <button type="submit">Envoyer</button>
-  </form>
-</section>
