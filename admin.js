@@ -1,6 +1,5 @@
 const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
-const SUPABASE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im51dXprdmd5b2x4YmF3dnF5dWd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3Njc1NzYsImV4cCI6MjA4OTM0MzU3Nn0.zjltrYd38fypIAm1DIr0wj69eS9T7xpi_4p2aWsNYyw";
+const SUPABASE_KEY = "METS_TA_SUPABASE_ANON_KEY_ICI";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -133,24 +132,7 @@ function switchTab(tabName) {
   pageTitle.textContent = titles[tabName] || "Admin";
 }
 
-function forceUsersHeader() {
-  const thead = document.querySelector("#usersTab thead");
-  if (!thead) return;
-
-  thead.innerHTML = `
-    <tr>
-      <th>Nom</th>
-      <th>Jour</th>
-      <th>Heartbeats</th>
-      <th>Total minutes</th>
-      <th>Total heures</th>
-    </tr>
-  `;
-}
-
 async function loadUsers() {
-  forceUsersHeader();
-
   const today = new Date().toISOString().split("T")[0];
   const data = await fetchJSON(`/api/admin/user-daily-time?day=${today}`);
 
@@ -213,7 +195,7 @@ async function loadMessages() {
       <td>${row.user_id || "-"}</td>
       <td>${row.mode || "-"}</td>
       <td>${row.sender || "-"}</td>
-      <td class="long">${row.text || ""}</td>
+      <td>${row.text || ""}</td>
     `;
     messagesBody.appendChild(tr);
   }
@@ -346,12 +328,8 @@ function renderApartmentsTable(rows) {
       <td>${row.statut || "-"}</td>
       <td>${row.notes || "-"}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button type="button" class="secondary-btn edit-apartment-btn" data-ref="${row.ref}" style="padding:8px 12px;border-radius:10px;">
-          Modifier
-        </button>
-        <button type="button" class="secondary-btn delete-apartment-btn" data-ref="${row.ref}" style="padding:8px 12px;border-radius:10px;background:#fee2e2;color:#991b1b;">
-          Supprimer
-        </button>
+        <button type="button" class="secondary-btn edit-apartment-btn" data-ref="${row.ref}">Modifier</button>
+        <button type="button" class="secondary-btn delete-apartment-btn" data-ref="${row.ref}" style="background:#fee2e2;color:#991b1b;">Supprimer</button>
       </td>
     `;
 
@@ -362,9 +340,7 @@ function renderApartmentsTable(rows) {
     btn.addEventListener("click", () => {
       const ref = String(btn.dataset.ref);
       const listing = allApartments.find((r) => String(r.ref) === ref);
-      if (listing) {
-        fillApartmentForm(listing);
-      }
+      if (listing) fillApartmentForm(listing);
     });
   });
 
@@ -375,9 +351,7 @@ function renderApartmentsTable(rows) {
       if (!confirmDelete) return;
 
       try {
-        await fetchJSON(`/api/admin/apartments/L-${ref}`, {
-          method: "DELETE"
-        });
+        await fetchJSON(`/api/admin/apartments/L-${ref}`, { method: "DELETE" });
 
         if (editingApartmentRefInput.value === ref) {
           resetApartmentForm();
@@ -532,12 +506,8 @@ function renderCandidatesTable(rows) {
       <td>${candidate.admin_notes || "-"}</td>
       <td>${candidate.status || "-"}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button type="button" class="secondary-btn approve-candidate-btn" data-id="${candidate.id}" style="padding:8px 12px;border-radius:10px;background:#dcfce7;color:#166534;">
-          Approuver
-        </button>
-        <button type="button" class="secondary-btn reject-candidate-btn" data-id="${candidate.id}" style="padding:8px 12px;border-radius:10px;background:#fee2e2;color:#991b1b;">
-          Refuser
-        </button>
+        <button type="button" class="secondary-btn approve-candidate-btn" data-id="${candidate.id}" style="background:#dcfce7;color:#166534;">Approuver</button>
+        <button type="button" class="secondary-btn reject-candidate-btn" data-id="${candidate.id}" style="background:#fee2e2;color:#991b1b;">Refuser</button>
       </td>
     `;
 
