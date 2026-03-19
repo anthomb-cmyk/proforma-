@@ -1280,7 +1280,21 @@ app.get("*", (req, res, next) => {
     return next();
   }
 
-  return res.sendFile(path.join(__dirname, "index.html"));
+  const staticPages = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/admin.html": "admin.html",
+    "/login.html": "login.html",
+    "/client.html": "client.html"
+  };
+
+  const page = staticPages[req.path];
+
+  if (!page) {
+    return next();
+  }
+
+  return res.sendFile(path.join(__dirname, page));
 });
 
 app.use((req, res) => {
