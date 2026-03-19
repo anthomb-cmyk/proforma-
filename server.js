@@ -231,6 +231,111 @@ function extractListingReference(message) {
   return match ? match[1] : "";
 }
 
+function parseNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const normalized = String(value).replace(/[^\d.,-]/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["true", "oui", "yes", "1"].includes(normalized);
+}
+
+function normalizeCreditLevel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (["haut", "haute", "high", "eleve", "élevé", "élevée"].includes(normalized)) {
+    return 3;
+  }
+
+  if (["moyen", "moyenne", "medium"].includes(normalized)) {
+    return 2;
+  }
+
+  if (["bas", "basse", "low"].includes(normalized)) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function evaluateMatch(listing, candidate) {
+  let score = 100;
+  const reasons = [];
+
+  const monthlyIncome = parseNumber(candidate?.revenu_mensuel ?? candidate?.monthly_income);
+  const rent = parseNumber(listing?.loyer ?? listing?.rent);
+  const ratio = monthlyIncome !== null && rent !== null && rent > 0 ? monthlyIncome / rent : null;
+
+  if (ratio !== null && ratio < 3) {
+    score -= 25;
+    reasons.push("revenu insuffisant");
+  } else {
+    reasons.push("revenu conforme");
+  }
+
+  const candidateCredit = normalizeCreditLevel(candidate?.credit ?? candidate?.credit_level);
+  const requiredCredit = normalizeCreditLevel(listing?.credit_requis ?? listing?.required_credit ?? listing?.credit_minimum);
+
+  if (requiredCredit > 0) {
+    if (candidateCredit < requiredCredit) {
+      score -= 20;
+      reasons.push("crédit insuffisant");
+    } else {
+      reasons.push("crédit conforme");
+    }
+  }
+
+  if (parseBoolean(candidate?.tal)) {
+    score -= 30;
+    reasons.push("dossier TAL refusé");
+  }
+
+  const occupants = parseNumber(candidate?.nombre_personnes ?? candidate?.occupants_total);
+  if (occupants !== null && occupants > 3) {
+    score -= 15;
+    reasons.push("trop d’occupants");
+  }
+
+  if (parseBoolean(candidate?.animaux ?? candidate?.pets)) {
+    score -= 10;
+    reasons.push("animaux non acceptés");
+  }
+
+  const employmentStatus = String(candidate?.statut_emploi ?? candidate?.employment_status ?? "").trim().toLowerCase();
+  if (employmentStatus !== "temps plein") {
+    score -= 10;
+    reasons.push("emploi non accepté");
+  }
+
+  const seniorityMonths = parseNumber(candidate?.anciennete_mois ?? candidate?.employment_length_months);
+  if (seniorityMonths !== null && seniorityMonths < 3) {
+    score -= 10;
+    reasons.push("ancienneté insuffisante");
+  }
+
+  score = Math.max(0, score);
+
+  let status = "refusé";
+  if (score >= 85) {
+    status = "accepté";
+  } else if (score >= 70) {
+    status = "à revoir";
+  }
+
+  return { score, status, reasons };
+}
+
 function buildTranslatorFallbackReply(message) {
   const text = String(message || "").trim().toLowerCase();
 
@@ -520,6 +625,20 @@ app.post("/api/chat", async (req, res) => {
       error: "Impossible de traiter la demande."
     });
   }
+});
+
+app.post("/api/match", (req, res) => {
+  const listing = req.body?.listing;
+  const candidate = req.body?.candidate;
+
+  if (!listing || !candidate) {
+    return res.status(400).json({
+      ok: false,
+      error: "listing et candidate sont obligatoires."
+    });
+  }
+
+  return res.json(evaluateMatch(listing, candidate));
 });
 
 app.get("/api/admin/user-daily-time", async (req, res) => {
