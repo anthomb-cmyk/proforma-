@@ -13,8 +13,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || "127.0.0.1";
+const PORT = process.env.PORT || 3000;
+const HOST = "0.0.0.0";
 const LISTINGS_PATH = path.join(__dirname, "listings.json");
 
 const openai = process.env.OPENAI_API_KEY
