@@ -2,7 +2,6 @@ const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const chatState = {
   currentMode: "listing",
@@ -16,8 +15,8 @@ const chatState = {
   translatorHistory: [
     {
       sender: "bot",
-      label: "Système",
-      text: "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
+      label: "Traducteur",
+      text: "Collez un message et je vais proposer une réponse en français canadien clair, professionnel et naturel."
     }
   ],
   listings: {},
@@ -86,6 +85,15 @@ function setPending(isPending) {
   if (listingModeBtn) listingModeBtn.disabled = isPending;
   if (translatorModeBtn) translatorModeBtn.disabled = isPending;
   if (listingSelect) listingSelect.disabled = isPending;
+}
+
+function setServerStatus(text, variant = "") {
+  if (!serverStatus) return;
+  serverStatus.textContent = text;
+  serverStatus.className = "server-pill";
+  if (variant) {
+    serverStatus.classList.add(variant);
+  }
 }
 
 function initSampleRefs() {
@@ -165,17 +173,6 @@ function renderMessages() {
   const history = currentHistory();
   chatMessages.innerHTML = "";
 
-  if (!history.length) {
-    history.push({
-      sender: "bot",
-      label: "Système",
-      text:
-        chatState.currentMode === "listing"
-          ? "Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question."
-          : "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer."
-    });
-  }
-
   history.forEach((message) => addMessageToDOM(message));
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -238,11 +235,11 @@ function switchMode(mode) {
   } else {
     if (modeStatus) {
       modeStatus.textContent =
-        "Le mode Traducteur est actif. Collez un texte à traduire ou à expliquer.";
+        "Le mode Traducteur est actif. Collez un message et obtenez une suggestion de réponse en français canadien bien écrit.";
     }
 
     if (chatInput) {
-      chatInput.placeholder = "Exemple : yer tu dispo le logi";
+      chatInput.placeholder = "Collez le message ici pour générer une réponse...";
     }
 
     if (modePill) {
@@ -315,66 +312,83 @@ function prevalidateListing() {
   return { ok: true, ref };
 }
 
-async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
+async function fetchJSON(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      signal: controller.signal
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!contentType.includes("application/json")) {
+      throw new Error("Le serveur n’a pas retourné une réponse JSON.");
     }
-  });
 
-  const data = await response.json().catch(() => ({}));
+    const data = await response.json();
 
-  if (!response.ok) {
-    throw new Error(data.error || "Une erreur est survenue.");
+    if (!response.ok) {
+      throw new Error(data.error || "Une erreur est survenue.");
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return data;
 }
 
 async function checkServer() {
+  setServerStatus("Connexion serveur en cours...");
+
   try {
-    const data = await fetchJSON("/api/health");
+    const data = await fetchJSON("/api/health", {}, 8000);
 
     if (data.ok) {
       chatState.serverReady = true;
-
-      if (serverStatus) {
-        serverStatus.textContent = "Serveur connecté";
-        serverStatus.className = "server-pill ok";
-      }
-    } else {
-      throw new Error("Health check failed");
+      setServerStatus("Serveur connecté", "ok");
+      return true;
     }
+
+    throw new Error("Health check failed");
   } catch (error) {
+    console.error("Health check error:", error);
     chatState.serverReady = false;
-
-    if (serverStatus) {
-      serverStatus.textContent = "Serveur non connecté";
-      serverStatus.className = "server-pill error";
-    }
+    setServerStatus("Serveur non connecté", "error");
+    return false;
   }
 }
 
 async function loadListings() {
-  const data = await fetchJSON("/api/listings");
-  const rawListings = data.listings || {};
-  const normalizedListings = {};
+  try {
+    const data = await fetchJSON("/api/listings", {}, 10000);
+    const rawListings = data.listings || {};
+    const normalizedListings = {};
 
-  Object.entries(rawListings).forEach(([key, value]) => {
-    const normalizedKey = normalizeRefKey(key || value?.ref);
-    if (!normalizedKey) return;
+    Object.entries(rawListings).forEach(([key, value]) => {
+      const normalizedKey = normalizeRefKey(key || value?.ref);
+      if (!normalizedKey) return;
 
-    normalizedListings[normalizedKey] = {
-      ...value,
-      ref: normalizedKey
-    };
-  });
+      normalizedListings[normalizedKey] = {
+        ...value,
+        ref: normalizedKey
+      };
+    });
 
-  chatState.listings = normalizedListings;
-  initSampleRefs();
-  initListingDropdown();
+    chatState.listings = normalizedListings;
+    initSampleRefs();
+    initListingDropdown();
+    return true;
+  } catch (error) {
+    console.error("Load listings error:", error);
+    return false;
+  }
 }
 
 async function sendToAI(input, ref = "") {
@@ -384,13 +398,17 @@ async function sendToAI(input, ref = "") {
     message = `${formatDisplayRef(ref)} - ${input}`;
   }
 
-  return fetchJSON("/api/chat", {
-    method: "POST",
-    body: JSON.stringify({
-      mode: chatState.currentMode,
-      message
-    })
-  });
+  return fetchJSON(
+    "/api/chat",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        mode: chatState.currentMode,
+        message
+      })
+    },
+    25000
+  );
 }
 
 function setCandidateStatus(message = "", type = "") {
@@ -446,14 +464,16 @@ async function handleCandidateSubmit(event) {
   }
 
   try {
-    const result = await fetchJSON("/api/admin/candidates", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    const result = await fetchJSON(
+      "/api/admin/candidates",
+      {
+        method: "POST",
+        body: JSON.stringify(payload)
+      },
+      20000
+    );
 
-    const warning = result.emailWarning
-      ? ` ${result.emailWarning}`
-      : "";
+    const warning = result.emailWarning ? ` ${result.emailWarning}` : "";
 
     setCandidateStatus(
       `Fiche envoyée avec succès pour L-${result.candidate?.apartment_ref || apartmentRef}.${warning}`,
@@ -462,6 +482,7 @@ async function handleCandidateSubmit(event) {
 
     candidateForm.reset();
   } catch (error) {
+    console.error("Candidate submit error:", error);
     setCandidateStatus(
       error.message || "Erreur envoi fiche locataire.",
       "error"
@@ -494,7 +515,7 @@ if (chatForm) {
       pushMessage(
         "bot",
         "Système",
-        "Le serveur n'est pas connecté. Lancez le backend puis réessayez.",
+        "Le serveur n'est pas connecté pour le moment. Réessayez dans un instant.",
         "error"
       );
       return;
@@ -520,10 +541,10 @@ if (chatForm) {
         : input;
 
     pushMessage("user", "Employé", userText);
-    chatInput.value = "";
 
+    chatInput.value = "";
     setPending(true);
-    pushMessage("bot", "Système", "Traitement en cours…", "loading");
+    pushMessage("bot", "Système", "Traitement en cours...", "loading");
 
     try {
       const result = await sendToAI(input, selectedRef);
@@ -549,6 +570,7 @@ if (chatForm) {
             : "Traducteur")
       );
     } catch (error) {
+      console.error("Chat error:", error);
       replaceLastLoading(
         error.message || "Une erreur est survenue.",
         "error",
@@ -564,9 +586,7 @@ if (chatInput) {
   chatInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (chatForm) {
-        chatForm.requestSubmit();
-      }
+      if (chatForm) chatForm.requestSubmit();
     }
   });
 }
@@ -574,9 +594,21 @@ if (chatInput) {
 if (clearChatBtn) {
   clearChatBtn.addEventListener("click", () => {
     if (chatState.currentMode === "listing") {
-      chatState.listingHistory = [];
+      chatState.listingHistory = [
+        {
+          sender: "bot",
+          label: "Système",
+          text: "Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question."
+        }
+      ];
     } else {
-      chatState.translatorHistory = [];
+      chatState.translatorHistory = [
+        {
+          sender: "bot",
+          label: "Traducteur",
+          text: "Collez un message et je vais proposer une réponse en français canadien clair, professionnel et naturel."
+        }
+      ];
     }
 
     renderMessages();
@@ -602,18 +634,24 @@ supabaseClient.auth.onAuthStateChange((event) => {
 });
 
 (async function init() {
-  try {
-    await requireLogin();
-    await Promise.all([checkServer(), loadListings()]);
-  } catch (error) {
-    console.error(error);
-
-    if (serverStatus) {
-      serverStatus.textContent = "Serveur non connecté";
-      serverStatus.className = "server-pill error";
-    }
-  }
-
   switchMode("listing");
   renderMessages();
+
+  try {
+    await requireLogin();
+  } catch (error) {
+    console.error("Login init error:", error);
+    return;
+  }
+
+  const [serverOk, listingsOk] = await Promise.all([
+    checkServer(),
+    loadListings()
+  ]);
+
+  if (!serverOk) {
+    setServerStatus("Serveur non connecté", "error");
+  } else if (!listingsOk) {
+    setServerStatus("Serveur connecté", "ok");
+  }
 })();
