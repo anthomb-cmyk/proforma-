@@ -1,1 +1,15 @@
-{}
+{
+  "client_test_001": {
+    "id": "client_test_001",
+    "nom": "Client Test",
+    "criteres": {
+      "revenu_minimum": null,
+      "credit_min": null,
+      "accepte_tal": false,
+      "max_occupants": null,
+      "animaux_acceptes": false,
+      "emplois_acceptes": [],
+      "anciennete_min_mois": null
+    }
+  }
+}

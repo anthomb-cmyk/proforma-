@@ -7,6 +7,7 @@
     "bedrooms": "3 1/2",
     "availability": "Disponible maintenant",
     "status": "Actif",
+    "client_id": "client_test_001",
     "notes": "Chauffage non inclus. Stationnement disponible.",
     "description": "Logement lumineux de 3 1/2 près des services locaux."
   },
