@@ -143,7 +143,6 @@
                 <option value="chauffage inclus">Chauffage inclus</option>
                 <option value="eau chaude incluse">Eau chaude incluse</option>
                 <option value="chauffage et eau chaude inclus">Chauffage et eau chaude inclus</option>
-                <option value="électricité incluse">Électricité incluse</option>
                 <option value="tout inclus">Tout inclus</option>
               </select>
 
@@ -156,14 +155,58 @@
                 <option value="à vendre">À vendre</option>
               </select>
 
-              <select id="aptStationnement">
-                <option value="">Stationnement</option>
-                <option value="aucun">Aucun</option>
-                <option value="extérieur">Extérieur</option>
-                <option value="intérieur">Intérieur</option>
-                <option value="garage">Garage</option>
-                <option value="inclus">Inclus</option>
+              <select id="aptElectricite">
+                <option value="">Électricité</option>
+                <option value="incluse">Incluse</option>
+                <option value="non incluse">Non incluse</option>
               </select>
+
+              <select id="aptLaveuseSecheuse">
+                <option value="">Laveuse / sécheuse</option>
+                <option value="inclue dans le logement">Inclue dans le logement</option>
+                <option value="pas inclue mais dans le logement">Pas inclue mais dans le logement</option>
+                <option value="inclue dans le bâtiment">Inclue dans le bâtiment</option>
+                <option value="pas de laveuse sécheuse du tout">Pas de laveuse sécheuse du tout</option>
+              </select>
+
+              <select id="aptElectrosInclus">
+                <option value="">Électros inclus</option>
+                <option value="aucun">Aucun</option>
+                <option value="frigidaire">Frigidaire</option>
+                <option value="four">Four</option>
+                <option value="frigidaire et four">Frigidaire et four</option>
+              </select>
+
+              <select id="aptRangement">
+                <option value="">Rangement</option>
+                <option value="intérieur">Intérieur</option>
+                <option value="extérieur">Extérieur</option>
+                <option value="les deux">Les deux</option>
+                <option value="aucun">Aucun</option>
+              </select>
+
+              <select id="aptBalcon">
+                <option value="">Balcon</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
+              <select id="aptWifi">
+                <option value="">Wifi</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
+              <select id="aptAccesTerrain">
+                <option value="">Accès au terrain</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
+              <input id="aptStationnementsGratuits" type="number" min="0" placeholder="Stationnements gratuits" />
+              <input id="aptStationnementsPayants" type="number" min="0" placeholder="Stationnements payants" />
+              <input id="aptPrixStationnementPayant" type="number" min="0" placeholder="Prix par stationnement payant" />
+              <input id="aptNombreLogementsBatiment" type="number" min="0" placeholder="Nombre de logements dans la bâtisse" />
 
               <select id="aptAnimaux">
                 <option value="">Animaux acceptés</option>
@@ -183,13 +226,6 @@
                 <option value="">Disponibilité maintenant</option>
                 <option value="disponible">Disponible</option>
                 <option value="loué">Loué</option>
-              </select>
-
-              <select id="aptElectricite">
-                <option value="">Électricité</option>
-                <option value="incluse">Incluse</option>
-                <option value="non incluse">Non incluse</option>
-                <option value="hydro aux frais du locataire">Hydro aux frais du locataire</option>
               </select>
             </div>
 
@@ -228,10 +264,19 @@
                 <th>Superficie</th>
                 <th>Loyer</th>
                 <th>Inclusions</th>
-                <th>Stationnement</th>
+                <th>Électricité</th>
+                <th>Laveuse / sécheuse</th>
+                <th>Électros</th>
+                <th>Balcon</th>
+                <th>Wifi</th>
+                <th>Terrain</th>
+                <th>Stat. gratuits</th>
+                <th>Stat. payants</th>
+                <th>Prix/stat. payant</th>
+                <th>Logements bâtisse</th>
+                <th>Rangement</th>
                 <th>Animaux</th>
                 <th>Meublé</th>
-                <th>Électricité</th>
                 <th>Disponibilité</th>
                 <th>Statut</th>
                 <th>Notes</th>

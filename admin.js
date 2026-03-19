@@ -91,6 +91,13 @@ function formatDate(value) {
   return new Date(value).toLocaleString("fr-CA");
 }
 
+function parseOptionalNumber(value) {
+  if (value === "" || value === null || value === undefined) return null;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function fetchJSON(url, options = {}) {
   const res = await fetch(url, {
     ...options,
@@ -226,11 +233,32 @@ function fillApartmentForm(row) {
     row.loyer === null || row.loyer === undefined ? "" : String(row.loyer);
   document.getElementById("aptInclusions").value = row.inclusions || "";
   document.getElementById("aptStatut").value = row.statut || "";
-  document.getElementById("aptStationnement").value = row.stationnement || "";
+  document.getElementById("aptElectricite").value = row.electricite || "";
+  document.getElementById("aptLaveuseSecheuse").value = row.laveuse_secheuse || "";
+  document.getElementById("aptElectrosInclus").value = row.electros_inclus || "";
+  document.getElementById("aptRangement").value = row.rangement || "";
+  document.getElementById("aptBalcon").value = row.balcon || "";
+  document.getElementById("aptWifi").value = row.wifi || "";
+  document.getElementById("aptAccesTerrain").value = row.acces_au_terrain || "";
+  document.getElementById("aptStationnementsGratuits").value =
+    row.nombre_stationnements_gratuits === null || row.nombre_stationnements_gratuits === undefined
+      ? ""
+      : String(row.nombre_stationnements_gratuits);
+  document.getElementById("aptStationnementsPayants").value =
+    row.nombre_stationnements_payants === null || row.nombre_stationnements_payants === undefined
+      ? ""
+      : String(row.nombre_stationnements_payants);
+  document.getElementById("aptPrixStationnementPayant").value =
+    row.prix_stationnement_payant === null || row.prix_stationnement_payant === undefined
+      ? ""
+      : String(row.prix_stationnement_payant);
+  document.getElementById("aptNombreLogementsBatiment").value =
+    row.nombre_logements_batisse === null || row.nombre_logements_batisse === undefined
+      ? ""
+      : String(row.nombre_logements_batisse);
   document.getElementById("aptAnimaux").value = row.animaux_acceptes || "";
   document.getElementById("aptMeuble").value = row.meuble || "";
   document.getElementById("aptDisponibilite").value = row.disponibilite || "";
-  document.getElementById("aptElectricite").value = row.electricite || "";
   document.getElementById("aptNotes").value = row.notes || "";
 
   apartmentFormTitle.textContent = "Modifier un appartement";
@@ -283,7 +311,16 @@ function getFilteredApartments() {
       row.superficie,
       row.loyer,
       row.inclusions,
-      row.stationnement,
+      row.laveuse_secheuse,
+      row.electros_inclus,
+      row.balcon,
+      row.wifi,
+      row.acces_au_terrain,
+      row.nombre_stationnements_gratuits,
+      row.nombre_stationnements_payants,
+      row.prix_stationnement_payant,
+      row.nombre_logements_batisse,
+      row.rangement,
       row.animaux_acceptes,
       row.meuble,
       row.electricite,
@@ -304,7 +341,7 @@ function renderApartmentsTable(rows) {
   apartmentsBody.innerHTML = "";
 
   if (!rows.length) {
-    apartmentsBody.innerHTML = `<tr><td colspan="16">Aucun appartement trouvé.</td></tr>`;
+    apartmentsBody.innerHTML = `<tr><td colspan="24">Aucun appartement trouvé.</td></tr>`;
     return;
   }
 
@@ -320,10 +357,19 @@ function renderApartmentsTable(rows) {
       <td>${row.superficie || "-"}</td>
       <td>${row.loyer ?? "-"}</td>
       <td>${row.inclusions || "-"}</td>
-      <td>${row.stationnement || "-"}</td>
+      <td>${row.electricite || "-"}</td>
+      <td>${row.laveuse_secheuse || "-"}</td>
+      <td>${row.electros_inclus || "-"}</td>
+      <td>${row.balcon || "-"}</td>
+      <td>${row.wifi || "-"}</td>
+      <td>${row.acces_au_terrain || "-"}</td>
+      <td>${row.nombre_stationnements_gratuits ?? "-"}</td>
+      <td>${row.nombre_stationnements_payants ?? "-"}</td>
+      <td>${row.prix_stationnement_payant ?? "-"}</td>
+      <td>${row.nombre_logements_batisse ?? "-"}</td>
+      <td>${row.rangement || "-"}</td>
       <td>${row.animaux_acceptes || "-"}</td>
       <td>${row.meuble || "-"}</td>
-      <td>${row.electricite || "-"}</td>
       <td>${row.disponibilite || "-"}</td>
       <td>${row.statut || "-"}</td>
       <td>${row.notes || "-"}</td>
@@ -397,12 +443,21 @@ async function createOrUpdateApartment(event) {
     loyer: document.getElementById("aptLoyer").value,
     inclusions: document.getElementById("aptInclusions").value,
     statut: document.getElementById("aptStatut").value,
-    stationnement: document.getElementById("aptStationnement").value,
+    electricite: document.getElementById("aptElectricite").value,
+    laveuse_secheuse: document.getElementById("aptLaveuseSecheuse").value,
+    electros_inclus: document.getElementById("aptElectrosInclus").value,
+    balcon: document.getElementById("aptBalcon").value,
+    wifi: document.getElementById("aptWifi").value,
+    acces_au_terrain: document.getElementById("aptAccesTerrain").value,
+    nombre_stationnements_gratuits: parseOptionalNumber(document.getElementById("aptStationnementsGratuits").value),
+    nombre_stationnements_payants: parseOptionalNumber(document.getElementById("aptStationnementsPayants").value),
+    prix_stationnement_payant: parseOptionalNumber(document.getElementById("aptPrixStationnementPayant").value),
+    nombre_logements_batisse: parseOptionalNumber(document.getElementById("aptNombreLogementsBatiment").value),
+    rangement: document.getElementById("aptRangement").value,
     animaux_acceptes: document.getElementById("aptAnimaux").value,
     meuble: document.getElementById("aptMeuble").value,
     disponibilite: document.getElementById("aptDisponibilite").value,
-    notes: document.getElementById("aptNotes").value.trim(),
-    electricite: document.getElementById("aptElectricite").value
+    notes: document.getElementById("aptNotes").value.trim()
   };
 
   try {

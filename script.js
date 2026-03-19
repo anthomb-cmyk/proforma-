@@ -295,6 +295,20 @@ function updateListingPreview(ref) {
   const disponibilite = listing.disponibilite ?? "Non précisée";
   const statut = listing.statut ?? "Non précisé";
   const notes = listing.notes ?? "Aucune note";
+  const electricite = listing.electricite ?? "Non précisée";
+  const laveuseSecheuse = listing.laveuse_secheuse ?? "Non précisée";
+  const electrosInclus = listing.electros_inclus ?? "Non précisé";
+  const balcon = listing.balcon ?? "Non précisé";
+  const wifi = listing.wifi ?? "Non précisé";
+  const accesTerrain = listing.acces_au_terrain ?? "Non précisé";
+  const stationnementsGratuits = listing.nombre_stationnements_gratuits ?? "0";
+  const stationnementsPayants = listing.nombre_stationnements_payants ?? "0";
+  const prixStationnementPayant =
+    listing.prix_stationnement_payant === null || listing.prix_stationnement_payant === undefined || listing.prix_stationnement_payant === ""
+      ? "Non précisé"
+      : `${listing.prix_stationnement_payant} $`;
+  const nombreLogementsBatiment = listing.nombre_logements_batisse ?? "Non précisé";
+  const rangement = listing.rangement ?? "Non précisé";
 
   listingPreview.innerHTML = `
     <strong>${formatDisplayRef(normalizedRef)}</strong><br>
@@ -306,6 +320,17 @@ function updateListingPreview(ref) {
     Loyer : ${loyer}${loyer === "Non précisé" ? "" : " $"}<br>
     Disponibilité : ${disponibilite}<br>
     Statut : ${statut}<br>
+    Électricité : ${electricite}<br>
+    Laveuse / sécheuse : ${laveuseSecheuse}<br>
+    Électros inclus : ${electrosInclus}<br>
+    Balcon : ${balcon}<br>
+    Wifi : ${wifi}<br>
+    Accès au terrain : ${accesTerrain}<br>
+    Stationnements gratuits : ${stationnementsGratuits}<br>
+    Stationnements payants : ${stationnementsPayants}<br>
+    Prix stationnement payant : ${prixStationnementPayant}<br>
+    Logements dans la bâtisse : ${nombreLogementsBatiment}<br>
+    Rangement : ${rangement}<br>
     Notes : ${notes}
   `;
 

@@ -62,6 +62,11 @@ function toListingRecord(key, value) {
   const bedroomsValue = value?.chambres ?? value?.bedrooms ?? "";
   const availabilityValue = value?.disponibilite ?? value?.availability ?? "";
   const statusValue = value?.statut ?? value?.status ?? "";
+  const paidParkingPriceValue = value?.prix_stationnement_payant ?? null;
+  const accesTerrainValue = value?.acces_au_terrain ?? value?.acces_terrain ?? "";
+  const freeParkingValue = value?.nombre_stationnements_gratuits ?? value?.stationnements_gratuits ?? null;
+  const paidParkingValue = value?.nombre_stationnements_payants ?? value?.stationnements_payants ?? null;
+  const buildingUnitsValue = value?.nombre_logements_batisse ?? value?.nombre_logements_batiment ?? null;
 
   return {
     ...value,
@@ -80,6 +85,16 @@ function toListingRecord(key, value) {
     disponibilite: availabilityValue,
     notes: value?.notes ?? "",
     electricite: value?.electricite ?? "",
+    balcon: value?.balcon ?? "",
+    wifi: value?.wifi ?? "",
+    acces_au_terrain: accesTerrainValue,
+    nombre_stationnements_gratuits: freeParkingValue,
+    nombre_stationnements_payants: paidParkingValue,
+    prix_stationnement_payant: paidParkingPriceValue,
+    electros_inclus: value?.electros_inclus ?? "",
+    laveuse_secheuse: value?.laveuse_secheuse ?? "",
+    nombre_logements_batisse: buildingUnitsValue,
+    rangement: value?.rangement ?? "",
     address: value?.address ?? value?.adresse ?? "",
     city: value?.city ?? value?.ville ?? "",
     rent: rentValue,
@@ -130,7 +145,17 @@ async function saveListingsMap(listingsMap) {
         animaux_acceptes: listing.animaux_acceptes || "",
         meuble: listing.meuble || "",
         disponibilite: listing.disponibilite || listing.availability || "",
-        electricite: listing.electricite || ""
+        electricite: listing.electricite || "",
+        balcon: listing.balcon || "",
+        wifi: listing.wifi || "",
+        acces_au_terrain: listing.acces_au_terrain || "",
+        nombre_stationnements_gratuits: listing.nombre_stationnements_gratuits ?? null,
+        nombre_stationnements_payants: listing.nombre_stationnements_payants ?? null,
+        prix_stationnement_payant: listing.prix_stationnement_payant ?? null,
+        electros_inclus: listing.electros_inclus || "",
+        laveuse_secheuse: listing.laveuse_secheuse || "",
+        nombre_logements_batisse: listing.nombre_logements_batisse ?? null,
+        rangement: listing.rangement || ""
       };
     });
 
