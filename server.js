@@ -510,7 +510,7 @@ async function ensureCandidatesMatchFields(candidates, persist = false) {
   return { candidates, changed };
 }
 
-function buildTranslatorFallbackReply(message) {
+function detectTranslatorContext(message) {
   const text = String(message || "").trim().toLowerCase();
 
   if (
@@ -519,28 +519,148 @@ function buildTranslatorFallbackReply(message) {
     text.includes("available") ||
     text.includes("vacant")
   ) {
+    return "availability";
+  }
+
+  if (
+    text.includes("loyer") ||
+    text.includes("prix") ||
+    text.includes("combien") ||
+    text.includes("hydro") ||
+    text.includes("chauffé") ||
+    text.includes("chauffe") ||
+    text.includes("chauffage")
+  ) {
+    return "pricing";
+  }
+
+  if (
+    text.includes("chien") ||
+    text.includes("chat") ||
+    text.includes("animal")
+  ) {
+    return "pets";
+  }
+
+  if (
+    text.includes("depot") ||
+    text.includes("dépôt")
+  ) {
+    return "deposit";
+  }
+
+  if (
+    text.includes("visite") ||
+    text.includes("visiter") ||
+    text.includes("jpeux tu visiter") ||
+    text.includes("see it") ||
+    text.includes("tour")
+  ) {
+    return "visit";
+  }
+
+  if (
+    text.includes("metro") ||
+    text.includes("métro") ||
+    text.includes("loin") ||
+    text.includes("distance")
+  ) {
+    return "location";
+  }
+
+  if (
+    text.includes("quand") ||
+    text.includes("date") ||
+    text.includes("emm") ||
+    text.includes("move") ||
+    text.includes("disponible a partir")
+  ) {
+    return "move-in timing";
+  }
+
+  if (
+    text.includes("temps plein") ||
+    text.includes("temps partiel") ||
+    text.includes("travail") ||
+    text.includes("emploi") ||
+    text.includes("salaire")
+  ) {
+    return "qualification";
+  }
+
+  return "general inquiry";
+}
+
+function buildTranslatorFallbackReply(message) {
+  const context = detectTranslatorContext(message);
+
+  if (context === "availability") {
     return [
       "Bonjour,",
       "",
-      "Oui, le logement est toujours disponible.",
+      "Oui, le logement est toujours disponible pour le moment.",
       "",
-      "Souhaitez-vous planifier une visite ou obtenir plus d'informations ?",
-      "",
-      "Cordialement,"
+      "Souhaitez-vous que je vous confirme les principaux détails du logement ?"
     ].join("\n");
   }
 
-  if (text.includes("lease") && text.includes("tomorrow")) {
+  if (context === "pricing") {
     return [
       "Bonjour,",
       "",
-      "Merci pour votre message.",
+      "Le loyer demandé est celui affiché pour le logement.",
       "",
-      "Nous vous ferons parvenir le bail demain, comme prévu.",
+      "Si vous voulez, je peux aussi vous préciser ce qui est inclus."
+    ].join("\n");
+  }
+
+  if (context === "pets") {
+    return [
+      "Bonjour,",
       "",
-      "N'hésitez pas à me contacter si vous avez des questions entre-temps.",
+      "Merci pour l’information.",
       "",
-      "Cordialement,"
+      "Je peux vérifier la politique concernant les animaux pour ce logement. Quel type d’animal avez-vous ?"
+    ].join("\n");
+  }
+
+  if (context === "deposit") {
+    return [
+      "Bonjour,",
+      "",
+      "En location résidentielle au Québec, ce n’est généralement pas un dépôt qui est demandé.",
+      "",
+      "Je peux vous préciser les conditions applicables au logement si vous voulez."
+    ].join("\n");
+  }
+
+  if (context === "move-in timing") {
+    return [
+      "Bonjour,",
+      "",
+      "Je peux vous confirmer la date de disponibilité du logement.",
+      "",
+      "Quelle date d’emménagement recherchez-vous ?"
+    ].join("\n");
+  }
+
+  if (context === "qualification") {
+    return [
+      "Bonjour,",
+      "",
+      "Merci pour les précisions.",
+      "",
+      "Je peux vous indiquer les critères de base pour ce logement si vous voulez."
+    ].join("\n");
+  }
+
+  if (context === "location") {
+    return [
+      "Bonjour,",
+      "",
+      "Je peux vous donner plus de détails sur l’emplacement du logement.",
+      "",
+      "Quel point de repère ou quel secteur vous intéresse ?"
     ].join("\n");
   }
 
@@ -549,11 +669,11 @@ function buildTranslatorFallbackReply(message) {
     "",
     "Merci pour votre message.",
     "",
-    "Nous avons bien pris connaissance de votre demande et nous ferons le suivi avec vous dans les plus brefs délais.",
+    "Merci pour votre message.",
     "",
-    "N'hésitez pas à me contacter si vous avez besoin de précisions supplémentaires.",
+    "Je peux vous donner les informations utiles sur le logement.",
     "",
-    "Cordialement,"
+    "Qu’aimeriez-vous confirmer en priorité ?"
   ].join("\n");
 }
 
@@ -573,7 +693,15 @@ function buildTranslatorFallbackTranslation(message) {
     return "Est-ce que le logement est disponible ?";
   }
 
-  if (text.includes("prix") || text.includes("loyer") || text.includes("rent")) {
+  if (
+    text.includes("hydro") ||
+    text.includes("chauffé") ||
+    text.includes("chauffe")
+  ) {
+    return "Quel est le loyer, et est-ce que l’électricité ou le chauffage sont inclus ?";
+  }
+
+  if (text.includes("prix") || text.includes("loyer") || text.includes("rent") || text.includes("combien")) {
     return "Quel est le loyer demandé pour ce logement ?";
   }
 
@@ -581,9 +709,26 @@ function buildTranslatorFallbackTranslation(message) {
     text.includes("visit") ||
     text.includes("visite") ||
     text.includes("see it") ||
-    text.includes("tour")
+    text.includes("tour") ||
+    text.includes("jpeux tu visiter")
   ) {
-    return "Est-ce qu'il serait possible de planifier une visite du logement ?";
+    return "Est-ce qu’il serait possible de visiter le logement ?";
+  }
+
+  if (text.includes("chien") || text.includes("chat") || text.includes("animal")) {
+    return "J’ai un animal et je voudrais savoir s’il est accepté.";
+  }
+
+  if (text.includes("depot") || text.includes("dépôt")) {
+    return "Est-ce qu’un dépôt est requis pour louer le logement ?";
+  }
+
+  if (text.includes("temps plein") || text.includes("travail") || text.includes("emploi")) {
+    return "J’ai un emploi à temps plein et je souhaite savoir si mon profil peut convenir.";
+  }
+
+  if (text.includes("metro") || text.includes("métro") || text.includes("loin")) {
+    return "Est-ce que le logement est loin du métro ?";
   }
 
   if (
@@ -601,7 +746,8 @@ function buildTranslatorFallbackTranslation(message) {
 function buildTranslatorFallbackPayload(message) {
   return {
     translation: buildTranslatorFallbackTranslation(message),
-    reply: buildTranslatorFallbackReply(message)
+    reply: buildTranslatorFallbackReply(message),
+    context: detectTranslatorContext(message)
   };
 }
 
@@ -674,7 +820,7 @@ async function generateTranslatorPayload(message) {
       {
         role: "system",
         content:
-          "Tu es un assistant locatif. Tu dois toujours supposer que le message vient d'un locataire qui parle d'un appartement. Interprete l'intention dans un contexte immobilier. Ne traduis jamais mot a mot. Retourne uniquement un objet JSON avec deux champs string: translation et reply. translation: reformulation en francais international, claire, neutre et bien ecrite. reply: reponse suggeree en francais canadien, professionnelle, naturelle et prete a envoyer par un proprietaire ou un employe de location. Ne pose pas de question de clarification sauf si le message est vraiment incomprehensible."
+          "Tu es un assistant de correction locative specialise en messages de locataires ecrits en francais quebecois oral, familier, abrege, phonétique ou mal ponctue. Tu dois bien comprendre le francais quebecois parle, y compris le slang, les abreviations, les raccourcis oraux, l'ecriture phonétique, les fautes d'orthographe, les phrases tres sales et les expressions locales. Suppose toujours un contexte d'appartement ou de location sauf si c'est clairement impossible. Ton travail n'est pas de traduire mot a mot, mais d'interpreter correctement l'intention reelle du locataire et de la reformuler clairement.\n\nRetourne uniquement un objet JSON avec trois champs string: translation, reply, context.\n\ntranslation: reformulation en francais international, propre, naturelle, courte, bien ponctuee et fidele au sens reel du message.\nreply: reponse suggeree en francais canadien, humaine, breve, professionnelle, naturelle pour un contexte locatif au Quebec. Cette reponse est seulement une suggestion. L'employe doit utiliser son jugement et peut l'adapter avant envoi.\ncontext: etiquette courte en anglais, par exemple availability, pricing, pets, qualification, move-in timing, location, deposit, visit ou general inquiry.\n\nRegles:\n- aucun emoji\n- aucun ton robotique\n- aucun ton excessivement formel\n- ne traduis jamais mot a mot si le sens est clair dans le contexte locatif\n- n'invente pas d'information\n- ne propose pas une visite trop tot\n- pose au maximum une seule question naturelle a la fois si une relance est utile\n- la reponse doit faire avancer la conversation de facon naturelle dans un contexte de location\n- si le locataire ecrit en francais quebecois tres familier, corrige le sens vers un francais international normal, pas vers un calque litteral\n\nExemples:\nMessage: stu dispo big\ntranslation: Est-ce que le logement est disponible ?\nreply: Bonjour, oui, le logement est toujours disponible pour le moment. Souhaitez-vous que je vous confirme les principaux details ?\ncontext: availability\n\nMessage: c tu loin du metro\ntranslation: Est-ce que le logement est loin du metro ?\nreply: Bonjour, je peux vous donner plus de details sur l'emplacement. Quel secteur ou quel point de repere vous interesse ?\ncontext: location\n\nMessage: jai un chien pis chu temp plein\ntranslation: J'ai un chien et je travaille a temps plein.\nreply: Bonjour, merci pour les precisions. Je peux verifier la politique pour les animaux et vous confirmer les criteres de base du logement.\ncontext: qualification\n\nMessage: combien le loyer ak hydro\ntranslation: Quel est le loyer, et est-ce que l'electricite est incluse ?\nreply: Bonjour, je peux vous confirmer le loyer ainsi que ce qui est inclus. Voulez-vous que je vous precise les inclusions ?\ncontext: pricing\n\nMessage: jpeux tu visiter sa\ntranslation: Est-ce qu'il serait possible de visiter le logement ?\nreply: Bonjour, je peux d'abord vous confirmer les principaux details du logement et sa disponibilite. Souhaitez-vous que je vous les resume ?\ncontext: visit\n\nMessage: allo jai tu besoin dun depot\ntranslation: Est-ce qu'un depot est requis pour louer le logement ?\nreply: Bonjour, en location residentielle au Quebec, ce n'est generalement pas un depot qui est demande. Je peux vous preciser les conditions applicables au logement.\ncontext: deposit\n\nMessage: chu interesser mais jme demandais si ces chauffé\ntranslation: Je suis interesse, mais je me demandais si le logement est chauffe.\nreply: Bonjour, je peux vous confirmer ce qui est inclus avec le logement. Voulez-vous que je vous precise le chauffage et les autres inclusions ?\ncontext: pricing"
       },
       {
         role: "user",
@@ -700,7 +846,10 @@ async function generateTranslatorPayload(message) {
     ) {
       return {
         translation: parsed.translation.trim(),
-        reply: parsed.reply.trim()
+        reply: parsed.reply.trim(),
+        context: typeof parsed?.context === "string" && parsed.context.trim()
+          ? parsed.context.trim()
+          : detectTranslatorContext(message)
       };
     }
   } catch {
@@ -792,7 +941,8 @@ app.post("/api/chat", async (req, res) => {
       const translatorPayload = await generateTranslatorPayload(message);
       const assistantText = [
         `Français international : ${translatorPayload.translation}`,
-        `Réponse suggérée : ${translatorPayload.reply}`
+        `Réponse suggérée : ${translatorPayload.reply}`,
+        `Contexte : ${translatorPayload.context}`
       ].join("\n\n");
 
       await appendChatMessage({
@@ -809,7 +959,8 @@ app.post("/api/chat", async (req, res) => {
         label: "Traducteur",
         variant: "success",
         translation: translatorPayload.translation,
-        reply: translatorPayload.reply
+        reply: translatorPayload.reply,
+        context: translatorPayload.context
       });
     }
 

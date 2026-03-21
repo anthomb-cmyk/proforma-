@@ -675,8 +675,12 @@ if (chatForm) {
                 text: result.translation
               },
               {
-                title: "Réponse suggérée",
+                title: "Réponse suggérée (à adapter)",
                 text: result.reply
+              },
+              {
+                title: "Contexte",
+                text: result.context || "demande générale"
               }
             ]
           : []
