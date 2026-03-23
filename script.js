@@ -7,6 +7,7 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const chatState = {
   currentMode: "listing",
+  currentWorkspaceTab: "dashboard",
   listingHistory: [
     {
       sender: "bot",
@@ -24,8 +25,26 @@ const chatState = {
   listings: {},
   serverReady: false,
   pending: false,
-  currentUser: null
+  currentUser: null,
+  currentSession: null,
+  workspaceMessages: [],
+  workspaceTasks: [],
+  notifications: []
 };
+
+const dashboardWorkspaceTab = document.getElementById("dashboardWorkspaceTab");
+const messagesWorkspaceTab = document.getElementById("messagesWorkspaceTab");
+const listingsWorkspaceTab = document.getElementById("listingsWorkspaceTab");
+const workspaceMessagesBadge = document.getElementById("workspaceMessagesBadge");
+const workspaceListingsBadge = document.getElementById("workspaceListingsBadge");
+const employeeNotificationsList = document.getElementById("employeeNotificationsList");
+const employeeConversationList = document.getElementById("employeeConversationList");
+const employeeConversationTitle = document.getElementById("employeeConversationTitle");
+const employeeConversationMeta = document.getElementById("employeeConversationMeta");
+const employeeMessageThread = document.getElementById("employeeMessageThread");
+const employeeMessageForm = document.getElementById("employeeMessageForm");
+const employeeMessageInput = document.getElementById("employeeMessageInput");
+const employeeListingTasks = document.getElementById("employeeListingTasks");
 
 const sampleRefs = document.getElementById("sampleRefs");
 const listingPreview = document.getElementById("listingPreview");
@@ -76,6 +95,11 @@ function resolveUserRole(user) {
   ).trim().toLowerCase();
 }
 
+function formatDate(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("fr-CA");
+}
+
 async function isAdminUser(userId) {
   if (!userId) return false;
 
@@ -121,6 +145,7 @@ async function requireLogin() {
   const user = session.user;
   const userId = user?.id;
   const role = resolveUserRole(user);
+  chatState.currentSession = session;
 
   if (role === "admin") {
     window.location.href = `${EMPLOYEE_APP_URL}/admin.html`;
@@ -487,6 +512,199 @@ async function fetchJSON(url, options = {}, timeoutMs = 10000) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchEmployeeJSON(url, options = {}, timeoutMs = 10000) {
+  const session = chatState.currentSession || await waitForActiveSession(1, 0);
+
+  if (!session?.access_token) {
+    throw new Error("Session employé introuvable.");
+  }
+
+  return fetchJSON(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${session.access_token}`
+    }
+  }, timeoutMs);
+}
+
+function switchWorkspaceTab(tabName) {
+  chatState.currentWorkspaceTab = tabName;
+
+  dashboardWorkspaceTab?.classList.toggle("hidden", tabName !== "dashboard");
+  dashboardWorkspaceTab?.classList.toggle("active", tabName === "dashboard");
+  messagesWorkspaceTab?.classList.toggle("hidden", tabName !== "messages");
+  messagesWorkspaceTab?.classList.toggle("active", tabName === "messages");
+  listingsWorkspaceTab?.classList.toggle("hidden", tabName !== "listings");
+  listingsWorkspaceTab?.classList.toggle("active", tabName === "listings");
+
+  document.querySelectorAll(".workspace-nav-btn").forEach((button) => {
+    button.classList.toggle("active", button.dataset.workspaceTab === tabName);
+  });
+}
+
+function renderNotifications() {
+  if (!employeeNotificationsList) return;
+
+  if (!chatState.notifications.length) {
+    employeeNotificationsList.innerHTML = `<div class="workspace-list-empty">Aucune notification récente.</div>`;
+    return;
+  }
+
+  employeeNotificationsList.innerHTML = chatState.notifications.map((notification) => `
+    <div class="workspace-notification-card">
+      <div style="font-weight:800;">${notification.type === "message" ? "Nouveau message" : "Nouveau mandat"}</div>
+      <div class="workspace-task-meta">${formatDate(notification.created_at)}</div>
+    </div>
+  `).join("");
+}
+
+function renderEmployeeConversationList() {
+  if (!employeeConversationList) return;
+
+  const unreadCount = chatState.workspaceMessages.filter(
+    (message) => String(message.to_user_id) === String(chatState.currentUser?.id) && message.read !== true
+  ).length;
+
+  if (workspaceMessagesBadge) {
+    workspaceMessagesBadge.textContent = String(unreadCount);
+    workspaceMessagesBadge.classList.toggle("hidden", unreadCount === 0);
+  }
+
+  employeeConversationList.innerHTML = `
+    <button type="button" class="workspace-conversation-item active">
+      <div style="font-weight:800;">Administration</div>
+      <div class="workspace-task-meta">${unreadCount ? `${unreadCount} non lu(s)` : "Conversation interne"}</div>
+    </button>
+  `;
+
+  if (employeeConversationTitle) {
+    employeeConversationTitle.textContent = "Messagerie interne";
+  }
+
+  if (employeeConversationMeta) {
+    employeeConversationMeta.textContent = "Échange direct avec l’administration.";
+  }
+}
+
+function renderEmployeeMessageThread() {
+  if (!employeeMessageThread) return;
+
+  if (!chatState.workspaceMessages.length) {
+    employeeMessageThread.innerHTML = `<div class="workspace-list-empty">Aucun message pour le moment.</div>`;
+    return;
+  }
+
+  employeeMessageThread.innerHTML = chatState.workspaceMessages.map((message) => {
+    const isSelf = String(message.from_user_id) === String(chatState.currentUser?.id);
+    return `
+      <div class="workspace-message-row ${isSelf ? "from-self" : ""}">
+        <div class="workspace-message-bubble">
+          <div style="font-weight:800;margin-bottom:4px;">${isSelf ? "Vous" : "Administration"}</div>
+          <div>${message.content || ""}</div>
+          <div class="workspace-task-meta">${formatDate(message.created_at)}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  employeeMessageThread.scrollTop = employeeMessageThread.scrollHeight;
+}
+
+function renderEmployeeListingTasks() {
+  if (!employeeListingTasks) return;
+
+  const activeTaskCount = chatState.workspaceTasks.filter((task) => task.status !== "completed").length;
+  if (workspaceListingsBadge) {
+    workspaceListingsBadge.textContent = String(activeTaskCount);
+    workspaceListingsBadge.classList.toggle("hidden", activeTaskCount === 0);
+  }
+
+  if (!chatState.workspaceTasks.length) {
+    employeeListingTasks.innerHTML = `<div class="workspace-list-empty">Aucun mandat assigné.</div>`;
+    return;
+  }
+
+  employeeListingTasks.innerHTML = chatState.workspaceTasks.map((task) => `
+    <div class="workspace-task-card">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+        <div>
+          <div style="font-weight:800;">${task.title || "Mandat"}</div>
+          <div class="workspace-task-meta">Statut : ${task.status || "assigned"} · ${formatDate(task.created_at)}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px;line-height:1.6;white-space:pre-wrap;">${task.listing_text || ""}</div>
+      <div class="workspace-task-actions">
+        <button type="button" class="secondary-btn copy-task-text-btn" data-text="${encodeURIComponent(task.listing_text || "")}">Copier le texte</button>
+        ${task.status !== "in_progress" ? `<button type="button" class="secondary-btn task-status-btn" data-id="${task.id}" data-status="in_progress">Marquer en cours</button>` : ""}
+        ${task.status !== "completed" ? `<button type="button" class="secondary-btn task-status-btn" data-id="${task.id}" data-status="completed">Marquer complété</button>` : ""}
+        <button type="button" class="secondary-btn ask-task-question-btn" data-title="${encodeURIComponent(task.title || "Mandat")}">Poser une question</button>
+      </div>
+    </div>
+  `).join("");
+
+  document.querySelectorAll(".copy-task-text-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const text = decodeURIComponent(button.dataset.text || "");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      }
+    });
+  });
+
+  document.querySelectorAll(".task-status-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await fetchEmployeeJSON(`/api/employee/workspace/listing-tasks/${encodeURIComponent(button.dataset.id)}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: button.dataset.status })
+      });
+      await loadEmployeeWorkspace();
+    });
+  });
+
+  document.querySelectorAll(".ask-task-question-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      switchWorkspaceTab("messages");
+      if (employeeMessageInput) {
+        employeeMessageInput.value = `Question sur le mandat: ${decodeURIComponent(button.dataset.title || "Mandat")} — `;
+        employeeMessageInput.focus();
+      }
+    });
+  });
+}
+
+async function loadEmployeeWorkspace() {
+  const [conversationData, tasksData, notificationsData] = await Promise.all([
+    fetchEmployeeJSON("/api/employee/workspace/conversation"),
+    fetchEmployeeJSON("/api/employee/workspace/listing-tasks"),
+    fetchEmployeeJSON("/api/employee/workspace/notifications")
+  ]);
+
+  chatState.workspaceMessages = conversationData.messages || [];
+  chatState.workspaceTasks = tasksData.tasks || [];
+  chatState.notifications = notificationsData.notifications || [];
+
+  renderNotifications();
+  renderEmployeeConversationList();
+  renderEmployeeMessageThread();
+  renderEmployeeListingTasks();
+}
+
+async function sendEmployeeWorkspaceMessage(event) {
+  event.preventDefault();
+  const content = employeeMessageInput?.value?.trim() || "";
+
+  if (!content) return;
+
+  await fetchEmployeeJSON("/api/employee/workspace/messages", {
+    method: "POST",
+    body: JSON.stringify({ content })
+  });
+
+  employeeMessageInput.value = "";
+  await loadEmployeeWorkspace();
 }
 
 async function checkServer() {
@@ -892,13 +1110,38 @@ if (preferredLocationInput) {
   preferredLocationInput.addEventListener("blur", resolveSelectedPreferredLocation);
 }
 
+document.querySelectorAll(".workspace-nav-btn").forEach((button) => {
+  button.addEventListener("click", () => {
+    switchWorkspaceTab(button.dataset.workspaceTab || "dashboard");
+  });
+});
+
+if (employeeMessageForm) {
+  employeeMessageForm.addEventListener("submit", sendEmployeeWorkspaceMessage);
+}
+
 supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
     window.location.href = `/login.html?next=${encodeURIComponent(window.location.pathname || "/")}`;
+    return;
+  }
+
+  if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+    waitForActiveSession(1, 0)
+      .then((session) => {
+        if (session) {
+          chatState.currentSession = session;
+          chatState.currentUser = session.user;
+        }
+      })
+      .catch((error) => {
+        console.error("Session refresh error:", error);
+      });
   }
 });
 
 (async function init() {
+  switchWorkspaceTab("dashboard");
   switchMode("listing");
   renderMessages();
 
@@ -925,5 +1168,15 @@ supabaseClient.auth.onAuthStateChange((event) => {
     setServerStatus("Serveur non connecté", "error");
   } else if (!listingsOk) {
     setServerStatus("Serveur connecté", "ok");
+  }
+
+  try {
+    await loadEmployeeWorkspace();
+  } catch (error) {
+    console.error("Load employee workspace error:", error);
+    renderNotifications();
+    renderEmployeeConversationList();
+    renderEmployeeMessageThread();
+    renderEmployeeListingTasks();
   }
 })();

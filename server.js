@@ -39,6 +39,9 @@ const CANDIDATES_PATH = path.join(DATA_DIR, "candidates.json");
 const CHAT_MESSAGES_PATH = path.join(DATA_DIR, "chat-messages.json");
 const CHAT_SESSIONS_PATH = path.join(DATA_DIR, "chat-sessions.json");
 const USER_DAILY_TIME_PATH = path.join(DATA_DIR, "user-daily-time.json");
+const WORKSPACE_MESSAGES_PATH = path.join(DATA_DIR, "workspace-messages.json");
+const LISTING_TASKS_PATH = path.join(DATA_DIR, "listing-tasks.json");
+const NOTIFICATIONS_PATH = path.join(DATA_DIR, "notifications.json");
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -709,6 +712,44 @@ async function loadLegacyAdminUserIds() {
   }
 }
 
+async function loadWorkspaceMessages() {
+  return readJsonFile(WORKSPACE_MESSAGES_PATH, []);
+}
+
+async function saveWorkspaceMessages(messages) {
+  await writeJsonFile(WORKSPACE_MESSAGES_PATH, messages);
+}
+
+async function loadListingTasks() {
+  return readJsonFile(LISTING_TASKS_PATH, []);
+}
+
+async function saveListingTasks(tasks) {
+  await writeJsonFile(LISTING_TASKS_PATH, tasks);
+}
+
+async function loadNotifications() {
+  return readJsonFile(NOTIFICATIONS_PATH, []);
+}
+
+async function saveNotifications(notifications) {
+  await writeJsonFile(NOTIFICATIONS_PATH, notifications);
+}
+
+async function appendNotification(notification) {
+  const notifications = await loadNotifications();
+  notifications.push(notification);
+  await saveNotifications(notifications);
+  return notification;
+}
+
+async function appendNotifications(notificationsToAppend = []) {
+  if (!notificationsToAppend.length) return;
+  const notifications = await loadNotifications();
+  notifications.push(...notificationsToAppend);
+  await saveNotifications(notifications);
+}
+
 function buildResolvedUserSummary(user, legacyAdminUserIds, summaryByUserId = new Map()) {
   const userSummary = summaryByUserId.get(user.id) || null;
   const explicitRole = resolveRoleFromUser(user);
@@ -733,6 +774,60 @@ function buildResolvedUserSummary(user, legacyAdminUserIds, summaryByUserId = ne
     today_heartbeat_count: userSummary?.heartbeat_count ?? 0,
     today_total_seconds: userSummary?.total_seconds ?? 0
   };
+}
+
+function formatListingTaskTitle(payload = {}) {
+  const address = String(payload.address || "").trim();
+  const city = String(payload.city || "").trim();
+  const type = String(payload.type || "").trim();
+  return [address, city, type].filter(Boolean).join(" · ") || "Nouvelle annonce";
+}
+
+function buildListingTaskText(payload = {}) {
+  const address = String(payload.address || "").trim();
+  const city = String(payload.city || "").trim();
+  const type = String(payload.type || "").trim();
+  const rent = String(payload.rent || "").trim();
+  const inclusions = String(payload.inclusions || "").trim();
+  const pets = String(payload.pets || "").trim();
+  const parking = String(payload.parking || "").trim();
+  const features = String(payload.features || "").trim();
+  const conditions = String(payload.conditions || "").trim();
+
+  return [
+    `${type || "Logement"} à louer${city ? ` à ${city}` : ""}${address ? `, ${address}` : ""}.`,
+    rent ? `Loyer : ${rent} $ par mois.` : "",
+    inclusions ? `Inclusions : ${inclusions}.` : "",
+    pets ? `Animaux : ${pets}.` : "",
+    parking ? `Stationnement : ${parking}.` : "",
+    features ? `Points forts : ${features}.` : "",
+    conditions ? `Conditions : ${conditions}.` : "",
+    "Veuillez adapter le ton final avant publication."
+  ].filter(Boolean).join(" ");
+}
+
+async function loadAdminUsersSummary() {
+  const users = await loadAllSupabaseUsers();
+  const legacyAdminUserIds = await loadLegacyAdminUserIds();
+  return users
+    .map((user) => buildResolvedUserSummary(user, legacyAdminUserIds))
+    .filter((user) => user.role === "admin");
+}
+
+async function loadEmployeeUsersSummary() {
+  const users = await loadAllSupabaseUsers();
+  const legacyAdminUserIds = await loadLegacyAdminUserIds();
+  return users
+    .map((user) => buildResolvedUserSummary(user, legacyAdminUserIds))
+    .filter((user) => user.role === "employee");
+}
+
+function listConversationMessagesForEmployee(messages, employeeUserId) {
+  return messages.filter((message) => String(message.employee_user_id) === String(employeeUserId));
+}
+
+function sortByCreatedAtDesc(items) {
+  return [...items].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 }
 
 async function sendClientInvitationEmail(invitation, onboardingLink) {
@@ -1553,6 +1648,52 @@ async function handleAdminRoute(req, res, handler) {
     return res.status(error.status || 500).json({
       ok: false,
       error: error.message || "Erreur admin."
+    });
+  }
+}
+
+async function resolveEmployeeContext(req) {
+  if (!supabaseServerClient) {
+    throw createHttpError(503, "Authentification employé backend non configurée.");
+  }
+
+  const accessToken = getBearerToken(req);
+  if (!accessToken) {
+    throw createHttpError(401, "Jeton d’authentification manquant.");
+  }
+
+  const { data, error } = await supabaseServerClient.auth.getUser(accessToken);
+
+  if (error || !data?.user) {
+    throw createHttpError(401, "Session employé invalide.");
+  }
+
+  const user = data.user;
+  const role = resolveRoleFromUser(user);
+
+  if (role === "employee") {
+    return { user, role };
+  }
+
+  if (role === "admin") {
+    throw createHttpError(403, "Accès employé refusé.");
+  }
+
+  if (resolveClientIdFromUser(user)) {
+    throw createHttpError(403, "Accès employé refusé.");
+  }
+
+  return { user, role: "employee" };
+}
+
+async function handleEmployeeRoute(req, res, handler) {
+  try {
+    const context = await resolveEmployeeContext(req);
+    return await handler(context);
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Erreur employé."
     });
   }
 }
@@ -2573,6 +2714,275 @@ app.put("/api/admin/clients/:id", async (req, res) => {
     });
   }
 });
+
+app.get("/api/admin/workspace/employees", async (req, res) => handleAdminRoute(req, res, async () => {
+  const employees = await loadEmployeeUsersSummary();
+  return res.json({ ok: true, employees });
+}));
+
+app.get("/api/admin/workspace/conversations", async (req, res) => handleAdminRoute(req, res, async () => {
+  const employees = await loadEmployeeUsersSummary();
+  const messages = await loadWorkspaceMessages();
+
+  const conversations = employees.map((employee) => {
+    const conversationMessages = listConversationMessagesForEmployee(messages, employee.user_id);
+    const lastMessage = sortByCreatedAtDesc(conversationMessages)[0] || null;
+    const unreadCount = conversationMessages.filter(
+      (message) => String(message.to_user_id) !== String(employee.user_id) && message.read !== true
+    ).length;
+
+    return {
+      employee,
+      unread_count: unreadCount,
+      last_message: lastMessage
+    };
+  });
+
+  return res.json({ ok: true, conversations });
+}));
+
+app.get("/api/admin/workspace/messages/:employeeUserId", async (req, res) => handleAdminRoute(req, res, async () => {
+  const employeeUserId = String(req.params.employeeUserId || "").trim();
+  const messages = await loadWorkspaceMessages();
+  const notifications = await loadNotifications();
+  let changedMessages = false;
+  let changedNotifications = false;
+
+  const conversation = messages
+    .filter((message) => String(message.employee_user_id) === employeeUserId)
+    .map((message) => {
+      if (String(message.to_user_id) !== employeeUserId && message.read !== true) {
+        message.read = true;
+        changedMessages = true;
+      }
+      return message;
+    })
+    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+
+  notifications.forEach((notification) => {
+    if (
+      notification.type === "message" &&
+      String(notification.reference_id) === employeeUserId &&
+      notification.read !== true
+    ) {
+      notification.read = true;
+      changedNotifications = true;
+    }
+  });
+
+  if (changedMessages) {
+    await saveWorkspaceMessages(messages);
+  }
+
+  if (changedNotifications) {
+    await saveNotifications(notifications);
+  }
+
+  return res.json({ ok: true, messages: conversation });
+}));
+
+app.post("/api/admin/workspace/messages", async (req, res) => handleAdminRoute(req, res, async ({ user }) => {
+  const employeeUserId = String(req.body?.employee_user_id || "").trim();
+  const content = String(req.body?.content || "").trim();
+
+  if (!employeeUserId || !content) {
+    throw createHttpError(400, "employee_user_id et content sont obligatoires.");
+  }
+
+  const messages = await loadWorkspaceMessages();
+  const message = {
+    id: createId("workspace_msg"),
+    employee_user_id: employeeUserId,
+    from_user_id: user.id,
+    to_user_id: employeeUserId,
+    content,
+    created_at: new Date().toISOString(),
+    read: false
+  };
+
+  messages.push(message);
+  await saveWorkspaceMessages(messages);
+  await appendNotification({
+    id: createId("notif"),
+    user_id: employeeUserId,
+    type: "message",
+    reference_id: employeeUserId,
+    read: false,
+    created_at: new Date().toISOString()
+  });
+
+  return res.status(201).json({ ok: true, message });
+}));
+
+app.post("/api/admin/workspace/listing-tasks", async (req, res) => handleAdminRoute(req, res, async ({ user }) => {
+  const assignedToUserId = String(req.body?.assigned_to_user_id || "").trim();
+
+  if (!assignedToUserId) {
+    throw createHttpError(400, "assigned_to_user_id est obligatoire.");
+  }
+
+  const payload = {
+    address: String(req.body?.address || "").trim(),
+    city: String(req.body?.city || "").trim(),
+    type: String(req.body?.type || "").trim(),
+    rent: String(req.body?.rent || "").trim(),
+    inclusions: String(req.body?.inclusions || "").trim(),
+    pets: String(req.body?.pets || "").trim(),
+    parking: String(req.body?.parking || "").trim(),
+    features: String(req.body?.features || "").trim(),
+    conditions: String(req.body?.conditions || "").trim()
+  };
+
+  const task = {
+    id: createId("listing_task"),
+    assigned_to_user_id: assignedToUserId,
+    created_by_admin_id: user.id,
+    title: formatListingTaskTitle(payload),
+    listing_text: buildListingTaskText(payload),
+    status: "assigned",
+    created_at: new Date().toISOString(),
+    payload
+  };
+
+  const tasks = await loadListingTasks();
+  tasks.push(task);
+  await saveListingTasks(tasks);
+  await appendNotification({
+    id: createId("notif"),
+    user_id: assignedToUserId,
+    type: "listing",
+    reference_id: task.id,
+    read: false,
+    created_at: new Date().toISOString()
+  });
+
+  return res.status(201).json({ ok: true, task });
+}));
+
+app.get("/api/admin/workspace/listing-tasks", async (req, res) => handleAdminRoute(req, res, async () => {
+  const tasks = sortByCreatedAtDesc(await loadListingTasks());
+  return res.json({ ok: true, tasks });
+}));
+
+app.get("/api/employee/workspace/conversation", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const messages = await loadWorkspaceMessages();
+  const notifications = await loadNotifications();
+  let changedMessages = false;
+  let changedNotifications = false;
+
+  const conversation = messages
+    .filter((message) => String(message.employee_user_id) === String(user.id))
+    .map((message) => {
+      if (String(message.to_user_id) === String(user.id) && message.read !== true) {
+        message.read = true;
+        changedMessages = true;
+      }
+      return message;
+    })
+    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+
+  notifications.forEach((notification) => {
+    if (
+      String(notification.user_id) === String(user.id) &&
+      notification.type === "message" &&
+      notification.read !== true
+    ) {
+      notification.read = true;
+      changedNotifications = true;
+    }
+  });
+
+  if (changedMessages) {
+    await saveWorkspaceMessages(messages);
+  }
+
+  if (changedNotifications) {
+    await saveNotifications(notifications);
+  }
+
+  return res.json({ ok: true, messages: conversation });
+}));
+
+app.post("/api/employee/workspace/messages", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const content = String(req.body?.content || "").trim();
+
+  if (!content) {
+    throw createHttpError(400, "content est obligatoire.");
+  }
+
+  const admins = await loadAdminUsersSummary();
+  const messages = await loadWorkspaceMessages();
+  const message = {
+    id: createId("workspace_msg"),
+    employee_user_id: user.id,
+    from_user_id: user.id,
+    to_user_id: "admin",
+    content,
+    created_at: new Date().toISOString(),
+    read: false
+  };
+
+  messages.push(message);
+  await saveWorkspaceMessages(messages);
+  await appendNotifications(admins.map((admin) => ({
+    id: createId("notif"),
+    user_id: admin.user_id,
+    type: "message",
+    reference_id: user.id,
+    read: false,
+    created_at: new Date().toISOString()
+  })));
+
+  return res.status(201).json({ ok: true, message });
+}));
+
+app.get("/api/employee/workspace/listing-tasks", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const tasks = sortByCreatedAtDesc(
+    (await loadListingTasks()).filter((task) => String(task.assigned_to_user_id) === String(user.id))
+  );
+  return res.json({ ok: true, tasks });
+}));
+
+app.put("/api/employee/workspace/listing-tasks/:id", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const taskId = String(req.params.id || "").trim();
+  const nextStatus = String(req.body?.status || "").trim();
+  const tasks = await loadListingTasks();
+  const task = tasks.find((item) => String(item.id) === taskId && String(item.assigned_to_user_id) === String(user.id));
+
+  if (!task) {
+    throw createHttpError(404, "Mission introuvable.");
+  }
+
+  if (!["assigned", "in_progress", "completed"].includes(nextStatus)) {
+    throw createHttpError(400, "Statut invalide.");
+  }
+
+  task.status = nextStatus;
+  task.updated_at = new Date().toISOString();
+  await saveListingTasks(tasks);
+
+  const admins = await loadAdminUsersSummary();
+  if (nextStatus === "completed") {
+    await appendNotifications(admins.map((admin) => ({
+      id: createId("notif"),
+      user_id: admin.user_id,
+      type: "listing",
+      reference_id: task.id,
+      read: false,
+      created_at: new Date().toISOString()
+    })));
+  }
+
+  return res.json({ ok: true, task });
+}));
+
+app.get("/api/employee/workspace/notifications", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const notifications = sortByCreatedAtDesc(
+    (await loadNotifications()).filter((notification) => String(notification.user_id) === String(user.id))
+  ).slice(0, 12);
+
+  return res.json({ ok: true, notifications });
+}));
 
 app.post("/api/admin/apartments", async (req, res) => {
   try {

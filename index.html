@@ -19,165 +19,215 @@
         </div>
       </div>
 
-      <div class="panel compact gradient-panel">
-        <span class="eyebrow">Mode d’emploi</span>
-        <h2>Deux outils. Un seul espace.</h2>
-        <ul>
-          <li><strong>Assistant des immeubles</strong> : choisissez un appartement puis posez une question.</li>
-          <li><strong>Traducteur</strong> : traduit ou explique uniquement le texte fourni.</li>
-          <li>Les employés ont un accès en lecture seule.</li>
-        </ul>
-      </div>
-
-      <div class="panel compact">
-        <span class="eyebrow">Références</span>
-        <h2>Références d’exemple</h2>
-        <div class="sample-list" id="sampleRefs"></div>
-      </div>
-
-      <div class="panel compact preview-panel">
-        <span class="eyebrow">Lecture seule</span>
-        <h2>Aperçu de l’immeuble</h2>
-        <div id="listingPreview" class="listing-preview muted">
-          Sélectionnez un appartement pour afficher ses informations.
-        </div>
-      </div>
-
-      <div class="panel compact">
-        <span class="eyebrow">Préqualification</span>
-        <h2>Nouveau locataire potentiel</h2>
-
-        <form id="candidateForm" class="candidate-form">
-          <input id="aptRef" type="text" placeholder="Appartement visé (ex: 1001)" required />
-          <input id="preferredLocationInput" type="text" list="preferredLocationList" placeholder="Ville ou secteur recherché" required />
-          <datalist id="preferredLocationList"></datalist>
-          <div id="preferredLocationHint" class="candidate-helper">Sélectionnez la ville ou le secteur recherché dans la liste.</div>
-          <input id="preferredLocationLabel" type="hidden" />
-          <input id="preferredLocationZone" type="hidden" />
-          <input id="preferredLocationLat" type="hidden" />
-          <input id="preferredLocationLng" type="hidden" />
-
-          <select id="locationFlexible" required>
-            <option value="">Secteurs voisins acceptés ?</option>
-            <option value="non">Non, ville précise seulement</option>
-            <option value="oui">Oui, des secteurs voisins peuvent convenir</option>
-          </select>
-
-          <input id="name" type="text" placeholder="Nom complet" />
-          <input id="phone" type="text" placeholder="Téléphone" />
-          <input id="email" type="email" placeholder="Email" />
-
-          <input id="job" type="text" placeholder="Emploi" />
-          <input id="employer" type="text" placeholder="Employeur" />
-          <input id="employmentLength" type="text" placeholder="Travaille là depuis combien de temps" />
-
-          <select id="employmentStatus">
-            <option value="">Statut emploi</option>
-            <option value="temps plein">Temps plein</option>
-            <option value="temps partiel">Temps partiel</option>
-            <option value="autonome">Autonome</option>
-            <option value="étudiant">Étudiant</option>
-            <option value="sans emploi">Sans emploi</option>
-            <option value="retraité">Retraité</option>
-          </select>
-
-          <input id="income" type="number" placeholder="Revenu mensuel" />
-
-          <select id="credit">
-            <option value="">Crédit</option>
-            <option value="basse">Basse</option>
-            <option value="moyenne">Moyenne</option>
-            <option value="haute">Haute</option>
-          </select>
-
-          <select id="tal">
-            <option value="">Dossier au TAL</option>
-            <option value="oui">Oui</option>
-            <option value="non">Non</option>
-          </select>
-
-          <input id="occupants" type="number" placeholder="Nombre de personnes dans l'appartement" />
-
-          <select id="pets">
-            <option value="">Animaux</option>
-            <option value="oui">Oui</option>
-            <option value="non">Non</option>
-          </select>
-
-          <textarea id="notes" placeholder="Notes employé"></textarea>
-
-          <div id="candidateStatus" class="candidate-status"></div>
-
-          <button type="submit" class="primary-btn candidate-submit-btn">Envoyer la fiche</button>
-        </form>
+      <div class="workspace-nav">
+        <button type="button" class="workspace-nav-btn active" data-workspace-tab="dashboard">Dashboard</button>
+        <button type="button" class="workspace-nav-btn" data-workspace-tab="messages">
+          Messages
+          <span id="workspaceMessagesBadge" class="workspace-nav-badge hidden">0</span>
+        </button>
+        <button type="button" class="workspace-nav-btn" data-workspace-tab="listings">
+          Listings
+          <span id="workspaceListingsBadge" class="workspace-nav-badge hidden">0</span>
+        </button>
       </div>
     </aside>
 
     <main class="main-panel">
-      <header class="topbar glass-card">
-        <div>
-          <span class="eyebrow">Espace de travail</span>
-          <h2>Assistant locatif interne</h2>
-          <p>Une seule interface, avec un mode immeuble et un mode traduction.</p>
-        </div>
-
-        <div class="mode-switch" role="tablist" aria-label="Changement de mode">
-          <button type="button" class="mode-btn active" id="listingModeBtn" data-mode="listing">
-            Assistant des immeubles
-          </button>
-          <button type="button" class="mode-btn" id="translatorModeBtn" data-mode="translator">
-            Traducteur
-          </button>
-        </div>
-      </header>
-
-      <section class="status-row">
-        <div class="status-wrapper">
-          <div class="status-card" id="modeStatus">
-            Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
+      <section id="dashboardWorkspaceTab" class="workspace-page active">
+        <header class="topbar glass-card">
+          <div>
+            <span class="eyebrow">Espace de travail</span>
+            <h2>Assistant locatif interne</h2>
+            <p>Assistant d’immeubles et traducteur dans un seul tableau de bord, avec vos notifications récentes juste en dessous.</p>
           </div>
 
-          <div id="listingSelectorCard" class="listing-selector-card">
-            <div class="listing-selector-title">Sélectionnez votre appartement</div>
-            <div class="listing-selector-subtitle">Choisissez d’abord un logement avant d’écrire votre question.</div>
-
-            <select id="listingSelect" class="listing-select">
-              <option value="">Sélectionnez un appartement</option>
-            </select>
+          <div class="mode-switch" role="tablist" aria-label="Changement de mode">
+            <button type="button" class="mode-btn active" id="listingModeBtn" data-mode="listing">
+              Assistant des immeubles
+            </button>
+            <button type="button" class="mode-btn" id="translatorModeBtn" data-mode="translator">
+              Traducteur
+            </button>
           </div>
-        </div>
+        </header>
 
-        <div class="server-pill" id="serverStatus">Connexion serveur en cours…</div>
+        <section class="status-row">
+          <div class="status-wrapper">
+            <div class="status-card" id="modeStatus">
+              Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question.
+            </div>
+
+            <div id="listingSelectorCard" class="listing-selector-card">
+              <div class="listing-selector-title">Sélectionnez votre appartement</div>
+              <div class="listing-selector-subtitle">Choisissez d’abord un logement avant d’écrire votre question.</div>
+
+              <select id="listingSelect" class="listing-select">
+                <option value="">Sélectionnez un appartement</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="server-pill" id="serverStatus">Connexion serveur en cours…</div>
+        </section>
+
+        <section class="chat-card glass-card">
+          <div class="chat-card-header">
+            <div>
+              <span class="eyebrow">Console</span>
+              <h3>Conversation</h3>
+            </div>
+            <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
+          </div>
+
+          <div class="chat-messages" id="chatMessages"></div>
+
+          <form class="chat-form" id="chatForm">
+            <textarea
+              id="chatInput"
+              placeholder="Entrez votre question ici..."
+              rows="3"
+            ></textarea>
+
+            <div class="chat-actions">
+              <button type="button" class="secondary-btn" id="clearChatBtn">Effacer</button>
+              <button type="submit" class="primary-btn" id="sendBtn">Envoyer</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="dashboard-grid">
+          <div class="panel compact">
+            <span class="eyebrow">Références</span>
+            <h2>Références d’exemple</h2>
+            <div class="sample-list" id="sampleRefs"></div>
+          </div>
+
+          <div class="panel compact preview-panel">
+            <span class="eyebrow">Lecture seule</span>
+            <h2>Aperçu de l’immeuble</h2>
+            <div id="listingPreview" class="listing-preview muted">
+              Sélectionnez un appartement pour afficher ses informations.
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard-grid">
+          <div class="panel compact">
+            <span class="eyebrow">Notifications</span>
+            <h2>Récentes</h2>
+            <div id="employeeNotificationsList" class="workspace-list-empty">Aucune notification.</div>
+          </div>
+
+          <div class="panel compact">
+            <span class="eyebrow">Préqualification</span>
+            <h2>Nouveau locataire potentiel</h2>
+
+            <form id="candidateForm" class="candidate-form">
+              <input id="aptRef" type="text" placeholder="Appartement visé (ex: 1001)" required />
+              <input id="preferredLocationInput" type="text" list="preferredLocationList" placeholder="Ville ou secteur recherché" required />
+              <datalist id="preferredLocationList"></datalist>
+              <div id="preferredLocationHint" class="candidate-helper">Sélectionnez la ville ou le secteur recherché dans la liste.</div>
+              <input id="preferredLocationLabel" type="hidden" />
+              <input id="preferredLocationZone" type="hidden" />
+              <input id="preferredLocationLat" type="hidden" />
+              <input id="preferredLocationLng" type="hidden" />
+
+              <select id="locationFlexible" required>
+                <option value="">Secteurs voisins acceptés ?</option>
+                <option value="non">Non, ville précise seulement</option>
+                <option value="oui">Oui, des secteurs voisins peuvent convenir</option>
+              </select>
+
+              <input id="name" type="text" placeholder="Nom complet" />
+              <input id="phone" type="text" placeholder="Téléphone" />
+              <input id="email" type="email" placeholder="Email" />
+
+              <input id="job" type="text" placeholder="Emploi" />
+              <input id="employer" type="text" placeholder="Employeur" />
+              <input id="employmentLength" type="text" placeholder="Travaille là depuis combien de temps" />
+
+              <select id="employmentStatus">
+                <option value="">Statut emploi</option>
+                <option value="temps plein">Temps plein</option>
+                <option value="temps partiel">Temps partiel</option>
+                <option value="autonome">Autonome</option>
+                <option value="étudiant">Étudiant</option>
+                <option value="sans emploi">Sans emploi</option>
+                <option value="retraité">Retraité</option>
+              </select>
+
+              <input id="income" type="number" placeholder="Revenu mensuel" />
+
+              <select id="credit">
+                <option value="">Crédit</option>
+                <option value="basse">Basse</option>
+                <option value="moyenne">Moyenne</option>
+                <option value="haute">Haute</option>
+              </select>
+
+              <select id="tal">
+                <option value="">Dossier au TAL</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
+              <input id="occupants" type="number" placeholder="Nombre de personnes dans l'appartement" />
+
+              <select id="pets">
+                <option value="">Animaux</option>
+                <option value="oui">Oui</option>
+                <option value="non">Non</option>
+              </select>
+
+              <textarea id="notes" placeholder="Notes employé"></textarea>
+
+              <div id="candidateStatus" class="candidate-status"></div>
+
+              <button type="submit" class="primary-btn candidate-submit-btn">Envoyer la fiche</button>
+            </form>
+          </div>
+        </section>
       </section>
 
-      <section class="chat-card glass-card">
-        <div class="chat-card-header">
-          <div>
-            <span class="eyebrow">Console</span>
-            <h3>Conversation</h3>
+      <section id="messagesWorkspaceTab" class="workspace-page hidden">
+        <div class="workspace-layout">
+          <div class="workspace-sidebar-card glass-card">
+            <div class="workspace-section-head">
+              <span class="eyebrow">Messages</span>
+              <h3>Administration</h3>
+            </div>
+            <div id="employeeConversationList" class="workspace-conversation-list"></div>
           </div>
-          <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
+
+          <div class="workspace-content-card glass-card">
+            <div class="workspace-section-head">
+              <span class="eyebrow">Conversation</span>
+              <h3 id="employeeConversationTitle">Messagerie interne</h3>
+              <p id="employeeConversationMeta">Échange direct avec l’administration.</p>
+            </div>
+            <div id="employeeMessageThread" class="workspace-message-thread"></div>
+            <form id="employeeMessageForm" class="chat-form workspace-compose">
+              <textarea id="employeeMessageInput" placeholder="Écrire un message à l’administration" rows="3"></textarea>
+              <div class="chat-actions">
+                <button type="submit" class="primary-btn">Envoyer</button>
+              </div>
+            </form>
+          </div>
         </div>
+      </section>
 
-        <div class="chat-messages" id="chatMessages"></div>
-
-        <form class="chat-form" id="chatForm">
-          <textarea
-            id="chatInput"
-            placeholder="Entrez votre question ici..."
-            rows="3"
-          ></textarea>
-
-          <div class="chat-actions">
-            <button type="button" class="secondary-btn" id="clearChatBtn">Effacer</button>
-            <button type="submit" class="primary-btn" id="sendBtn">Envoyer</button>
-          </div>
-        </form>
+      <section id="listingsWorkspaceTab" class="workspace-page hidden">
+        <div class="workspace-section-head">
+          <span class="eyebrow">Listings</span>
+          <h3>Mandats assignés</h3>
+          <p>Copiez le texte, signalez vos questions à l’administration et mettez vos mandats à jour.</p>
+        </div>
+        <div id="employeeListingTasks" class="workspace-task-list"></div>
       </section>
     </main>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="script.js?v=15"></script>
+  <script src="script.js?v=16"></script>
 </body>
 </html>

@@ -24,8 +24,15 @@ const clientsBody = document.getElementById("clientsBody");
 const apartmentsBody = document.getElementById("apartmentsBody");
 const candidatesBody = document.getElementById("candidatesBody");
 
-const messageUserId = document.getElementById("messageUserId");
-const loadMessagesBtn = document.getElementById("loadMessagesBtn");
+const workspaceConversationList = document.getElementById("workspaceConversationList");
+const workspaceChatTitle = document.getElementById("workspaceChatTitle");
+const workspaceChatMeta = document.getElementById("workspaceChatMeta");
+const workspaceMessageThread = document.getElementById("workspaceMessageThread");
+const workspaceMessageForm = document.getElementById("workspaceMessageForm");
+const workspaceMessageInput = document.getElementById("workspaceMessageInput");
+const listingTaskForm = document.getElementById("listingTaskForm");
+const listingTaskAssignedTo = document.getElementById("listingTaskAssignedTo");
+const listingTaskStatus = document.getElementById("listingTaskStatus");
 
 const apartmentForm = document.getElementById("apartmentForm");
 const apartmentFormStatus = document.getElementById("apartmentFormStatus");
@@ -62,6 +69,9 @@ let allApartments = [];
 let allCandidates = [];
 let lastPendingCandidatesCount = 0;
 let allClients = [];
+let workspaceEmployees = [];
+let workspaceConversations = [];
+let activeWorkspaceEmployeeId = "";
 
 function resolveUserRole(user) {
   return String(
@@ -530,26 +540,158 @@ async function loadSessions() {
 }
 
 async function loadMessages() {
-  let url = "/api/admin/chat-messages";
-  const userId = messageUserId?.value?.trim() || "";
+  const [employeesData, conversationsData] = await Promise.all([
+    fetchJSON("/api/admin/workspace/employees"),
+    fetchJSON("/api/admin/workspace/conversations")
+  ]);
 
-  if (userId) {
-    url += `?user_id=${encodeURIComponent(userId)}`;
+  workspaceEmployees = employeesData.employees || [];
+  workspaceConversations = conversationsData.conversations || [];
+
+  if (listingTaskAssignedTo) {
+    const currentValue = listingTaskAssignedTo.value;
+    listingTaskAssignedTo.innerHTML = `<option value="">Assigner à un employé</option>`;
+    workspaceEmployees.forEach((employee) => {
+      const option = document.createElement("option");
+      option.value = employee.user_id;
+      option.textContent = employee.full_name || employee.email || employee.user_id;
+      listingTaskAssignedTo.appendChild(option);
+    });
+    listingTaskAssignedTo.value = workspaceEmployees.some((employee) => employee.user_id === currentValue) ? currentValue : "";
   }
 
-  const data = await fetchJSON(url);
-  messagesBody.innerHTML = "";
+  if (workspaceConversationList) {
+    workspaceConversationList.innerHTML = "";
 
-  for (const row of data.messages || []) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${formatDate(row.created_at)}</td>
-      <td>${row.user_id || "-"}</td>
-      <td>${row.mode || "-"}</td>
-      <td>${row.sender || "-"}</td>
-      <td>${row.text || ""}</td>
+    workspaceConversations.forEach((conversation) => {
+      const employee = conversation.employee || {};
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary-btn";
+      button.style.textAlign = "left";
+      button.style.display = "grid";
+      button.style.gap = "4px";
+      button.innerHTML = `
+        <span style="font-weight:800;">${employee.full_name || employee.email || employee.user_id}</span>
+        <span style="font-size:.88rem;color:#6b7280;">${conversation.last_message?.content || "Aucun message pour le moment."}</span>
+        ${conversation.unread_count ? `<span style="font-size:.82rem;color:#1e90ff;font-weight:800;">${conversation.unread_count} non lu(s)</span>` : ""}
+      `;
+      button.addEventListener("click", () => {
+        openWorkspaceConversation(employee.user_id);
+      });
+      workspaceConversationList.appendChild(button);
+    });
+  }
+
+  if (!activeWorkspaceEmployeeId && workspaceConversations[0]?.employee?.user_id) {
+    activeWorkspaceEmployeeId = workspaceConversations[0].employee.user_id;
+  }
+
+  if (activeWorkspaceEmployeeId) {
+    await openWorkspaceConversation(activeWorkspaceEmployeeId);
+  } else {
+    renderWorkspaceThread([]);
+  }
+}
+
+function renderWorkspaceThread(messages = []) {
+  if (!workspaceMessageThread) return;
+
+  workspaceMessageThread.innerHTML = "";
+
+  if (!messages.length) {
+    workspaceMessageThread.innerHTML = `<div style="color:#6b7280;">Aucun message pour cette conversation.</div>`;
+    return;
+  }
+
+  messages.forEach((message) => {
+    const isAdminMessage = String(message.from_user_id) !== String(message.employee_user_id);
+    const row = document.createElement("div");
+    row.style.display = "grid";
+    row.style.justifyItems = isAdminMessage ? "end" : "start";
+
+    const bubble = document.createElement("div");
+    bubble.style.maxWidth = "78%";
+    bubble.style.padding = "12px 14px";
+    bubble.style.borderRadius = "16px";
+    bubble.style.background = isAdminMessage ? "rgba(79,70,229,.10)" : "#f3f4f6";
+    bubble.innerHTML = `
+      <div style="font-weight:800;margin-bottom:4px;">${isAdminMessage ? "Admin" : "Employé"}</div>
+      <div>${message.content || ""}</div>
+      <div style="margin-top:6px;font-size:.8rem;color:#6b7280;">${formatDate(message.created_at)}</div>
     `;
-    messagesBody.appendChild(tr);
+
+    row.appendChild(bubble);
+    workspaceMessageThread.appendChild(row);
+  });
+
+  workspaceMessageThread.scrollTop = workspaceMessageThread.scrollHeight;
+}
+
+async function openWorkspaceConversation(employeeUserId) {
+  activeWorkspaceEmployeeId = employeeUserId;
+  const employee = workspaceEmployees.find((item) => item.user_id === employeeUserId) || null;
+
+  if (workspaceChatTitle) {
+    workspaceChatTitle.textContent = employee ? (employee.full_name || employee.email || employee.user_id) : "Messagerie interne";
+  }
+
+  if (workspaceChatMeta) {
+    workspaceChatMeta.textContent = employee ? (employee.email || employee.user_id) : "Sélectionnez un employé.";
+  }
+
+  const data = await fetchJSON(`/api/admin/workspace/messages/${encodeURIComponent(employeeUserId)}`);
+  renderWorkspaceThread(data.messages || []);
+}
+
+async function sendWorkspaceMessage(event) {
+  event.preventDefault();
+
+  if (!activeWorkspaceEmployeeId || !workspaceMessageInput?.value.trim()) {
+    return;
+  }
+
+  await fetchJSON("/api/admin/workspace/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      employee_user_id: activeWorkspaceEmployeeId,
+      content: workspaceMessageInput.value.trim()
+    })
+  });
+
+  workspaceMessageInput.value = "";
+  await loadMessages();
+}
+
+async function createListingTask(event) {
+  event.preventDefault();
+
+  listingTaskStatus.textContent = "";
+  listingTaskStatus.style.color = "";
+
+  try {
+    await fetchJSON("/api/admin/workspace/listing-tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        assigned_to_user_id: listingTaskAssignedTo.value,
+        address: document.getElementById("listingTaskAddress").value.trim(),
+        city: document.getElementById("listingTaskCity").value.trim(),
+        type: document.getElementById("listingTaskType").value.trim(),
+        rent: document.getElementById("listingTaskRent").value,
+        inclusions: document.getElementById("listingTaskInclusions").value.trim(),
+        pets: document.getElementById("listingTaskPets").value.trim(),
+        parking: document.getElementById("listingTaskParking").value.trim(),
+        features: document.getElementById("listingTaskFeatures").value.trim(),
+        conditions: document.getElementById("listingTaskConditions").value.trim()
+      })
+    });
+
+    listingTaskForm.reset();
+    listingTaskStatus.textContent = "Mission de publication créée et assignée.";
+    listingTaskStatus.style.color = "green";
+  } catch (error) {
+    listingTaskStatus.textContent = error.message || "Impossible de créer la mission.";
+    listingTaskStatus.style.color = "red";
   }
 }
 
@@ -1457,10 +1599,6 @@ if (refreshBtn) {
   refreshBtn.addEventListener("click", refreshCurrentTab);
 }
 
-if (loadMessagesBtn) {
-  loadMessagesBtn.addEventListener("click", loadMessages);
-}
-
 if (apartmentForm) {
   apartmentForm.addEventListener("submit", createOrUpdateApartment);
 }
@@ -1524,6 +1662,14 @@ if (clearCandidateFiltersBtn) {
 
 if (openInviteClientBtn) {
   openInviteClientBtn.addEventListener("click", openInviteClientModal);
+}
+
+if (workspaceMessageForm) {
+  workspaceMessageForm.addEventListener("submit", sendWorkspaceMessage);
+}
+
+if (listingTaskForm) {
+  listingTaskForm.addEventListener("submit", createListingTask);
 }
 
 supabaseClient.auth.onAuthStateChange((event) => {
