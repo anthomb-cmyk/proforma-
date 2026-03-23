@@ -709,6 +709,32 @@ async function loadLegacyAdminUserIds() {
   }
 }
 
+function buildResolvedUserSummary(user, legacyAdminUserIds, summaryByUserId = new Map()) {
+  const userSummary = summaryByUserId.get(user.id) || null;
+  const explicitRole = resolveRoleFromUser(user);
+  const resolvedRole = explicitRole || (
+    legacyAdminUserIds.has(String(user.id || "").trim())
+      ? "admin"
+      : resolveClientIdFromUser(user)
+        ? "client"
+        : "employee"
+  );
+
+  return {
+    user_id: user.id,
+    email: user.email || "",
+    full_name: user.user_metadata?.full_name || user.user_metadata?.name || "",
+    role: resolvedRole,
+    client_id: resolveClientIdFromUser(user) || null,
+    created_at: user.created_at || null,
+    last_sign_in_at: user.last_sign_in_at || null,
+    is_deactivated: Boolean(user.banned_until && new Date(user.banned_until).getTime() > Date.now()),
+    banned_until: user.banned_until || null,
+    today_heartbeat_count: userSummary?.heartbeat_count ?? 0,
+    today_total_seconds: userSummary?.total_seconds ?? 0
+  };
+}
+
 async function sendClientInvitationEmail(invitation, onboardingLink) {
   if (!resendClient || !INVITATION_FROM_EMAIL) {
     return {
@@ -1876,30 +1902,7 @@ app.get("/api/admin/users", async (req, res) => handleAdminRoute(req, res, async
 
     return res.json({
       ok: true,
-      users: users.map((user) => {
-        const userSummary = summaryByUserId.get(user.id) || null;
-        const explicitRole = resolveRoleFromUser(user);
-        const resolvedRole = explicitRole || (
-          legacyAdminUserIds.has(String(user.id || "").trim())
-            ? "admin"
-            : resolveClientIdFromUser(user)
-              ? "client"
-              : "employee"
-        );
-        return {
-          user_id: user.id,
-          email: user.email || "",
-          full_name: user.user_metadata?.full_name || user.user_metadata?.name || "",
-          role: resolvedRole,
-          client_id: resolveClientIdFromUser(user) || null,
-          created_at: user.created_at || null,
-          last_sign_in_at: user.last_sign_in_at || null,
-          is_deactivated: Boolean(user.banned_until && new Date(user.banned_until).getTime() > Date.now()),
-          banned_until: user.banned_until || null,
-          today_heartbeat_count: userSummary?.heartbeat_count ?? 0,
-          today_total_seconds: userSummary?.total_seconds ?? 0
-        };
-      })
+      users: users.map((user) => buildResolvedUserSummary(user, legacyAdminUserIds, summaryByUserId))
     });
 }));
 
@@ -2025,18 +2028,57 @@ app.get("/api/admin/apartments", async (_req, res) => {
   }
 });
 
-app.get("/api/admin/clients", async (_req, res) => {
-  try {
+app.get("/api/admin/clients", async (req, res) => handleAdminRoute(req, res, async () => {
     const clientsMap = await loadClientsMap();
-    const clients = Object.entries(clientsMap).map(([id, client]) => normalizeClientRecord(id, client));
-    res.json({ ok: true, clients });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Impossible de charger les clients."
+    const invitations = await loadClientInvitations();
+    const users = await loadAllSupabaseUsers();
+    const legacyAdminUserIds = await loadLegacyAdminUserIds();
+    const clientUsers = users
+      .map((user) => buildResolvedUserSummary(user, legacyAdminUserIds))
+      .filter((user) => user.role === "client" && user.client_id);
+
+    const clientUserByClientId = new Map(clientUsers.map((user) => [String(user.client_id), user]));
+    const latestInvitationByClientId = new Map();
+
+    invitations.forEach((invitation) => {
+      const clientId = String(invitation.client_id || "").trim();
+      if (!clientId) return;
+
+      const current = latestInvitationByClientId.get(clientId);
+      const invitationCreatedAt = new Date(invitation.created_at || 0).getTime();
+      const currentCreatedAt = new Date(current?.created_at || 0).getTime();
+
+      if (!current || invitationCreatedAt >= currentCreatedAt) {
+        latestInvitationByClientId.set(clientId, invitation);
+      }
     });
-  }
-});
+
+    const clients = Object.entries(clientsMap).map(([id, client]) => {
+      const normalizedClient = normalizeClientRecord(id, client);
+      const portalUser = clientUserByClientId.get(String(id)) || null;
+      const invitation = latestInvitationByClientId.get(String(id)) || null;
+      const invitationStatus = invitation ? getInvitationStatus(invitation) : null;
+      const onboardingLink = invitation && invitationStatus === "pending"
+        ? buildOnboardingLink(req, invitation.token)
+        : null;
+
+      return {
+        ...normalizedClient,
+        portal_user_id: portalUser?.user_id || normalizedClient.onboarding_user_id || null,
+        portal_email: portalUser?.email || normalizedClient.email || invitation?.email || "",
+        portal_access_status: portalUser
+          ? (portalUser.is_deactivated ? "deactivated" : "active")
+          : invitationStatus === "pending"
+            ? "invited"
+            : "none",
+        invitation_status: invitationStatus,
+        invitation_expires_at: invitation?.expires_at || null,
+        onboarding_link: onboardingLink
+      };
+    });
+
+    return res.json({ ok: true, clients });
+}));
 
 app.post("/api/admin/clients", async (req, res) => {
   try {

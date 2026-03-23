@@ -18,7 +18,6 @@ const pageTitle = document.getElementById("pageTitle");
 const refreshBtn = document.getElementById("refreshBtn");
 const adminsBody = document.getElementById("adminsBody");
 const employeesBody = document.getElementById("employeesBody");
-const clientsUsersBody = document.getElementById("clientsUsersBody");
 const sessionsBody = document.getElementById("sessionsBody");
 const messagesBody = document.getElementById("messagesBody");
 const clientsBody = document.getElementById("clientsBody");
@@ -296,8 +295,7 @@ async function loadUsers() {
   const rows = data.users || [];
   const groupedBodies = {
     admin: adminsBody,
-    employee: employeesBody,
-    client: clientsUsersBody
+    employee: employeesBody
   };
 
   Object.values(groupedBodies).forEach((body) => {
@@ -317,6 +315,9 @@ async function loadUsers() {
 
   for (const row of rows) {
     const role = row.role || "employee";
+    if (role === "client") {
+      continue;
+    }
     const targetBody = groupedBodies[role] || employeesBody;
     const tr = document.createElement("tr");
     const activityLabel = row.today_total_seconds
@@ -498,7 +499,11 @@ function openUserActionModal({ action, userId, email }) {
       }
 
       closeModal();
-      await loadUsers();
+      if (currentTab === "clients") {
+        await loadClients();
+      } else {
+        await loadUsers();
+      }
     } catch (error) {
       statusEl.textContent = error.message || "Impossible de traiter cette action.";
       statusEl.style.color = "#991b1b";
@@ -784,13 +789,44 @@ function countLinkedApartments(clientId) {
   return allApartments.filter((apartment) => apartment.client_id === clientId).length;
 }
 
+function formatPortalAccessStatus(client) {
+  if (client.portal_access_status === "active") return "Actif";
+  if (client.portal_access_status === "deactivated") return "Désactivé";
+  if (client.portal_access_status === "invited") return "Invitation envoyée";
+  return "Aucun accès";
+}
+
+function formatInvitationStatus(client) {
+  if (client.invitation_status === "pending") return "En attente";
+  if (client.invitation_status === "completed") return "Complétée";
+  if (client.invitation_status === "expired") return "Expirée";
+  return "-";
+}
+
+async function copyText(value) {
+  if (!value) return false;
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+
+  const tempInput = document.createElement("input");
+  tempInput.value = value;
+  document.body.appendChild(tempInput);
+  tempInput.select();
+  const copied = document.execCommand("copy");
+  tempInput.remove();
+  return copied;
+}
+
 function renderClientsTable(rows) {
   if (!clientsBody) return;
 
   clientsBody.innerHTML = "";
 
   if (!rows.length) {
-    clientsBody.innerHTML = `<tr><td colspan="10">Aucun client trouvé.</td></tr>`;
+    clientsBody.innerHTML = `<tr><td colspan="13">Aucun client trouvé.</td></tr>`;
     return;
   }
 
@@ -800,6 +836,9 @@ function renderClientsTable(rows) {
 
     tr.innerHTML = `
       <td>${client.nom || "-"}</td>
+      <td>${client.portal_email || client.email || "-"}</td>
+      <td>${formatPortalAccessStatus(client)}</td>
+      <td>${formatInvitationStatus(client)}${client.onboarding_link ? " · lien disponible" : ""}</td>
       <td>${criteria.revenu_minimum ?? "-"}</td>
       <td>${formatClientCreditLabel(criteria.credit_min)}</td>
       <td>${criteria.accepte_tal ? "Oui" : "Non"}</td>
@@ -808,7 +847,16 @@ function renderClientsTable(rows) {
       <td>${Array.isArray(criteria.emplois_acceptes) && criteria.emplois_acceptes.length ? criteria.emplois_acceptes.join(", ") : "-"}</td>
       <td>${criteria.anciennete_min_mois ?? "-"}</td>
       <td>${countLinkedApartments(client.id)}</td>
-      <td><button type="button" class="secondary-btn edit-client-btn" data-id="${client.id}">Modifier</button></td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="secondary-btn edit-client-btn" data-id="${client.id}">Modifier</button>
+        ${client.onboarding_link ? `<button type="button" class="secondary-btn copy-client-link-btn" data-link="${client.onboarding_link}">Copier le lien</button>` : ""}
+        ${client.portal_user_id && client.portal_access_status !== "deactivated"
+          ? `<button type="button" class="secondary-btn deactivate-client-access-btn" data-user-id="${client.portal_user_id}" data-email="${client.portal_email || client.email || ""}">Désactiver accès</button>`
+          : ""}
+        ${client.portal_user_id
+          ? `<button type="button" class="secondary-btn delete-client-access-btn" data-user-id="${client.portal_user_id}" data-email="${client.portal_email || client.email || ""}" style="background:#fee2e2;color:#991b1b;">Supprimer accès</button>`
+          : ""}
+      </td>
     `;
 
     clientsBody.appendChild(tr);
@@ -818,6 +866,39 @@ function renderClientsTable(rows) {
     btn.addEventListener("click", () => {
       const client = allClients.find((item) => item.id === btn.dataset.id);
       if (client) fillClientForm(client);
+    });
+  });
+
+  document.querySelectorAll(".copy-client-link-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        const copied = await copyText(btn.dataset.link || "");
+        clientFormStatus.textContent = copied ? "Lien d’onboarding copié." : "Impossible de copier le lien.";
+        clientFormStatus.style.color = copied ? "green" : "red";
+      } catch {
+        clientFormStatus.textContent = "Impossible de copier le lien.";
+        clientFormStatus.style.color = "red";
+      }
+    });
+  });
+
+  document.querySelectorAll(".deactivate-client-access-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openUserActionModal({
+        action: "deactivate",
+        userId: btn.dataset.userId,
+        email: btn.dataset.email
+      });
+    });
+  });
+
+  document.querySelectorAll(".delete-client-access-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openUserActionModal({
+        action: "delete",
+        userId: btn.dataset.userId,
+        email: btn.dataset.email
+      });
     });
   });
 }
