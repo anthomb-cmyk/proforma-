@@ -611,6 +611,36 @@ async function findSupabaseUserByEmail(email) {
   }
 }
 
+async function loadAllSupabaseUsers() {
+  ensureSupabaseAdminAvailable();
+
+  const users = [];
+  let page = 1;
+  const perPage = 200;
+
+  while (true) {
+    const { data, error } = await supabaseServerClient.auth.admin.listUsers({
+      page,
+      perPage
+    });
+
+    if (error) {
+      throw createHttpError(500, error.message || "Impossible de charger les utilisateurs Supabase.");
+    }
+
+    const batch = Array.isArray(data?.users) ? data.users : [];
+    users.push(...batch);
+
+    if (batch.length < perPage) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return users;
+}
+
 async function sendClientInvitationEmail(invitation, onboardingLink) {
   if (!resendClient || !INVITATION_FROM_EMAIL) {
     return {
@@ -1704,6 +1734,106 @@ app.get("/api/admin/user-daily-time", async (req, res) => {
     res.status(500).json({
       ok: false,
       error: "Impossible de charger le temps utilisateur."
+    });
+  }
+});
+
+app.get("/api/admin/users", async (_req, res) => {
+  try {
+    const users = await loadAllSupabaseUsers();
+    const today = getTodayString();
+    const summary = await readJsonFile(USER_DAILY_TIME_PATH, []);
+    const summaryByUserId = new Map(
+      summary
+        .filter((row) => row.day === today)
+        .map((row) => [row.user_id, row])
+    );
+
+    res.json({
+      ok: true,
+      users: users.map((user) => {
+        const userSummary = summaryByUserId.get(user.id) || null;
+        return {
+          user_id: user.id,
+          email: user.email || "",
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || "",
+          created_at: user.created_at || null,
+          last_sign_in_at: user.last_sign_in_at || null,
+          is_deactivated: Boolean(user.banned_until && new Date(user.banned_until).getTime() > Date.now()),
+          banned_until: user.banned_until || null,
+          today_heartbeat_count: userSummary?.heartbeat_count ?? 0,
+          today_total_seconds: userSummary?.total_seconds ?? 0
+        };
+      })
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de charger les utilisateurs."
+    });
+  }
+});
+
+app.post("/api/admin/users/:id/deactivate", async (req, res) => {
+  try {
+    ensureSupabaseAdminAvailable();
+    const userId = String(req.params.id || "").trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Identifiant utilisateur manquant."
+      });
+    }
+
+    const { data, error } = await supabaseServerClient.auth.admin.updateUserById(userId, {
+      ban_duration: "876000h"
+    });
+
+    if (error || !data?.user) {
+      throw createHttpError(400, error?.message || "Impossible de désactiver cet utilisateur.");
+    }
+
+    return res.json({
+      ok: true,
+      user_id: userId,
+      status: "deactivated"
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de désactiver cet utilisateur."
+    });
+  }
+});
+
+app.delete("/api/admin/users/:id", async (req, res) => {
+  try {
+    ensureSupabaseAdminAvailable();
+    const userId = String(req.params.id || "").trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Identifiant utilisateur manquant."
+      });
+    }
+
+    const { error } = await supabaseServerClient.auth.admin.deleteUser(userId);
+
+    if (error) {
+      throw createHttpError(400, error.message || "Impossible de supprimer cet utilisateur.");
+    }
+
+    return res.json({
+      ok: true,
+      user_id: userId,
+      status: "deleted"
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de supprimer cet utilisateur."
     });
   }
 });

@@ -239,31 +239,147 @@ function switchTab(tabName) {
 }
 
 async function loadUsers() {
-  const today = new Date().toISOString().split("T")[0];
-  const data = await fetchJSON(`/api/admin/user-daily-time?day=${today}`);
+  const data = await fetchJSON("/api/admin/users");
 
   usersBody.innerHTML = "";
-  const rows = data.summary || [];
+  const rows = data.users || [];
 
   if (!rows.length) {
-    usersBody.innerHTML = `<tr><td colspan="5">Aucune donnée aujourd’hui.</td></tr>`;
+    usersBody.innerHTML = `<tr><td colspan="5">Aucun utilisateur trouvé.</td></tr>`;
     return;
   }
 
   for (const row of rows) {
-    const minutes = (row.total_seconds || 0) / 60;
-    const hours = (row.total_seconds || 0) / 3600;
-
     const tr = document.createElement("tr");
+    const activityLabel = row.today_total_seconds
+      ? `${(row.today_total_seconds / 60).toFixed(1)} min · ${row.today_heartbeat_count ?? 0} heartbeat(s)`
+      : "Aucune activité aujourd’hui";
     tr.innerHTML = `
-      <td>${row.full_name || row.user_id || "-"}</td>
-      <td>${row.day || "-"}</td>
-      <td>${row.heartbeat_count ?? 0}</td>
-      <td>${minutes.toFixed(2)} min</td>
-      <td>${hours.toFixed(2)} h</td>
+      <td>${row.full_name || row.email || row.user_id || "-"}</td>
+      <td>${row.email || "-"}</td>
+      <td>${row.is_deactivated ? "Désactivé" : "Actif"}</td>
+      <td>${formatDate(row.created_at)}</td>
+      <td>${activityLabel}</td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="secondary-btn deactivate-user-btn" data-id="${row.user_id}" data-email="${row.email || ""}" ${row.is_deactivated ? "disabled" : ""}>
+          Désactiver
+        </button>
+        <button type="button" class="secondary-btn delete-user-btn" data-id="${row.user_id}" data-email="${row.email || ""}" style="background:#fee2e2;color:#991b1b;">
+          Supprimer définitivement
+        </button>
+      </td>
     `;
     usersBody.appendChild(tr);
   }
+
+  document.querySelectorAll(".deactivate-user-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      openUserActionModal({
+        action: "deactivate",
+        userId: button.dataset.id,
+        email: button.dataset.email
+      });
+    });
+  });
+
+  document.querySelectorAll(".delete-user-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      openUserActionModal({
+        action: "delete",
+        userId: button.dataset.id,
+        email: button.dataset.email
+      });
+    });
+  });
+}
+
+function openUserActionModal({ action, userId, email }) {
+  const existingModal = document.getElementById("userActionModal");
+  if (existingModal) {
+    existingModal.remove();
+  }
+
+  const isDelete = action === "delete";
+  const modal = document.createElement("div");
+  modal.id = "userActionModal";
+  modal.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;";
+  modal.innerHTML = `
+    <div style="width:min(560px,100%);max-height:85vh;overflow:auto;background:#fff;border-radius:24px;padding:24px;box-shadow:0 24px 60px rgba(15,23,42,.22);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px;">
+        <div>
+          <div style="font-size:.85rem;font-weight:800;color:${isDelete ? "#991b1b" : "#1e90ff"};text-transform:uppercase;letter-spacing:.05em;">
+            ${isDelete ? "Suppression permanente" : "Désactivation utilisateur"}
+          </div>
+          <h3 style="margin:6px 0 0;color:#191d45;">${isDelete ? "Confirmer la suppression" : "Confirmer la désactivation"}</h3>
+          <div style="margin-top:8px;color:#6b7280;">${email || userId}</div>
+        </div>
+        <button type="button" id="closeUserActionModal" class="secondary-btn">Fermer</button>
+      </div>
+      <div style="display:grid;gap:14px;">
+        <div style="padding:14px 16px;border-radius:16px;background:${isDelete ? "#fff1f2" : "#eff6ff"};color:${isDelete ? "#9f1239" : "#1d4ed8"};">
+          ${isDelete
+            ? "Cette action supprime définitivement l’accès Supabase de cet utilisateur. Les données métier liées seront conservées."
+            : "Cette action bloque les futures connexions de cet utilisateur sans supprimer ses données métier."}
+        </div>
+        ${isDelete ? `
+          <label style="display:grid;gap:8px;font-weight:700;">
+            Tapez SUPPRIMER pour confirmer
+            <input id="deleteUserConfirmInput" type="text" placeholder="SUPPRIMER" style="border:1px solid rgba(79,70,229,.14);border-radius:14px;padding:12px 14px;font:inherit;" />
+          </label>
+        ` : ""}
+        <div id="userActionStatus" style="font-weight:700;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
+          <button type="button" id="confirmUserActionBtn" class="primary-btn" style="${isDelete ? "background:#991b1b;" : ""}">
+            ${isDelete ? "Supprimer définitivement" : "Désactiver l’utilisateur"}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const closeModal = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) {
+      closeModal();
+    }
+  });
+  document.getElementById("closeUserActionModal")?.addEventListener("click", closeModal);
+
+  document.getElementById("confirmUserActionBtn")?.addEventListener("click", async () => {
+    const statusEl = document.getElementById("userActionStatus");
+    const confirmInput = document.getElementById("deleteUserConfirmInput");
+    const confirmBtn = document.getElementById("confirmUserActionBtn");
+
+    if (isDelete && String(confirmInput?.value || "").trim() !== "SUPPRIMER") {
+      statusEl.textContent = "Tapez SUPPRIMER pour confirmer la suppression permanente.";
+      statusEl.style.color = "#991b1b";
+      return;
+    }
+
+    confirmBtn.disabled = true;
+    statusEl.textContent = "";
+
+    try {
+      if (isDelete) {
+        await fetchJSON(`/api/admin/users/${encodeURIComponent(userId)}`, {
+          method: "DELETE"
+        });
+      } else {
+        await fetchJSON(`/api/admin/users/${encodeURIComponent(userId)}/deactivate`, {
+          method: "POST"
+        });
+      }
+
+      closeModal();
+      await loadUsers();
+    } catch (error) {
+      statusEl.textContent = error.message || "Impossible de traiter cette action.";
+      statusEl.style.color = "#991b1b";
+      confirmBtn.disabled = false;
+    }
+  });
 }
 
 async function loadSessions() {
