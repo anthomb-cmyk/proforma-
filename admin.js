@@ -1,5 +1,7 @@
 const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
+const EMPLOYEE_APP_URL = "https://fluxlocatif.up.railway.app";
+const CLIENT_APP_URL = "https://client.fluxlocatif.com";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -14,7 +16,9 @@ const tabs = {
 
 const pageTitle = document.getElementById("pageTitle");
 const refreshBtn = document.getElementById("refreshBtn");
-const usersBody = document.getElementById("usersBody");
+const adminsBody = document.getElementById("adminsBody");
+const employeesBody = document.getElementById("employeesBody");
+const clientsUsersBody = document.getElementById("clientsUsersBody");
 const sessionsBody = document.getElementById("sessionsBody");
 const messagesBody = document.getElementById("messagesBody");
 const clientsBody = document.getElementById("clientsBody");
@@ -45,6 +49,10 @@ const editingClientBadge = document.getElementById("editingClientBadge");
 const cancelClientEditBtn = document.getElementById("cancelClientEditBtn");
 const submitClientBtn = document.getElementById("submitClientBtn");
 const openInviteClientBtn = document.getElementById("openInviteClientBtn");
+const adminUserForm = document.getElementById("adminUserForm");
+const employeeUserForm = document.getElementById("employeeUserForm");
+const adminUserFormStatus = document.getElementById("adminUserFormStatus");
+const employeeUserFormStatus = document.getElementById("employeeUserFormStatus");
 
 const candidateStatusFilter = document.getElementById("candidateStatusFilter");
 const candidateSearch = document.getElementById("candidateSearch");
@@ -55,6 +63,14 @@ let allApartments = [];
 let allCandidates = [];
 let lastPendingCandidatesCount = 0;
 let allClients = [];
+
+function resolveUserRole(user) {
+  return String(
+    user?.user_metadata?.role ||
+    user?.app_metadata?.role ||
+    ""
+  ).trim().toLowerCase();
+}
 
 function showFatalError(message) {
   document.body.innerHTML = `
@@ -94,6 +110,28 @@ async function requireAdmin() {
   }
 
   const userId = session.user.id;
+  const clientId = String(
+    session.user?.user_metadata?.client_id ||
+    session.user?.user_metadata?.clientId ||
+    session.user?.app_metadata?.client_id ||
+    session.user?.app_metadata?.clientId ||
+    ""
+  ).trim();
+  const role = resolveUserRole(session.user);
+
+  if (role === "admin") {
+    return session.user;
+  }
+
+  if (role === "client") {
+    window.location.href = `${CLIENT_APP_URL}/client.html`;
+    throw new Error("Les clients doivent utiliser le portail client.");
+  }
+
+  if (role === "employee") {
+    window.location.href = `${EMPLOYEE_APP_URL}/`;
+    throw new Error("Les employés doivent utiliser l’application employé.");
+  }
 
   const { data: adminRow, error: adminError } = await supabaseClient
     .from("admin_users")
@@ -106,6 +144,12 @@ async function requireAdmin() {
   }
 
   if (!adminRow) {
+    if (clientId) {
+      window.location.href = `${CLIENT_APP_URL}/client.html`;
+      throw new Error("Les clients doivent utiliser le portail client.");
+    }
+
+    window.location.href = `${EMPLOYEE_APP_URL}/`;
     throw new Error(`Votre compte est connecté, mais n'existe pas dans admin_users. UUID actuel: ${userId}`);
   }
 
@@ -197,12 +241,21 @@ function parseOptionalNumber(value) {
 }
 
 async function fetchJSON(url, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
+  if (String(url || "").startsWith("/api/admin")) {
+    const session = await waitForActiveSession(1, 0);
+    if (session?.access_token) {
+      headers.Authorization = `Bearer ${session.access_token}`;
+    }
+  }
+
   const res = await fetch(url, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
+    headers
   });
 
   const data = await res.json().catch(() => ({}));
@@ -240,16 +293,31 @@ function switchTab(tabName) {
 
 async function loadUsers() {
   const data = await fetchJSON("/api/admin/users");
-
-  usersBody.innerHTML = "";
   const rows = data.users || [];
+  const groupedBodies = {
+    admin: adminsBody,
+    employee: employeesBody,
+    client: clientsUsersBody
+  };
+
+  Object.values(groupedBodies).forEach((body) => {
+    if (body) {
+      body.innerHTML = "";
+    }
+  });
 
   if (!rows.length) {
-    usersBody.innerHTML = `<tr><td colspan="5">Aucun utilisateur trouvé.</td></tr>`;
+    Object.values(groupedBodies).forEach((body) => {
+      if (body) {
+        body.innerHTML = `<tr><td colspan="6">Aucun utilisateur trouvé.</td></tr>`;
+      }
+    });
     return;
   }
 
   for (const row of rows) {
+    const role = row.role || "employee";
+    const targetBody = groupedBodies[role] || employeesBody;
     const tr = document.createElement("tr");
     const activityLabel = row.today_total_seconds
       ? `${(row.today_total_seconds / 60).toFixed(1)} min · ${row.today_heartbeat_count ?? 0} heartbeat(s)`
@@ -269,8 +337,14 @@ async function loadUsers() {
         </button>
       </td>
     `;
-    usersBody.appendChild(tr);
+    targetBody.appendChild(tr);
   }
+
+  Object.values(groupedBodies).forEach((body) => {
+    if (body && !body.children.length) {
+      body.innerHTML = `<tr><td colspan="6">Aucun utilisateur dans cette catégorie.</td></tr>`;
+    }
+  });
 
   document.querySelectorAll(".deactivate-user-btn").forEach((button) => {
     button.addEventListener("click", () => {
@@ -291,6 +365,57 @@ async function loadUsers() {
       });
     });
   });
+}
+
+function setManualUserFormStatus(element, message = "", type = "") {
+  if (!element) return;
+  element.textContent = message;
+  element.style.color = type === "error" ? "#991b1b" : type === "success" ? "#166534" : "";
+}
+
+async function createManualUser(role, fullName, email, password) {
+  return fetchJSON("/api/admin/users", {
+    method: "POST",
+    body: JSON.stringify({
+      role,
+      full_name: fullName,
+      email,
+      password
+    })
+  });
+}
+
+async function handleManualUserFormSubmit(event, role, statusElement) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const fullNameInput = form.querySelector('input[type="text"]');
+  const emailInput = form.querySelector('input[type="email"]');
+  const passwordInput = form.querySelector('input[type="password"]');
+  const submitButton = form.querySelector('button[type="submit"]');
+
+  setManualUserFormStatus(statusElement, "", "");
+  submitButton.disabled = true;
+
+  try {
+    await createManualUser(
+      role,
+      fullNameInput.value.trim(),
+      emailInput.value.trim(),
+      passwordInput.value
+    );
+
+    form.reset();
+    setManualUserFormStatus(
+      statusElement,
+      role === "admin" ? "Administrateur créé avec succès." : "Employé créé avec succès.",
+      "success"
+    );
+    await loadUsers();
+  } catch (error) {
+    setManualUserFormStatus(statusElement, error.message || "Impossible de créer ce compte.", "error");
+  } finally {
+    submitButton.disabled = false;
+  }
 }
 
 function openUserActionModal({ action, userId, email }) {
@@ -1261,6 +1386,14 @@ if (apartmentForm) {
 
 if (clientForm) {
   clientForm.addEventListener("submit", createOrUpdateClient);
+}
+
+if (adminUserForm) {
+  adminUserForm.addEventListener("submit", (event) => handleManualUserFormSubmit(event, "admin", adminUserFormStatus));
+}
+
+if (employeeUserForm) {
+  employeeUserForm.addEventListener("submit", (event) => handleManualUserFormSubmit(event, "employee", employeeUserFormStatus));
 }
 
 if (cancelEditBtn) {

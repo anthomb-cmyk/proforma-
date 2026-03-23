@@ -306,6 +306,14 @@ function resolveClientIdFromUser(user) {
   ).trim();
 }
 
+function resolveRoleFromUser(user) {
+  return String(
+    user?.user_metadata?.role ||
+    user?.app_metadata?.role ||
+    ""
+  ).trim().toLowerCase();
+}
+
 function toListingRecord(key, value) {
   const ref = normalizeRef(value?.ref || key);
   const preloadedLocation = getPreloadedLocation(value?.ville ?? value?.city);
@@ -611,6 +619,34 @@ async function findSupabaseUserByEmail(email) {
   }
 }
 
+async function createManualUserAccount({ role, fullName, email, password }) {
+  ensureSupabaseAdminAvailable();
+
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  if (!["admin", "employee"].includes(normalizedRole)) {
+    throw createHttpError(400, "Rôle invalide.");
+  }
+
+  const { data, error } = await supabaseServerClient.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      full_name: fullName,
+      role: normalizedRole
+    },
+    app_metadata: {
+      role: normalizedRole
+    }
+  });
+
+  if (error || !data?.user) {
+    throw createHttpError(400, error?.message || "Impossible de créer le compte utilisateur.");
+  }
+
+  return data.user;
+}
+
 async function loadAllSupabaseUsers() {
   ensureSupabaseAdminAvailable();
 
@@ -639,6 +675,22 @@ async function loadAllSupabaseUsers() {
   }
 
   return users;
+}
+
+async function loadLegacyAdminUserIds() {
+  try {
+    const { data, error } = await supabaseServerClient
+      .from("admin_users")
+      .select("user_id");
+
+    if (error) {
+      throw error;
+    }
+
+    return new Set((data || []).map((row) => String(row.user_id || "").trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
 }
 
 async function sendClientInvitationEmail(invitation, onboardingLink) {
@@ -1398,12 +1450,69 @@ async function resolveClientContext(req) {
 
   const user = data.user;
   const clientId = resolveClientIdFromUser(user);
+  const role = resolveRoleFromUser(user);
+
+  if (role && role !== "client") {
+    throw createHttpError(403, "Accès client refusé.");
+  }
 
   if (!clientId) {
     throw createHttpError(403, "Accès client refusé.");
   }
 
-  return { user, clientId };
+  return { user, clientId, role: role || "client" };
+}
+
+async function resolveAdminContext(req) {
+  if (!supabaseServerClient) {
+    throw createHttpError(503, "Authentification admin backend non configurée.");
+  }
+
+  const accessToken = getBearerToken(req);
+  if (!accessToken) {
+    throw createHttpError(401, "Jeton d’authentification manquant.");
+  }
+
+  const { data, error } = await supabaseServerClient.auth.getUser(accessToken);
+
+  if (error || !data?.user) {
+    throw createHttpError(401, "Session admin invalide.");
+  }
+
+  const user = data.user;
+  const role = resolveRoleFromUser(user);
+
+  if (role === "admin") {
+    return { user, role };
+  }
+
+  const { data: adminRow, error: adminError } = await supabaseServerClient
+    .from("admin_users")
+    .select("user_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (adminError) {
+    throw createHttpError(500, "Erreur lecture admin_users.");
+  }
+
+  if (!adminRow) {
+    throw createHttpError(403, "Accès administrateur refusé.");
+  }
+
+  return { user, role: "admin" };
+}
+
+async function handleAdminRoute(req, res, handler) {
+  try {
+    const context = await resolveAdminContext(req);
+    return await handler(context);
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Erreur admin."
+    });
+  }
 }
 
 async function handleClientRoute(req, res, handler) {
@@ -1738,9 +1847,9 @@ app.get("/api/admin/user-daily-time", async (req, res) => {
   }
 });
 
-app.get("/api/admin/users", async (_req, res) => {
-  try {
+app.get("/api/admin/users", async (req, res) => handleAdminRoute(req, res, async () => {
     const users = await loadAllSupabaseUsers();
+    const legacyAdminUserIds = await loadLegacyAdminUserIds();
     const today = getTodayString();
     const summary = await readJsonFile(USER_DAILY_TIME_PATH, []);
     const summaryByUserId = new Map(
@@ -1749,14 +1858,24 @@ app.get("/api/admin/users", async (_req, res) => {
         .map((row) => [row.user_id, row])
     );
 
-    res.json({
+    return res.json({
       ok: true,
       users: users.map((user) => {
         const userSummary = summaryByUserId.get(user.id) || null;
+        const explicitRole = resolveRoleFromUser(user);
+        const resolvedRole = explicitRole || (
+          legacyAdminUserIds.has(String(user.id || "").trim())
+            ? "admin"
+            : resolveClientIdFromUser(user)
+              ? "client"
+              : "employee"
+        );
         return {
           user_id: user.id,
           email: user.email || "",
           full_name: user.user_metadata?.full_name || user.user_metadata?.name || "",
+          role: resolvedRole,
+          client_id: resolveClientIdFromUser(user) || null,
           created_at: user.created_at || null,
           last_sign_in_at: user.last_sign_in_at || null,
           is_deactivated: Boolean(user.banned_until && new Date(user.banned_until).getTime() > Date.now()),
@@ -1766,16 +1885,40 @@ app.get("/api/admin/users", async (_req, res) => {
         };
       })
     });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message || "Impossible de charger les utilisateurs."
-    });
-  }
-});
+}));
 
-app.post("/api/admin/users/:id/deactivate", async (req, res) => {
-  try {
+app.post("/api/admin/users", async (req, res) => handleAdminRoute(req, res, async () => {
+    const role = String(req.body?.role || "").trim().toLowerCase();
+    const fullName = String(req.body?.full_name || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+
+    if (!fullName || !email || !password || !role) {
+      return res.status(400).json({
+        ok: false,
+        error: "full_name, email, password et role sont obligatoires."
+      });
+    }
+
+    const user = await createManualUserAccount({
+      role,
+      fullName,
+      email,
+      password
+    });
+
+    return res.status(201).json({
+      ok: true,
+      user: {
+        user_id: user.id,
+        email: user.email || "",
+        full_name: user.user_metadata?.full_name || "",
+        role: resolveRoleFromUser(user)
+      }
+    });
+}));
+
+app.post("/api/admin/users/:id/deactivate", async (req, res) => handleAdminRoute(req, res, async () => {
     ensureSupabaseAdminAvailable();
     const userId = String(req.params.id || "").trim();
 
@@ -1799,16 +1942,9 @@ app.post("/api/admin/users/:id/deactivate", async (req, res) => {
       user_id: userId,
       status: "deactivated"
     });
-  } catch (error) {
-    return res.status(error.status || 500).json({
-      ok: false,
-      error: error.message || "Impossible de désactiver cet utilisateur."
-    });
-  }
-});
+}));
 
-app.delete("/api/admin/users/:id", async (req, res) => {
-  try {
+app.delete("/api/admin/users/:id", async (req, res) => handleAdminRoute(req, res, async () => {
     ensureSupabaseAdminAvailable();
     const userId = String(req.params.id || "").trim();
 
@@ -1830,13 +1966,7 @@ app.delete("/api/admin/users/:id", async (req, res) => {
       user_id: userId,
       status: "deleted"
     });
-  } catch (error) {
-    return res.status(error.status || 500).json({
-      ok: false,
-      error: error.message || "Impossible de supprimer cet utilisateur."
-    });
-  }
-});
+}));
 
 app.get("/api/admin/chat-sessions", async (_req, res) => {
   try {
@@ -2045,6 +2175,7 @@ app.post("/api/client-onboarding/account", async (req, res) => {
       password,
       email_confirm: true,
       user_metadata: {
+        role: "client",
         client_id: invitation.client_id,
         full_name: fullName,
         company_name: companyName,
@@ -2052,6 +2183,7 @@ app.post("/api/client-onboarding/account", async (req, res) => {
         main_city: mainCity
       },
       app_metadata: {
+        role: "client",
         client_id: invitation.client_id
       }
     });
@@ -2158,6 +2290,7 @@ app.post("/api/client-onboarding/link-existing-account", async (req, res) => {
     const { data: updatedUserData, error: updateError } = await supabaseServerClient.auth.admin.updateUserById(sessionUser.id, {
       user_metadata: {
         ...currentUserMetadata,
+        role: "client",
         client_id: invitation.client_id,
         full_name: fullName,
         company_name: companyName,
@@ -2166,6 +2299,7 @@ app.post("/api/client-onboarding/link-existing-account", async (req, res) => {
       },
       app_metadata: {
         ...currentAppMetadata,
+        role: "client",
         client_id: invitation.client_id
       }
     });

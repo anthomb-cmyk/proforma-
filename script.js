@@ -1,5 +1,7 @@
 const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
+const EMPLOYEE_APP_URL = "https://fluxlocatif.up.railway.app";
+const CLIENT_APP_URL = "https://client.fluxlocatif.com";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -66,6 +68,14 @@ function resolveClientId(user) {
   ).trim();
 }
 
+function resolveUserRole(user) {
+  return String(
+    user?.user_metadata?.role ||
+    user?.app_metadata?.role ||
+    ""
+  ).trim().toLowerCase();
+}
+
 async function isAdminUser(userId) {
   if (!userId) return false;
 
@@ -110,14 +120,30 @@ async function requireLogin() {
 
   const user = session.user;
   const userId = user?.id;
+  const role = resolveUserRole(user);
+
+  if (role === "admin") {
+    window.location.href = `${EMPLOYEE_APP_URL}/admin.html`;
+    throw new Error("Admin users must use admin platform");
+  }
+
+  if (role === "client") {
+    window.location.href = `${CLIENT_APP_URL}/client.html`;
+    throw new Error("Client users must use client platform");
+  }
+
+  if (role === "employee") {
+    chatState.currentUser = user;
+    return session.user;
+  }
 
   if (await isAdminUser(userId)) {
-    window.location.href = "/admin.html";
+    window.location.href = `${EMPLOYEE_APP_URL}/admin.html`;
     throw new Error("Admin users must use admin platform");
   }
 
   if (resolveClientId(user)) {
-    window.location.href = "/client.html";
+    window.location.href = `${CLIENT_APP_URL}/client.html`;
     throw new Error("Client users must use client platform");
   }
 

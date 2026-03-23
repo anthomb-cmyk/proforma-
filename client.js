@@ -1,5 +1,7 @@
 const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
+const EMPLOYEE_APP_URL = "https://fluxlocatif.up.railway.app";
+const CLIENT_APP_URL = "https://client.fluxlocatif.com";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -91,6 +93,14 @@ function resolveClientId(user) {
   ).trim();
 }
 
+function resolveUserRole(user) {
+  return String(
+    user?.user_metadata?.role ||
+    user?.app_metadata?.role ||
+    ""
+  ).trim().toLowerCase();
+}
+
 function isPositiveReason(reason) {
   return /conforme|accepté|permis|autorisé/i.test(reason || "");
 }
@@ -161,9 +171,15 @@ async function requireLogin() {
   state.currentSession = session;
   state.currentUser = user;
   state.clientId = resolveClientId(user);
+  const role = resolveUserRole(user);
+
+  if (role && role !== "client") {
+    window.location.href = role === "admin" ? `${EMPLOYEE_APP_URL}/admin.html` : `${EMPLOYEE_APP_URL}/`;
+    throw new Error("Ce rôle ne peut pas utiliser le portail client.");
+  }
 
   if (!state.clientId) {
-    window.location.href = "/";
+    window.location.href = `${EMPLOYEE_APP_URL}/`;
     throw new Error("Employee users must use employee platform.");
   }
 
@@ -176,9 +192,7 @@ function handleClientRouteFailure(error) {
     return;
   }
 
-  // We can safely infer "client" from client_id metadata, but we cannot safely infer "admin"
-  // without a dedicated backend role endpoint. Non-client or invalid-client contexts fall back to /.
-  window.location.href = "/";
+  window.location.href = `${EMPLOYEE_APP_URL}/`;
 }
 
 function switchTab(tabName) {

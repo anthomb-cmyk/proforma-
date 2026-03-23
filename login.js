@@ -1,5 +1,7 @@
 const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
+const EMPLOYEE_APP_URL = "https://fluxlocatif.up.railway.app";
+const CLIENT_APP_URL = "https://client.fluxlocatif.com";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -8,10 +10,16 @@ const emailInput = document.getElementById("email");
 const passwordInput = document.getElementById("password");
 const loginStatus = document.getElementById("loginStatus");
 
-function getPostLoginDestination() {
-  const params = new URLSearchParams(window.location.search);
-  const next = params.get("next") || "/";
-  return next.startsWith("/") ? next : "/";
+function getRoleDestination(role) {
+  if (role === "admin") {
+    return `${EMPLOYEE_APP_URL}/admin.html`;
+  }
+
+  if (role === "client") {
+    return `${CLIENT_APP_URL}/client.html`;
+  }
+
+  return `${EMPLOYEE_APP_URL}/`;
 }
 
 function resolveClientId(user) {
@@ -24,12 +32,33 @@ function resolveClientId(user) {
   ).trim();
 }
 
+function resolveUserRole(user) {
+  return String(
+    user?.user_metadata?.role ||
+    user?.app_metadata?.role ||
+    ""
+  ).trim().toLowerCase();
+}
+
 async function resolveDefaultDestination(session) {
   const user = session?.user || null;
   const userId = user?.id;
+  const role = resolveUserRole(user);
 
   if (!userId) {
-    return "/";
+    return getRoleDestination("employee");
+  }
+
+  if (role === "admin") {
+    return getRoleDestination("admin");
+  }
+
+  if (role === "client") {
+    return getRoleDestination("client");
+  }
+
+  if (role === "employee") {
+    return getRoleDestination("employee");
   }
 
   const { data: adminRow, error } = await supabaseClient
@@ -43,25 +72,14 @@ async function resolveDefaultDestination(session) {
   }
 
   if (adminRow) {
-    return "/admin.html";
+    return getRoleDestination("admin");
   }
 
   if (resolveClientId(user)) {
-    return "/client.html";
+    return getRoleDestination("client");
   }
 
-  return "/";
-}
-
-async function resolvePostLoginDestination(session) {
-  const params = new URLSearchParams(window.location.search);
-  const next = params.get("next");
-
-  if (next && next.startsWith("/")) {
-    return next;
-  }
-
-  return resolveDefaultDestination(session);
+  return getRoleDestination("employee");
 }
 
 async function waitForSession(maxAttempts = 10, delayMs = 150) {
@@ -93,7 +111,7 @@ async function redirectIfLoggedIn() {
   const session = await waitForSession(1, 0);
 
   if (session) {
-    const destination = await resolvePostLoginDestination(session);
+    const destination = await resolveDefaultDestination(session);
     window.location.replace(destination);
   }
 }
@@ -124,7 +142,7 @@ if (loginForm) {
         return;
       }
 
-      const destination = await resolvePostLoginDestination(session);
+      const destination = await resolveDefaultDestination(session);
       window.location.replace(destination);
     } catch (error) {
       setLoginStatus(error.message || "Erreur de connexion.", "error");

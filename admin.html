@@ -39,7 +39,48 @@
       </header>
 
       <section class="card" id="usersTab">
-        <div class="table-wrap">
+        <div class="form-card" style="margin-bottom:22px;">
+          <div style="display:grid;gap:18px;">
+            <div>
+              <h3 style="margin:0 0 6px;">Administrateurs</h3>
+              <div style="color:#6b7280;">Créer manuellement un compte administrateur avec accès à <code>/admin.html</code>.</div>
+            </div>
+            <form id="adminUserForm" class="admin-form">
+              <div class="form-grid">
+                <input id="adminUserFullName" type="text" placeholder="Nom complet" required />
+                <input id="adminUserEmail" type="email" placeholder="Courriel" required />
+                <input id="adminUserPassword" type="password" placeholder="Mot de passe" required />
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary-btn">Créer l’administrateur</button>
+              </div>
+            </form>
+            <div id="adminUserFormStatus"></div>
+          </div>
+        </div>
+
+        <div class="form-card" style="margin-bottom:22px;">
+          <div style="display:grid;gap:18px;">
+            <div>
+              <h3 style="margin:0 0 6px;">Employés</h3>
+              <div style="color:#6b7280;">Créer manuellement un compte employé avec accès à <code>/</code>.</div>
+            </div>
+            <form id="employeeUserForm" class="admin-form">
+              <div class="form-grid">
+                <input id="employeeUserFullName" type="text" placeholder="Nom complet" required />
+                <input id="employeeUserEmail" type="email" placeholder="Courriel" required />
+                <input id="employeeUserPassword" type="password" placeholder="Mot de passe" required />
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary-btn">Créer l’employé</button>
+              </div>
+            </form>
+            <div id="employeeUserFormStatus"></div>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-bottom:22px;">
+          <h3 style="margin:0 0 14px;">Administrateurs</h3>
           <table>
             <thead>
               <tr>
@@ -51,7 +92,41 @@
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="usersBody"></tbody>
+            <tbody id="adminsBody"></tbody>
+          </table>
+        </div>
+
+        <div class="table-wrap" style="margin-bottom:22px;">
+          <h3 style="margin:0 0 14px;">Employés</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Nom</th>
+                <th>Courriel</th>
+                <th>Statut</th>
+                <th>Créé le</th>
+                <th>Activité du jour</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="employeesBody"></tbody>
+          </table>
+        </div>
+
+        <div class="table-wrap">
+          <h3 style="margin:0 0 14px;">Clients</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Nom</th>
+                <th>Courriel</th>
+                <th>Statut</th>
+                <th>Créé le</th>
+                <th>Activité du jour</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="clientsUsersBody"></tbody>
           </table>
         </div>
       </section>
