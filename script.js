@@ -139,7 +139,7 @@ async function requireLogin() {
   const session = await waitForActiveSession();
 
   if (!session) {
-    window.location.href = `/login.html?next=${encodeURIComponent(window.location.pathname || "/")}`;
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname || "/employee")}`;
     throw new Error("Not logged in");
   }
 
@@ -149,7 +149,7 @@ async function requireLogin() {
   chatState.currentSession = session;
 
   if (role === "admin") {
-    window.location.href = `${EMPLOYEE_APP_URL}/admin.html`;
+    window.location.href = `${EMPLOYEE_APP_URL}/admin`;
     throw new Error("Admin users must use admin platform");
   }
 
@@ -164,7 +164,7 @@ async function requireLogin() {
   }
 
   if (await isAdminUser(userId)) {
-    window.location.href = `${EMPLOYEE_APP_URL}/admin.html`;
+    window.location.href = `${EMPLOYEE_APP_URL}/admin`;
     throw new Error("Admin users must use admin platform");
   }
 
@@ -1111,7 +1111,7 @@ if (employeeMessageForm) {
 
 supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
-    window.location.href = `/login.html?next=${encodeURIComponent(window.location.pathname || "/")}`;
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname || "/employee")}`;
     return;
   }
 

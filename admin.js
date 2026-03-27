@@ -114,7 +114,7 @@ async function requireAdmin() {
   const session = await waitForActiveSession();
 
   if (!session) {
-    window.location.href = `/login.html?next=${encodeURIComponent("/admin.html")}`;
+    window.location.href = `/login?next=${encodeURIComponent("/admin")}`;
     throw new Error("No active session. You must log in first.");
   }
 
@@ -138,7 +138,7 @@ async function requireAdmin() {
   }
 
   if (role === "employee") {
-    window.location.href = `${EMPLOYEE_APP_URL}/`;
+    window.location.href = `${EMPLOYEE_APP_URL}/employee`;
     throw new Error("Les employés doivent utiliser l’application employé.");
   }
 
@@ -158,7 +158,7 @@ async function requireAdmin() {
       throw new Error("Les clients doivent utiliser le portail client.");
     }
 
-    window.location.href = `${EMPLOYEE_APP_URL}/`;
+    window.location.href = `${EMPLOYEE_APP_URL}/employee`;
     throw new Error(`Votre compte est connecté, mais n'existe pas dans admin_users. UUID actuel: ${userId}`);
   }
 
@@ -1674,7 +1674,7 @@ if (listingTaskForm) {
 
 supabaseClient.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") {
-    window.location.href = `/login.html?next=${encodeURIComponent("/admin.html")}`;
+    window.location.href = `/login?next=${encodeURIComponent("/admin")}`;
   }
 });
 

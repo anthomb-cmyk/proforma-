@@ -12,14 +12,14 @@ const loginStatus = document.getElementById("loginStatus");
 
 function getRoleDestination(role) {
   if (role === "admin") {
-    return `${EMPLOYEE_APP_URL}/admin.html`;
+    return `${EMPLOYEE_APP_URL}/admin`;
   }
 
   if (role === "client") {
     return `${CLIENT_APP_URL}/client.html`;
   }
 
-  return `${EMPLOYEE_APP_URL}/`;
+  return `${EMPLOYEE_APP_URL}/employee`;
 }
 
 function resolveClientId(user) {
