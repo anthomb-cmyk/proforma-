@@ -86,6 +86,14 @@ app.use(express.static(path.join(__dirname, "public"), {
   }
 }));
 
+app.get("/employee-style.css", (req, res) => {
+  return res.sendFile(path.join(__dirname, "style.css"));
+});
+
+app.get("/employee.js", (req, res) => {
+  return res.sendFile(path.join(__dirname, "script.js"));
+});
+
 app.get("/", (req, res) => {
   return res.sendFile(path.join(__dirname, "public", "index.html"));
 });
