@@ -78,7 +78,29 @@ app.use((req, res, next) => {
   return next();
 });
 
-app.use(express.static(__dirname));
+app.use("/public", express.static(path.join(__dirname, "public")));
+
+app.get("/", (req, res) => {
+  return res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.get("/index.html", (req, res) => {
+  return res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.get("/login", (req, res) => {
+  return res.sendFile(path.join(__dirname, "login.html"));
+});
+
+app.get("/admin", (req, res) => {
+  return res.sendFile(path.join(__dirname, "admin.html"));
+});
+
+app.get("/employee", (req, res) => {
+  return res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.use(express.static(__dirname, { index: false }));
 
 async function ensureDataFile(filePath, fallbackValue) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -3286,10 +3308,9 @@ app.get("*", (req, res, next) => {
   }
 
   const staticPages = {
-    "/": "index.html",
-    "/index.html": "index.html",
-    "/admin.html": "admin.html",
     "/login.html": "login.html",
+    "/admin.html": "admin.html",
+    "/employee.html": "index.html",
     "/client.html": "client.html",
     "/client-onboarding.html": "client-onboarding.html"
   };
