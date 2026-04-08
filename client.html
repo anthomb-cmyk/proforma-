@@ -271,10 +271,59 @@
       letter-spacing: -0.05em;
       line-height: 1.04;
       font-weight: 700;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .client-topbar-main {
       min-width: 0;
+    }
+
+    .client-mobile-brand {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      margin-bottom: 8px;
+    }
+
+    .client-mobile-brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      background: #3b82f6;
+      color: #ffffff;
+      font-family: var(--font-headline);
+      font-size: 0.9rem;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.18);
+    }
+
+    .client-mobile-brand-copy {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .client-mobile-brand-title {
+      color: var(--text);
+      font-family: var(--font-headline);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      overflow-wrap: anywhere;
+    }
+
+    .client-mobile-brand-subtitle {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
     }
 
     .client-topbar-side {
@@ -318,6 +367,8 @@
       letter-spacing: -0.03em;
       color: var(--text);
       margin-bottom: 2px;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .topbar-micro-sub {
@@ -351,6 +402,8 @@
       font-size: clamp(1.52rem, 2.1vw, 1.72rem);
       letter-spacing: -0.04em;
       font-weight: 700;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .module-header p {
@@ -377,6 +430,10 @@
       font-weight: 700;
       letter-spacing: 0.14em;
       text-transform: uppercase;
+      max-width: 100%;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      white-space: normal;
     }
 
     .workspace-status-pill {
@@ -438,6 +495,9 @@
       font-weight: 700;
       letter-spacing: 0.14em;
       text-transform: uppercase;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      line-height: 1.35;
     }
 
     .stat-value {
@@ -781,6 +841,8 @@
       font-size: 14px;
       font-weight: 600;
       letter-spacing: -0.02em;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .dashboard-priority-meta {
@@ -959,6 +1021,8 @@
       font-weight: 600;
       letter-spacing: -0.04em;
       color: var(--text);
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .apartment-pipeline-meta {
@@ -1200,6 +1264,8 @@
       font-weight: 600;
       letter-spacing: -0.03em;
       color: var(--text);
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .candidate-review-meta {
@@ -1608,6 +1674,9 @@
       font-size: 13px;
       font-weight: 600;
       letter-spacing: -0.01em;
+      white-space: normal;
+      line-height: 1.2;
+      text-align: center;
     }
 
     .client-mobile-nav .menu-btn.active {
@@ -1665,6 +1734,10 @@
         padding: 10px 12px;
         max-width: 100%;
         min-width: 0;
+      }
+
+      .client-mobile-brand {
+        display: inline-flex;
       }
 
       .client-topbar-side {
@@ -1860,6 +1933,18 @@
         line-height: 1.05;
       }
 
+      .client-mobile-brand {
+        margin-bottom: 6px;
+      }
+
+      .client-mobile-brand-title {
+        font-size: 13px;
+      }
+
+      .client-mobile-brand-subtitle {
+        font-size: 10px;
+      }
+
       .client-topbar-side {
         align-items: flex-start;
         min-width: 0;
@@ -1888,6 +1973,16 @@
       .client-mobile-nav .menu-btn {
         padding: 9px 12px;
         font-size: 12px;
+      }
+
+      .module-header > div,
+      .dashboard-panel-header > div,
+      .stat-card-head,
+      .dashboard-priority-tags,
+      .apartment-pipeline-statuses,
+      .candidate-review-statuses,
+      .candidate-review-summary {
+        min-width: 0;
       }
 
       .stats-grid {
@@ -2016,6 +2111,13 @@
     <main class="main client-main">
       <header class="topbar client-topbar">
         <div class="client-topbar-main">
+          <div class="client-mobile-brand" aria-label="FluxLocatif">
+            <div class="client-mobile-brand-mark">F</div>
+            <div class="client-mobile-brand-copy">
+              <div class="client-mobile-brand-title">FluxLocatif</div>
+              <div class="client-mobile-brand-subtitle">Espace client</div>
+            </div>
+          </div>
           <span class="eyebrow">Client</span>
           <h2 id="pageTitle">Tableau de bord</h2>
           <div class="client-meta" id="clientMeta"></div>
