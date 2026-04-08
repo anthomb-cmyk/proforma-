@@ -542,6 +542,10 @@
       display: none;
     }
 
+    .client-main > section.hidden {
+      display: none !important;
+    }
+
     .client-auth-shell {
       min-height: 100vh;
       display: grid;
@@ -1968,11 +1972,15 @@
         width: 100%;
         min-width: 0;
         max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        hyphens: auto;
       }
 
       .client-mobile-nav .menu-btn {
-        padding: 9px 12px;
-        font-size: 12px;
+        padding: 8px 6px;
+        font-size: 11px;
+        line-height: 1.15;
       }
 
       .module-header > div,
@@ -2135,7 +2143,7 @@
       <nav class="client-module-card client-mobile-nav" aria-label="Navigation mobile client">
         <div class="client-mobile-nav-track">
           <button class="menu-btn active" data-tab="dashboard">Tableau de bord</button>
-          <button class="menu-btn" data-tab="apartments">Appartements</button>
+          <button class="menu-btn" data-tab="apartments" aria-label="Appartements">Apparts</button>
           <button class="menu-btn" data-tab="candidates">Dossiers</button>
           <button class="menu-btn" data-tab="criteria">Critères</button>
         </div>

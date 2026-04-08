@@ -1005,7 +1005,9 @@ function switchTab(tabName) {
 
   Object.entries(tabs).forEach(([key, element]) => {
     if (!element) return;
-    element.classList.toggle("hidden", key !== tabName);
+    const isHidden = key !== tabName;
+    element.classList.toggle("hidden", isHidden);
+    element.hidden = isHidden;
   });
 
   document.querySelectorAll(".menu-btn").forEach((button) => {
