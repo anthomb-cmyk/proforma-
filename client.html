@@ -1557,6 +1557,46 @@
       align-self: center;
     }
 
+    .client-mobile-nav {
+      display: none;
+    }
+
+    .client-mobile-nav-track {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 2px;
+      scrollbar-width: none;
+    }
+
+    .client-mobile-nav-track::-webkit-scrollbar {
+      display: none;
+    }
+
+    .client-mobile-nav .menu-btn {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      color: #475569;
+      box-shadow: none;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .client-mobile-nav .menu-btn.active {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #2563eb;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.75);
+    }
+
+    .client-mobile-nav .menu-btn.active::after {
+      display: none;
+    }
+
     .client-platform-page .secondary-btn {
       background: #ffffff;
       color: var(--text);
@@ -1576,8 +1616,7 @@
       }
 
       .client-sidebar {
-        min-height: auto;
-        position: static;
+        display: none;
       }
 
       .client-topbar,
@@ -1588,14 +1627,26 @@
 
       .client-topbar {
         display: flex;
+        padding: 14px;
       }
 
       .client-topbar-side {
-        flex-direction: column;
+        grid-template-columns: minmax(0, 1fr) auto;
+        max-width: none;
+        justify-self: stretch;
+        width: 100%;
       }
 
-      .dashboard-overview-grid {
-        grid-template-columns: 1fr;
+      .client-mobile-nav {
+        display: block;
+        position: sticky;
+        top: 8px;
+        z-index: 5;
+        margin-top: -2px;
+      }
+
+      .client-main {
+        gap: 8px;
       }
 
       .dashboard-priority-row {
@@ -1612,10 +1663,80 @@
         grid-template-columns: 1fr;
       }
 
-      .stats-grid,
       .detail-grid,
       .reasons-columns {
         grid-template-columns: 1fr;
+      }
+
+      .module-header {
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+      }
+
+      .module-header h3 {
+        font-size: 1.42rem;
+      }
+
+      .module-header p,
+      .client-meta,
+      .topbar-micro-sub {
+        font-size: 12px;
+      }
+
+      .dashboard-home-shell {
+        margin-top: 12px;
+      }
+
+      .dashboard-panel-header {
+        gap: 6px;
+      }
+
+      .dashboard-panel-header p {
+        max-width: none;
+      }
+
+      .apartment-pipeline-header,
+      .candidate-review-top,
+      .candidate-group-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .apartment-pipeline-statuses,
+      .candidate-review-statuses {
+        justify-content: flex-start;
+      }
+
+      .apartment-pipeline-actions,
+      .candidate-review-actions {
+        justify-content: stretch;
+      }
+
+      .apartment-pipeline-actions .dashboard-panel-link,
+      .candidate-review-actions .secondary-btn,
+      .candidate-review-actions .primary-btn {
+        width: 100%;
+        text-align: center;
+      }
+
+      .client-platform-page .admin-form {
+        gap: 12px;
+      }
+
+      .client-platform-page .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .client-platform-page .primary-btn,
+      .client-platform-page .secondary-btn {
+        min-height: 42px;
+        font-size: 14px;
+      }
+
+      .modal-card {
+        width: min(100%, 100%);
+        border-radius: 18px;
+        padding: 18px 16px;
       }
     }
 
@@ -1628,13 +1749,14 @@
 
       .client-sidebar,
       .client-topbar,
+      .client-mobile-nav,
       .client-module-card,
       .client-overview-card {
         border-radius: 20px;
       }
 
-      .client-sidebar .menu-btn,
       .client-topbar,
+      .client-mobile-nav,
       .client-module-card,
       .client-overview-card {
         padding-left: 16px;
@@ -1642,7 +1764,80 @@
       }
 
       .client-topbar h2 {
-        font-size: 1.75rem;
+        font-size: 1.56rem;
+      }
+
+      .client-topbar-side {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+      }
+
+      .topbar-micro-card {
+        padding: 2px 4px;
+      }
+
+      .topbar-micro-value {
+        font-size: 14px;
+      }
+
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stat-card {
+        min-height: 0;
+      }
+
+      .stat-value {
+        font-size: clamp(1.85rem, 8vw, 2.2rem);
+      }
+
+      .dashboard-priority-title,
+      .apartment-pipeline-title,
+      .candidate-review-title {
+        font-size: 15px;
+      }
+
+      .dashboard-priority-meta,
+      .dashboard-priority-next,
+      .apartment-pipeline-meta,
+      .apartment-pipeline-panel-copy,
+      .apartment-pipeline-next-step-copy,
+      .candidate-review-meta,
+      .candidate-review-contact,
+      .candidate-group-copy,
+      .candidate-review-list,
+      .candidate-zero-state p,
+      .criteria-preview-note,
+      .dashboard-highlight-note,
+      .responsibility-note,
+      .next-step-copy {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .status-pill,
+      .data-pill,
+      .score-pill,
+      .responsibility-pill,
+      .attention-pill {
+        min-height: 26px;
+        padding: 5px 9px;
+        font-size: 11px;
+      }
+
+      .candidate-zero-state-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-grid,
+      .reasons-columns {
+        gap: 10px;
+      }
+
+      .detail-item,
+      .reasons-box {
+        padding: 12px;
       }
     }
   </style>
@@ -1705,6 +1900,15 @@
           <button id="refreshBtn" class="primary-btn">Actualiser</button>
         </div>
       </header>
+
+      <nav class="client-module-card client-mobile-nav" aria-label="Navigation mobile client">
+        <div class="client-mobile-nav-track">
+          <button class="menu-btn active" data-tab="dashboard">Tableau de bord</button>
+          <button class="menu-btn" data-tab="apartments">Appartements</button>
+          <button class="menu-btn" data-tab="candidates">Dossiers</button>
+          <button class="menu-btn" data-tab="criteria">Critères</button>
+        </div>
+      </nav>
 
       <section class="card client-overview-card" id="dashboardTab">
         <div class="module-header">
@@ -1872,6 +2076,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="client.js?v=12"></script>
+  <script src="client.js?v=13"></script>
 </body>
 </html>
