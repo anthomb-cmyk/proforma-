@@ -27,6 +27,7 @@ const chatState = {
   pending: false,
   currentUser: null,
   currentSession: null,
+  activeTranslatorThreadKey: "",
   workspaceMessages: [],
   workspaceTasks: [],
   notifications: [],
@@ -36,7 +37,6 @@ const chatState = {
 const dashboardWorkspaceTab = document.getElementById("dashboardWorkspaceTab");
 const messagesWorkspaceTab = document.getElementById("messagesWorkspaceTab");
 const listingsWorkspaceTab = document.getElementById("listingsWorkspaceTab");
-const prequalificationWorkspaceTab = document.getElementById("prequalificationWorkspaceTab");
 const workspaceMessagesBadge = document.getElementById("workspaceMessagesBadge");
 const workspaceListingsBadge = document.getElementById("workspaceListingsBadge");
 const employeeNotificationBanner = document.getElementById("employeeNotificationBanner");
@@ -61,6 +61,10 @@ const serverStatus = document.getElementById("serverStatus");
 const sendBtn = document.getElementById("sendBtn");
 const listingSelect = document.getElementById("listingSelect");
 const listingSelectorCard = document.getElementById("listingSelectorCard");
+const translatorContextBar = document.getElementById("translatorContextBar");
+const translatorContextValue = document.getElementById("translatorContextValue");
+const translatorListingValue = document.getElementById("translatorListingValue");
+const newTranslatorConversationBtn = document.getElementById("newTranslatorConversationBtn");
 
 const candidateForm = document.getElementById("candidateForm");
 const candidateStatus = document.getElementById("candidateStatus");
@@ -77,6 +81,14 @@ const locationState = {
   options: [],
   selected: null
 };
+
+const TRANSLATOR_REPORT_OPTIONS = [
+  { value: "off_topic", label: "Pas rapport" },
+  { value: "misunderstood_message", label: "Mauvaise compréhension" },
+  { value: "wrong_listing_info", label: "Mauvaises infos sur le logement" },
+  { value: "wrong_next_question", label: "Mauvaises prochaines questions" },
+  { value: "other", label: "Autres" }
+];
 
 function resolveClientId(user) {
   return String(
@@ -195,6 +207,97 @@ function normalizeRefKey(ref) {
   return value.replace(/^L-/i, "");
 }
 
+function getSelectedListingRef() {
+  const ref = listingSelect ? normalizeRefKey(listingSelect.value) : "";
+  if (!ref || !chatState.listings[ref]) return "";
+  return ref;
+}
+
+function buildTranslatorConversationHistory() {
+  return chatState.translatorHistory
+    .filter((message) => message && message.variant !== "loading")
+    .map((message) => ({
+      sender: message.sender || "",
+      label: message.label || "",
+      text: message.text || "",
+      sections: Array.isArray(message.sections)
+        ? message.sections.map((section) => ({
+            title: section?.title || "",
+            text: section?.text || ""
+          }))
+        : []
+    }));
+}
+
+function generateTranslatorThreadKey() {
+  if (window.crypto?.randomUUID) {
+    return `translator_thread_${window.crypto.randomUUID()}`;
+  }
+
+  return `translator_thread_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getTranslatorThreadSummary() {
+  const threadKey = chatState.activeTranslatorThreadKey || "";
+
+  if (!threadKey) {
+    return "Aucune conversation active";
+  }
+
+  const shortKey = threadKey.replace(/^translator_thread_/, "").slice(0, 8).toUpperCase();
+  return `Fil ${shortKey}`;
+}
+
+function getTranslatorListingSummary() {
+  const listingRef = getSelectedListingRef();
+
+  if (!listingRef) {
+    return "Aucun appartement sélectionné";
+  }
+
+  const listing = chatState.listings[listingRef] || null;
+  const address = String(listing?.adresse || listing?.address || "").trim();
+  const city = String(listing?.ville || listing?.city || "").trim();
+  const location = [address, city].filter(Boolean).join(", ");
+
+  return location
+    ? `${formatDisplayRef(listingRef)} · ${location}`
+    : formatDisplayRef(listingRef);
+}
+
+function renderTranslatorContext() {
+  if (!translatorContextBar || !translatorContextValue || !translatorListingValue) return;
+
+  const isTranslatorMode = chatState.currentMode === "translator";
+  translatorContextBar.classList.toggle("hidden", !isTranslatorMode);
+
+  if (!isTranslatorMode) {
+    return;
+  }
+
+  translatorContextValue.textContent = getTranslatorThreadSummary();
+  translatorListingValue.textContent = getTranslatorListingSummary();
+}
+
+function createNewTranslatorConversation() {
+  chatState.activeTranslatorThreadKey = generateTranslatorThreadKey();
+  chatState.translatorHistory = [
+    {
+      sender: "bot",
+      label: "Traducteur",
+      text: "Collez un message et je vais proposer une reformulation en français international ainsi qu’une réponse suggérée en français canadien."
+    }
+  ];
+  renderTranslatorContext();
+
+  if (chatState.currentMode === "translator") {
+    renderMessages();
+    if (chatInput) {
+      chatInput.focus();
+    }
+  }
+}
+
 function normalizeLocationText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -267,8 +370,98 @@ function initListingDropdown() {
   });
 }
 
+function buildMessageSectionsText(message) {
+  if (Array.isArray(message?.sections) && message.sections.length) {
+    return message.sections
+      .map((section) => `${section.title || ""}${section.title ? " : " : ""}${section.text || ""}`.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return String(message?.text || "").trim();
+}
+
+function closeTranslatorReportMenus() {
+  chatState.translatorHistory.forEach((message) => {
+    if (message) {
+      message.reportMenuOpen = false;
+    }
+  });
+}
+
+function getTranslatorRecentContext(messageIndex) {
+  const startIndex = Math.max(0, messageIndex - 5);
+
+  return chatState.translatorHistory
+    .slice(startIndex, messageIndex + 1)
+    .filter((entry) => entry && entry.variant !== "loading")
+    .map((entry) => ({
+      sender: entry.sender || "",
+      label: entry.label || "",
+      text: String(entry.text || "").trim(),
+      sections: Array.isArray(entry.sections)
+        ? entry.sections.map((section) => ({
+            title: section?.title || "",
+            text: section?.text || ""
+          }))
+        : []
+    }));
+}
+
+function getRelatedTenantMessageForReport(messageIndex) {
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    const entry = chatState.translatorHistory[index];
+    if (entry?.sender === "user") {
+      return entry;
+    }
+  }
+
+  return null;
+}
+
+async function submitTranslatorReport(messageIndex, reason) {
+  const targetMessage = chatState.translatorHistory[messageIndex];
+
+  if (!targetMessage || targetMessage.reportSubmitting || targetMessage.reported) {
+    return;
+  }
+
+  const relatedTenantMessage = getRelatedTenantMessageForReport(messageIndex);
+  targetMessage.reportSubmitting = true;
+  renderMessages();
+
+  try {
+    await fetchEmployeeJSON("/api/employee/translator-reports", {
+      method: "POST",
+      body: JSON.stringify({
+        reason,
+        assistant_message_id: targetMessage.assistantMessageId || null,
+        tenant_message_id: relatedTenantMessage?.messageId || null,
+        translator_thread_key: targetMessage.translatorThreadKey || chatState.activeTranslatorThreadKey || "",
+        listing_ref: targetMessage.listingRef || getSelectedListingRef() || "",
+        raw_tenant_message: relatedTenantMessage?.rawText || relatedTenantMessage?.text || "",
+        translation: targetMessage.translation || "",
+        suggested_reply: targetMessage.suggestedReply || "",
+        recent_context: getTranslatorRecentContext(messageIndex)
+      })
+    });
+
+    targetMessage.reported = true;
+    targetMessage.reportReason = reason;
+    targetMessage.reportMenuOpen = false;
+  } catch (error) {
+    console.error("Translator report error:", error);
+    window.alert(error.message || "Impossible d’enregistrer le signalement pour le moment.");
+  } finally {
+    targetMessage.reportSubmitting = false;
+    renderMessages();
+  }
+}
+
 function addMessageToDOM(message) {
   if (!chatMessages) return;
+
+  const messageIndex = currentHistory().indexOf(message);
 
   const wrapper = document.createElement("div");
   wrapper.className = `message ${message.sender}`;
@@ -307,6 +500,53 @@ function addMessageToDOM(message) {
 
   wrapper.appendChild(label);
   wrapper.appendChild(bubble);
+
+  if (message.reportable) {
+    const actions = document.createElement("div");
+    actions.className = "message-report-actions";
+
+    if (message.reported) {
+      const reportedText = document.createElement("div");
+      reportedText.className = "message-report-confirmation";
+      reportedText.textContent = "Signalé";
+      actions.appendChild(reportedText);
+    } else {
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "message-report-link";
+      trigger.textContent = message.reportSubmitting ? "Signalement..." : "Signaler";
+      trigger.disabled = Boolean(message.reportSubmitting);
+      trigger.addEventListener("click", () => {
+        const nextState = !message.reportMenuOpen;
+        closeTranslatorReportMenus();
+        message.reportMenuOpen = nextState;
+        renderMessages();
+      });
+      actions.appendChild(trigger);
+
+      if (message.reportMenuOpen) {
+        const menu = document.createElement("div");
+        menu.className = "message-report-menu";
+
+        TRANSLATOR_REPORT_OPTIONS.forEach((option) => {
+          const optionButton = document.createElement("button");
+          optionButton.type = "button";
+          optionButton.className = "message-report-option";
+          optionButton.textContent = option.label;
+          optionButton.disabled = Boolean(message.reportSubmitting);
+          optionButton.addEventListener("click", async () => {
+            await submitTranslatorReport(messageIndex, option.value);
+          });
+          menu.appendChild(optionButton);
+        });
+
+        actions.appendChild(menu);
+      }
+    }
+
+    wrapper.appendChild(actions);
+  }
+
   chatMessages.appendChild(wrapper);
 }
 
@@ -320,8 +560,8 @@ function renderMessages() {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-function pushMessage(sender, label, text, variant = "", sections = []) {
-  const message = { sender, label, text, variant, sections };
+function pushMessage(sender, label, text, variant = "", sections = [], metadata = {}) {
+  const message = { sender, label, text, variant, sections, ...metadata };
   currentHistory().push(message);
   addMessageToDOM(message);
 
@@ -332,12 +572,12 @@ function pushMessage(sender, label, text, variant = "", sections = []) {
   return message;
 }
 
-function replaceLastLoading(text, variant = "success", label = "Assistant", sections = []) {
+function replaceLastLoading(text, variant = "success", label = "Assistant", sections = [], metadata = {}) {
   const history = currentHistory();
   const last = history[history.length - 1];
 
   if (!last || last.variant !== "loading") {
-    pushMessage("bot", label, text, variant, sections);
+    pushMessage("bot", label, text, variant, sections, metadata);
     return;
   }
 
@@ -345,6 +585,7 @@ function replaceLastLoading(text, variant = "success", label = "Assistant", sect
   last.variant = variant;
   last.label = label;
   last.sections = sections;
+  Object.assign(last, metadata);
   renderMessages();
 }
 
@@ -377,9 +618,13 @@ function switchMode(mode) {
       listingSelectorCard.style.display = "block";
     }
   } else {
+    if (!chatState.activeTranslatorThreadKey) {
+      createNewTranslatorConversation();
+    }
+
     if (modeStatus) {
       modeStatus.textContent =
-        "Le mode Traducteur est actif. Collez un message et obtenez une reformulation en français international ainsi qu’une réponse suggérée en français canadien.";
+        "Le mode Traducteur est actif. Le logement sélectionné reste utilisé comme contexte pour la réponse suggérée.";
     }
 
     if (chatInput) {
@@ -395,6 +640,7 @@ function switchMode(mode) {
     }
   }
 
+  renderTranslatorContext();
   renderMessages();
 }
 
@@ -475,8 +721,6 @@ function switchWorkspaceTab(tabName) {
   messagesWorkspaceTab?.classList.toggle("active", tabName === "messages");
   listingsWorkspaceTab?.classList.toggle("hidden", tabName !== "listings");
   listingsWorkspaceTab?.classList.toggle("active", tabName === "listings");
-  prequalificationWorkspaceTab?.classList.toggle("hidden", tabName !== "prequalification");
-  prequalificationWorkspaceTab?.classList.toggle("active", tabName === "prequalification");
 
   document.querySelectorAll(".workspace-nav-btn").forEach((button) => {
     button.classList.toggle("active", button.dataset.workspaceTab === tabName);
@@ -773,13 +1017,23 @@ async function sendToAI(input, ref = "") {
     message = `${formatDisplayRef(ref)} - ${input}`;
   }
 
+  const selectedListingRef = ref || getSelectedListingRef();
+
   return fetchJSON(
     "/api/chat",
     {
       method: "POST",
       body: JSON.stringify({
         mode: chatState.currentMode,
-        message
+        message,
+        user_id: chatState.currentUser?.id || "employee-manuel",
+        listing_ref: selectedListingRef || "",
+        translator_thread_key: chatState.currentMode === "translator"
+          ? (chatState.activeTranslatorThreadKey || "")
+          : "",
+        conversation_history: chatState.currentMode === "translator"
+          ? buildTranslatorConversationHistory()
+          : []
       })
     },
     25000
@@ -1002,7 +1256,13 @@ if (chatForm) {
         ? `${formatDisplayRef(selectedRef)} - ${input}`
         : input;
 
-    pushMessage("user", "Employé", userText);
+    const userMessage = pushMessage("user", "Employé", userText, "", [], {
+      rawText: input,
+      listingRef: selectedRef || getSelectedListingRef() || "",
+      translatorThreadKey: chatState.currentMode === "translator"
+        ? (chatState.activeTranslatorThreadKey || "")
+        : ""
+    });
 
     chatInput.value = "";
     setPending(true);
@@ -1039,14 +1299,26 @@ if (chatForm) {
               {
                 title: "Réponse suggérée (à adapter)",
                 text: result.reply
-              },
-              {
-                title: "Contexte",
-                text: result.context || "demande générale"
               }
             ]
-          : []
+          : [],
+        chatState.currentMode === "translator" && result.translation && result.reply
+          ? {
+              reportable: true,
+              translation: result.translation,
+              suggestedReply: result.reply,
+              assistantMessageId: result.assistant_message_id || "",
+              translatorThreadKey: result.translator_thread_key || chatState.activeTranslatorThreadKey || "",
+              listingRef: result.listing_ref || selectedRef || getSelectedListingRef() || "",
+              reportMenuOpen: false,
+              reported: false
+            }
+          : {}
       );
+
+      if (chatState.currentMode === "translator" && userMessage) {
+        userMessage.messageId = result.user_message_id || userMessage.messageId || "";
+      }
     } catch (error) {
       console.error("Chat error:", error);
       replaceLastLoading(
@@ -1080,15 +1352,10 @@ if (clearChatBtn) {
         }
       ];
     } else {
-      chatState.translatorHistory = [
-        {
-          sender: "bot",
-          label: "Traducteur",
-          text: "Collez un message et je vais proposer une reformulation en français international ainsi qu’une réponse suggérée en français canadien."
-        }
-      ];
+      createNewTranslatorConversation();
     }
 
+    renderTranslatorContext();
     renderMessages();
   });
 }
@@ -1099,6 +1366,18 @@ if (listingModeBtn) {
 
 if (translatorModeBtn) {
   translatorModeBtn.addEventListener("click", () => switchMode("translator"));
+}
+
+if (listingSelect) {
+  listingSelect.addEventListener("change", () => {
+    renderTranslatorContext();
+  });
+}
+
+if (newTranslatorConversationBtn) {
+  newTranslatorConversationBtn.addEventListener("click", () => {
+    createNewTranslatorConversation();
+  });
 }
 
 if (candidateForm) {
@@ -1152,6 +1431,7 @@ supabaseClient.auth.onAuthStateChange((event) => {
 });
 
 (async function init() {
+  createNewTranslatorConversation();
   switchWorkspaceTab("dashboard");
   switchMode("listing");
   renderMessages();

@@ -37,11 +37,52 @@ const CLIENT_INVITATIONS_PATH = path.join(DATA_DIR, "client_invitations.json");
 const LEGACY_CLIENT_INVITATIONS_PATH = path.join(DATA_DIR, "client-invitations.json");
 const CANDIDATES_PATH = path.join(DATA_DIR, "candidates.json");
 const CHAT_MESSAGES_PATH = path.join(DATA_DIR, "chat-messages.json");
+const TRANSLATOR_THREAD_STATE_PATH = path.join(DATA_DIR, "translator-thread-state.json");
+const TRANSLATOR_REPORTS_PATH = path.join(DATA_DIR, "translator-reports.json");
 const CHAT_SESSIONS_PATH = path.join(DATA_DIR, "chat-sessions.json");
 const USER_DAILY_TIME_PATH = path.join(DATA_DIR, "user-daily-time.json");
 const WORKSPACE_MESSAGES_PATH = path.join(DATA_DIR, "workspace-messages.json");
 const LISTING_TASKS_PATH = path.join(DATA_DIR, "listing-tasks.json");
 const NOTIFICATIONS_PATH = path.join(DATA_DIR, "notifications.json");
+
+const TRANSLATOR_STEP_ORDER = [
+  "move_in_date",
+  "occupants_total",
+  "has_animals",
+  "animal_type",
+  "employment_status",
+  "employer",
+  "employment_duration",
+  "income",
+  "credit",
+  "tal",
+  "full_name",
+  "phone",
+  "email"
+];
+
+const TRANSLATOR_QUESTION_TYPES = [
+  "availability",
+  "price",
+  "electricity",
+  "heating",
+  "inclusions",
+  "appliances",
+  "pets",
+  "parking",
+  "location",
+  "deposit",
+  "visit",
+  "none"
+];
+
+const TRANSLATOR_REPORT_REASONS = [
+  "off_topic",
+  "misunderstood_message",
+  "wrong_listing_info",
+  "wrong_next_question",
+  "other"
+];
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -132,12 +173,117 @@ async function ensureDataFile(filePath, fallbackValue) {
 async function readJsonFile(filePath, fallbackValue) {
   await ensureDataFile(filePath, fallbackValue);
   const raw = await fs.readFile(filePath, "utf8");
-  return JSON.parse(raw);
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const corruptBackupPath = `${filePath}.corrupt-${timestamp}`;
+    await fs.writeFile(corruptBackupPath, raw);
+    await fs.writeFile(filePath, JSON.stringify(fallbackValue, null, 2));
+    return structuredClone(fallbackValue);
+  }
 }
 
 async function writeJsonFile(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(value, null, 2));
+}
+
+function createTranslatorFieldState() {
+  return {
+    value: null,
+    known: false,
+    confidence: 0,
+    source: null,
+    updated_at: null
+  };
+}
+
+function createTranslatorQualificationState() {
+  return {
+    move_in_date: createTranslatorFieldState(),
+    occupants_total: createTranslatorFieldState(),
+    has_animals: createTranslatorFieldState(),
+    animal_type: createTranslatorFieldState(),
+    employment_status: createTranslatorFieldState(),
+    employer: createTranslatorFieldState(),
+    employment_duration: createTranslatorFieldState(),
+    income: createTranslatorFieldState(),
+    credit: createTranslatorFieldState(),
+    tal: createTranslatorFieldState(),
+    full_name: createTranslatorFieldState(),
+    phone: createTranslatorFieldState(),
+    email: createTranslatorFieldState()
+  };
+}
+
+function createDefaultTranslatorThreadState(threadKey, employeeUserId = "", listingRef = "") {
+  return {
+    thread_key: String(threadKey || "").trim(),
+    employee_user_id: String(employeeUserId || "").trim(),
+    listing_ref: listingRef ? `L-${normalizeRef(listingRef)}` : "",
+    current_step: "move_in_date",
+    last_asked_step: null,
+    last_detected_listing_question: null,
+    last_message_at: null,
+    qualification: createTranslatorQualificationState(),
+    visit_prequalification: {
+      required: true,
+      ready: false
+    }
+  };
+}
+
+async function loadTranslatorThreadStateStore() {
+  return readJsonFile(TRANSLATOR_THREAD_STATE_PATH, {});
+}
+
+async function getTranslatorThreadState(threadKey, options = {}) {
+  const normalizedThreadKey = String(threadKey || "").trim();
+  const store = await loadTranslatorThreadStateStore();
+  const existingState = normalizedThreadKey ? store[normalizedThreadKey] || null : null;
+  const state = existingState
+    ? {
+        ...createDefaultTranslatorThreadState(normalizedThreadKey),
+        ...existingState,
+        qualification: {
+          ...createTranslatorQualificationState(),
+          ...(existingState?.qualification || {})
+        },
+        visit_prequalification: {
+          required: true,
+          ready: false,
+          ...(existingState?.visit_prequalification || {})
+        }
+      }
+    : createDefaultTranslatorThreadState(
+        normalizedThreadKey,
+        options?.employeeUserId,
+        options?.listingRef
+      );
+
+  if (options?.employeeUserId) {
+    state.employee_user_id = String(options.employeeUserId).trim();
+  }
+
+  if (options?.listingRef) {
+    state.listing_ref = `L-${normalizeRef(options.listingRef)}`;
+  }
+
+  return state;
+}
+
+async function saveTranslatorThreadState(state) {
+  const normalizedThreadKey = String(state?.thread_key || "").trim();
+
+  if (!normalizedThreadKey) {
+    return;
+  }
+
+  const store = await loadTranslatorThreadStateStore();
+  store[normalizedThreadKey] = state;
+  await writeJsonFile(TRANSLATOR_THREAD_STATE_PATH, store);
 }
 
 const QUEBEC_LOCATIONS = await readJsonFile(LOCATIONS_PATH, []);
@@ -1437,71 +1583,91 @@ async function ensureCandidatesMatchFields(candidates, persist = false) {
   return { candidates, changed };
 }
 
-function detectTranslatorContext(message) {
-  const text = String(message || "").trim().toLowerCase();
+function normalizeTranslatorText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, "")
+    .replace(/\bilectriciter\b|\bilectricite\b|\belectriciter\b|\belectricite\b|\blelectriciter\b|\blelectricite\b/g, " electricite ")
+    .replace(/\blogi\b/g, " logement ")
+    .replace(/\bchu\b|\bjsuis\b/g, " je suis ")
+    .replace(/\byinke\b/g, " juste ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (
-    text.includes("dispo") ||
-    text.includes("disponible") ||
-    text.includes("available") ||
-    text.includes("vacant")
-  ) {
-    return "availability";
+function extractTranslatorOccupantsCount(message) {
+  const normalized = normalizeTranslatorText(message);
+  const patterns = [
+    /\b(?:on va etre|on sera|nous serons|on est|nous sommes)\s+(\d{1,2})\b/,
+    /\b(\d{1,2})\s*(?:personnes?|occupants?|adultes?|enfants?)\b/
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
   }
 
-  if (
-    text.includes("loyer") ||
-    text.includes("prix") ||
-    text.includes("combien") ||
-    text.includes("hydro") ||
-    text.includes("chauffé") ||
-    text.includes("chauffe") ||
-    text.includes("chauffage")
-  ) {
+  return null;
+}
+
+function getTranslatorMessageSignals(message) {
+  const normalized = normalizeTranslatorText(message);
+
+  return {
+    normalized,
+    asksAvailability: /\b(?:dispo|disponible|vacant|available|encore dispo|encore disponible)\b/.test(normalized),
+    asksRent: /\b(?:loyer|prix|combien|rent|cout|coute)\b/.test(normalized),
+    asksElectricity: /\b(?:hydro|electricite|elec)\b/.test(normalized),
+    asksHeating: /\b(?:chauffage|chauffe)\b/.test(normalized),
+    asksInclusions: /\b(?:inclu|inclus|include|compris|avec quoi)\b/.test(normalized),
+    asksAppliances: /\b(?:electro|electros|electromenager|electromenagers|electro menager|electros inclus)\b/.test(normalized),
+    asksParking: /\b(?:parking|stationnement|stationnements|park)\b/.test(normalized),
+    asksPets: /\b(?:chien|chiens|chat|chats|animal|animaux)\b/.test(normalized),
+    asksVisit: /\b(?:visite|visiter|visit|tour|voir le logement|jpeux tu visiter)\b/.test(normalized),
+    asksLocation: /\b(?:metro|loin|distance|secteur|quartier|ou cest|ou c est|ou est)\b/.test(normalized),
+    asksMoveInTiming: /\b(?:quand|date|a partir|apartir|emmenag|move)\b/.test(normalized),
+    mentionsOccupants: Boolean(extractTranslatorOccupantsCount(message)) || /\b(?:famille|enfant|avec mon conjoint|avec ma conjointe|avec ma femme|avec mon mari)\b/.test(normalized)
+  };
+}
+
+function detectTranslatorListingQuestionType(message) {
+  const signals = getTranslatorMessageSignals(message);
+  const normalized = signals.normalized;
+
+  if (signals.asksAvailability) return "availability";
+  if (signals.asksVisit) return "visit";
+  if (signals.asksParking) return "parking";
+  if (signals.asksAppliances) return "appliances";
+  if (signals.asksElectricity) return "electricity";
+  if (signals.asksHeating) return "heating";
+  if (signals.asksPets) return "pets";
+  if (signals.asksInclusions) return "inclusions";
+  if (signals.asksRent) return "price";
+  if (signals.asksLocation) return "location";
+  if (normalized.includes("depot")) return "deposit";
+
+  return "none";
+}
+
+function detectTranslatorContext(message) {
+  const signals = getTranslatorMessageSignals(message);
+  const text = signals.normalized;
+  const listingQuestionType = detectTranslatorListingQuestionType(message);
+
+  if (listingQuestionType === "availability") return "availability";
+  if (["price", "electricity", "heating", "inclusions", "appliances", "parking"].includes(listingQuestionType)) {
     return "pricing";
   }
+  if (listingQuestionType === "pets") return "pets";
+  if (listingQuestionType === "deposit") return "deposit";
+  if (listingQuestionType === "visit") return "visit";
+  if (listingQuestionType === "location") return "location";
 
-  if (
-    text.includes("chien") ||
-    text.includes("chat") ||
-    text.includes("animal")
-  ) {
-    return "pets";
-  }
-
-  if (
-    text.includes("depot") ||
-    text.includes("dépôt")
-  ) {
-    return "deposit";
-  }
-
-  if (
-    text.includes("visite") ||
-    text.includes("visiter") ||
-    text.includes("jpeux tu visiter") ||
-    text.includes("see it") ||
-    text.includes("tour")
-  ) {
-    return "visit";
-  }
-
-  if (
-    text.includes("metro") ||
-    text.includes("métro") ||
-    text.includes("loin") ||
-    text.includes("distance")
-  ) {
-    return "location";
-  }
-
-  if (
-    text.includes("quand") ||
-    text.includes("date") ||
-    text.includes("emm") ||
-    text.includes("move") ||
-    text.includes("disponible a partir")
-  ) {
+  if (signals.asksMoveInTiming || text.includes("disponible a partir")) {
     return "move-in timing";
   }
 
@@ -1518,117 +1684,59 @@ function detectTranslatorContext(message) {
   return "general inquiry";
 }
 
-function buildTranslatorFallbackReply(message) {
-  const context = detectTranslatorContext(message);
-
-  if (context === "availability") {
-    return [
-      "Bonjour,",
-      "",
-      "Oui, le logement est toujours disponible pour le moment.",
-      "",
-      "Souhaitez-vous que je vous confirme les principaux détails du logement ?"
-    ].join("\n");
-  }
-
-  if (context === "pricing") {
-    return [
-      "Bonjour,",
-      "",
-      "Le loyer demandé est celui affiché pour le logement.",
-      "",
-      "Si vous voulez, je peux aussi vous préciser ce qui est inclus."
-    ].join("\n");
-  }
-
-  if (context === "pets") {
-    return [
-      "Bonjour,",
-      "",
-      "Merci pour l’information.",
-      "",
-      "Je peux vérifier la politique concernant les animaux pour ce logement. Quel type d’animal avez-vous ?"
-    ].join("\n");
-  }
-
-  if (context === "deposit") {
-    return [
-      "Bonjour,",
-      "",
-      "En location résidentielle au Québec, ce n’est généralement pas un dépôt qui est demandé.",
-      "",
-      "Je peux vous préciser les conditions applicables au logement si vous voulez."
-    ].join("\n");
-  }
-
-  if (context === "move-in timing") {
-    return [
-      "Bonjour,",
-      "",
-      "Je peux vous confirmer la date de disponibilité du logement.",
-      "",
-      "Quelle date d’emménagement recherchez-vous ?"
-    ].join("\n");
-  }
-
-  if (context === "qualification") {
-    return [
-      "Bonjour,",
-      "",
-      "Merci pour les précisions.",
-      "",
-      "Je peux vous indiquer les critères de base pour ce logement si vous voulez."
-    ].join("\n");
-  }
-
-  if (context === "location") {
-    return [
-      "Bonjour,",
-      "",
-      "Je peux vous donner plus de détails sur l’emplacement du logement.",
-      "",
-      "Quel point de repère ou quel secteur vous intéresse ?"
-    ].join("\n");
-  }
-
-  return [
-    "Bonjour,",
-    "",
-    "Merci pour votre message.",
-    "",
-    "Merci pour votre message.",
-    "",
-    "Je peux vous donner les informations utiles sur le logement.",
-    "",
-    "Qu’aimeriez-vous confirmer en priorité ?"
-  ].join("\n");
-}
-
-function buildTranslatorFallbackTranslation(message) {
-  const text = String(message || "").trim().toLowerCase();
+function buildTranslatorFallbackTranslation(message, conversationEntries = []) {
+  const text = normalizeTranslatorText(message);
+  const signals = getTranslatorMessageSignals(message);
+  const occupantsCount = extractTranslatorOccupantsCount(message);
+  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
+  const resolvedOccupantsCount = occupantsCount || inferredShortReplyContext.occupantsCountFromShortReply;
+  const moveInDate = extractMoveInDateValue(message);
 
   if (!text) {
     return "Le locataire souhaite obtenir des informations sur le logement.";
   }
 
-  if (
-    text.includes("dispo") ||
-    text.includes("disponible") ||
-    text.includes("available") ||
-    text.includes("vacant")
-  ) {
+  if (moveInDate && !signals.asksAvailability && !signals.asksVisit && !signals.asksRent && !signals.asksElectricity && !signals.asksHeating && !signals.asksInclusions && !signals.asksAppliances && !signals.asksParking && !signals.asksPets) {
+    return `Le locataire souhaite emménager le ${moveInDate}.`;
+  }
+
+  if (signals.asksAvailability) {
     return "Est-ce que le logement est disponible ?";
   }
 
-  if (
-    text.includes("hydro") ||
-    text.includes("chauffé") ||
-    text.includes("chauffe")
-  ) {
+  if ((signals.asksElectricity || signals.asksHeating) && resolvedOccupantsCount) {
+    return `Nous serons ${resolvedOccupantsCount} occupants et nous voulons savoir si l’électricité ou le chauffage sont inclus.`;
+  }
+
+  if (signals.asksElectricity || signals.asksHeating) {
     return "Quel est le loyer, et est-ce que l’électricité ou le chauffage sont inclus ?";
   }
 
-  if (text.includes("prix") || text.includes("loyer") || text.includes("rent") || text.includes("combien")) {
+  if (signals.asksAppliances && resolvedOccupantsCount) {
+    return `Nous serons ${resolvedOccupantsCount} occupants et nous voulons savoir s’il y a des électroménagers inclus.`;
+  }
+
+  if (signals.asksAppliances) {
+    return "Est-ce qu’il y a des électroménagers inclus avec le logement ?";
+  }
+
+  if (signals.asksParking && resolvedOccupantsCount) {
+    return `Nous serons ${resolvedOccupantsCount} occupants et nous voulons savoir s’il y a du stationnement pour ce logement.`;
+  }
+
+  if (signals.asksParking) {
+    return "Est-ce qu’il y a du stationnement pour ce logement ?";
+  }
+
+  if (signals.asksInclusions && occupantsCount) {
+    return `Nous serons ${occupantsCount} occupants et nous voulons savoir quelles sont les inclusions du logement.`;
+  }
+
+  if (signals.asksInclusions) {
+    return "Quelles sont les inclusions du logement ?";
+  }
+
+  if (signals.asksRent) {
     return "Quel est le loyer demandé pour ce logement ?";
   }
 
@@ -1642,7 +1750,7 @@ function buildTranslatorFallbackTranslation(message) {
     return "Est-ce qu’il serait possible de visiter le logement ?";
   }
 
-  if (text.includes("chien") || text.includes("chat") || text.includes("animal")) {
+  if (signals.asksPets) {
     return "J’ai un animal et je voudrais savoir s’il est accepté.";
   }
 
@@ -1654,7 +1762,7 @@ function buildTranslatorFallbackTranslation(message) {
     return "J’ai un emploi à temps plein et je souhaite savoir si mon profil peut convenir.";
   }
 
-  if (text.includes("metro") || text.includes("métro") || text.includes("loin")) {
+  if (signals.asksLocation) {
     return "Est-ce que le logement est loin du métro ?";
   }
 
@@ -1670,10 +1778,1422 @@ function buildTranslatorFallbackTranslation(message) {
   return "Le locataire souhaite obtenir plus d'informations au sujet du logement.";
 }
 
-function buildTranslatorFallbackPayload(message) {
+function extractTranslatorHistoryEntries(history = []) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .map((entry) => {
+      const sender = String(entry?.sender || "").trim().toLowerCase();
+      const label = String(entry?.label || "").trim();
+      const text = String(entry?.text || "").trim();
+      const sections = Array.isArray(entry?.sections)
+        ? entry.sections
+            .map((section) => ({
+              title: String(section?.title || "").trim(),
+              text: String(section?.text || "").trim()
+            }))
+            .filter((section) => section.title || section.text)
+        : [];
+
+      if (!sender || (!text && !sections.length)) {
+        return null;
+      }
+
+      return { sender, label, text, sections };
+    })
+    .filter(Boolean)
+    .slice(-12);
+}
+
+function renderTranslatorHistoryEntry(entry) {
+  const senderLabel = entry.sender === "user"
+    ? "Message original du locataire"
+    : entry.label || "Suggestion précédente";
+  const parts = [];
+
+  if (entry.text) {
+    parts.push(entry.text);
+  }
+
+  if (entry.sections?.length) {
+    entry.sections.forEach((section) => {
+      const title = section.title ? `${section.title} : ` : "";
+      parts.push(`${title}${section.text}`);
+    });
+  }
+
+  return `${senderLabel}\n${parts.join("\n")}`.trim();
+}
+
+function getLatestTranslatorAssistantReply(conversationEntries = []) {
+  if (!Array.isArray(conversationEntries) || !conversationEntries.length) {
+    return "";
+  }
+
+  for (let index = conversationEntries.length - 1; index >= 0; index -= 1) {
+    const entry = conversationEntries[index];
+    if (String(entry?.sender || "").trim().toLowerCase() !== "assistant") {
+      continue;
+    }
+
+    const replySection = Array.isArray(entry?.sections)
+      ? entry.sections.find((section) => /réponse suggérée/i.test(String(section?.title || "")))
+      : null;
+
+    if (replySection?.text) {
+      return String(replySection.text).trim();
+    }
+
+    if (entry?.text) {
+      return String(entry.text).trim();
+    }
+  }
+
+  return "";
+}
+
+function inferShortReplyContext(message, conversationEntries = []) {
+  const normalizedMessage = normalizeTranslatorText(message);
+  const latestAssistantReply = normalizeTranslatorText(getLatestTranslatorAssistantReply(conversationEntries));
+  const leadingCountMatch = normalizedMessage.match(/^(\d{1,2})(?:\b|\s)/);
+
   return {
-    translation: buildTranslatorFallbackTranslation(message),
-    reply: buildTranslatorFallbackReply(message),
+    answersOccupantsQuestion: Boolean(
+      leadingCountMatch &&
+      /combien a habiter|combien a habiter le logement|combien a occuper|combien doccupants|combien a etre|vous seriez combien/.test(latestAssistantReply)
+    ),
+    occupantsCountFromShortReply: leadingCountMatch?.[1] || null
+  };
+}
+
+function createTranslatorFieldUpdate(value, confidence = 0.7, source = "message") {
+  return {
+    value,
+    confidence,
+    source
+  };
+}
+
+function getTranslatorFieldValue(threadState, fieldKey) {
+  return threadState?.qualification?.[fieldKey]?.value ?? null;
+}
+
+function isTranslatorFieldKnown(threadState, fieldKey) {
+  return Boolean(threadState?.qualification?.[fieldKey]?.known);
+}
+
+function extractMoveInDateValue(message) {
+  const rawText = String(message || "").trim();
+  const normalized = normalizeTranslatorText(message);
+  const isoMatch = rawText.match(/\b\d{4}-\d{2}-\d{2}\b/);
+
+  if (isoMatch?.[0]) {
+    return isoMatch[0];
+  }
+
+  const monthMatch = rawText.match(/\b(1er|\d{1,2})\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)\b/i);
+  if (monthMatch) {
+    return monthMatch[0];
+  }
+
+  const relativeMatch = normalized.match(/\b(?:maintenant|immediat|immediatement|des maintenant|mois prochain|prochaine semaine)\b/);
+  return relativeMatch?.[0] || null;
+}
+
+function extractEmploymentStatusValue(message) {
+  const normalized = normalizeTranslatorText(message);
+
+  if (/\btemps plein\b/.test(normalized)) return "temps plein";
+  if (/\btemps partiel\b/.test(normalized)) return "temps partiel";
+  if (/\btravailleur autonome\b|\bautonome\b/.test(normalized)) return "travailleur autonome";
+  if (/\betudiant\b/.test(normalized)) return "étudiant";
+  if (/\bretraite\b/.test(normalized)) return "retraité";
+  if (/\bsans emploi\b/.test(normalized)) return "sans emploi";
+  if (/\bpermanent\b/.test(normalized)) return "permanent";
+  if (/\btemporaire\b/.test(normalized)) return "temporaire";
+
+  return null;
+}
+
+function extractEmployerValue(message) {
+  const rawText = String(message || "").trim();
+  const employerMatch =
+    rawText.match(/\b(?:je travaille chez|je suis chez|pour)\s+([A-Za-zÀ-ÿ0-9&'. -]{2,})/i) ||
+    rawText.match(/\bemployeur\s*[:\-]?\s*([A-Za-zÀ-ÿ0-9&'. -]{2,})/i);
+
+  return employerMatch?.[1]?.trim() || null;
+}
+
+function extractEmploymentDurationValue(message) {
+  const rawText = String(message || "").trim();
+  const match = rawText.match(/\b(?:depuis|ca fait|ça fait)\s+([A-Za-zÀ-ÿ0-9 .-]{1,20})/i) ||
+    rawText.match(/\b(\d+\s*(?:an|ans|mois))\b/i);
+
+  return match?.[1]?.trim() || null;
+}
+
+function extractIncomeValue(message) {
+  const rawText = String(message || "").trim();
+  const match = rawText.match(/\b\d{3,5}\s*\$?(?:\s*\/?\s*(?:mois|mensuel))?/i);
+  return match?.[0]?.trim() || null;
+}
+
+function extractCreditValue(message) {
+  const rawText = String(message || "").trim();
+  const normalized = normalizeTranslatorText(message);
+  const scoreMatch = rawText.match(/\b\d{3}\b/);
+
+  if (/\bbon credit\b|\bexcellent credit\b/.test(normalized)) return "bon crédit";
+  if (/\bmauvais credit\b|\bcredit faible\b/.test(normalized)) return "crédit faible";
+  if (scoreMatch && normalized.includes("credit")) return scoreMatch[0];
+
+  return null;
+}
+
+function extractTalValue(message) {
+  const normalized = normalizeTranslatorText(message);
+
+  if (/\bpas de tal\b|\baucun tal\b|\bpas de regie\b/.test(normalized)) return "aucun dossier";
+  if (/\btal\b|\bregie\b/.test(normalized)) return "mentionné";
+
+  return null;
+}
+
+function extractFullNameValue(message) {
+  const rawText = String(message || "").trim();
+  const match =
+    rawText.match(/\b(?:je m['’]appelle|mon nom est|moi c['’]est)\s+([A-Za-zÀ-ÿ' -]{2,})/i);
+
+  return match?.[1]?.trim() || null;
+}
+
+function extractPhoneValue(message) {
+  const rawText = String(message || "").trim();
+  const match = rawText.match(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/);
+  return match?.[0]?.trim() || null;
+}
+
+function extractEmailValue(message) {
+  const rawText = String(message || "").trim();
+  const match = rawText.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match?.[0]?.trim() || null;
+}
+
+function extractAnimalsInfo(message) {
+  const normalized = normalizeTranslatorText(message);
+
+  if (/\bpas d animaux\b|\bsans animaux\b|\baucun animal\b/.test(normalized)) {
+    return { hasAnimals: false, animalType: null };
+  }
+
+  if (/\bchien\b/.test(normalized)) {
+    return { hasAnimals: true, animalType: "chien" };
+  }
+
+  if (/\bchat\b/.test(normalized)) {
+    return { hasAnimals: true, animalType: "chat" };
+  }
+
+  if (/\banimal|animaux\b/.test(normalized)) {
+    return { hasAnimals: true, animalType: null };
+  }
+
+  return { hasAnimals: null, animalType: null };
+}
+
+function normalizeAiProvidedFields(providedFields = {}) {
+  if (!providedFields || typeof providedFields !== "object" || Array.isArray(providedFields)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  Object.entries(providedFields).forEach(([fieldKey, rawValue]) => {
+    if (!TRANSLATOR_STEP_ORDER.includes(fieldKey)) return;
+    if (rawValue === null || rawValue === undefined || rawValue === "") return;
+
+    if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
+      const value = rawValue.value ?? null;
+      if (value === null || value === undefined || value === "") return;
+      normalized[fieldKey] = createTranslatorFieldUpdate(
+        value,
+        Number(rawValue.confidence || 0.7),
+        String(rawValue.source || "ai").trim() || "ai"
+      );
+      return;
+    }
+
+    normalized[fieldKey] = createTranslatorFieldUpdate(rawValue, 0.7, "ai");
+  });
+
+  return normalized;
+}
+
+function buildDeterministicTranslatorExtraction(message, conversationEntries = [], threadState = null) {
+  const listingQuestionType = detectTranslatorListingQuestionType(message);
+  const translation = buildTranslatorFallbackTranslation(message, conversationEntries);
+  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
+  const occupantsCount = extractTranslatorOccupantsCount(message) || inferredShortReplyContext.occupantsCountFromShortReply;
+  const moveInDate = extractMoveInDateValue(message);
+  const employmentStatus = extractEmploymentStatusValue(message);
+  const employer = extractEmployerValue(message);
+  const employmentDuration = extractEmploymentDurationValue(message);
+  const income = extractIncomeValue(message);
+  const credit = extractCreditValue(message);
+  const tal = extractTalValue(message);
+  const fullName = extractFullNameValue(message);
+  const phone = extractPhoneValue(message);
+  const email = extractEmailValue(message);
+  const animalsInfo = extractAnimalsInfo(message);
+  const providedFields = {};
+
+  if (moveInDate) {
+    providedFields.move_in_date = createTranslatorFieldUpdate(moveInDate, 0.88, "deterministic");
+  }
+
+  if (occupantsCount) {
+    providedFields.occupants_total = createTranslatorFieldUpdate(Number(occupantsCount), 0.92, "deterministic");
+  }
+
+  if (animalsInfo.hasAnimals !== null) {
+    providedFields.has_animals = createTranslatorFieldUpdate(Boolean(animalsInfo.hasAnimals), 0.9, "deterministic");
+  }
+
+  if (animalsInfo.animalType) {
+    providedFields.animal_type = createTranslatorFieldUpdate(animalsInfo.animalType, 0.88, "deterministic");
+  }
+
+  if (employmentStatus) {
+    providedFields.employment_status = createTranslatorFieldUpdate(employmentStatus, 0.82, "deterministic");
+  }
+
+  if (employer) {
+    providedFields.employer = createTranslatorFieldUpdate(employer, 0.78, "deterministic");
+  }
+
+  if (employmentDuration) {
+    providedFields.employment_duration = createTranslatorFieldUpdate(employmentDuration, 0.78, "deterministic");
+  }
+
+  if (income) {
+    providedFields.income = createTranslatorFieldUpdate(income, 0.78, "deterministic");
+  }
+
+  if (credit) {
+    providedFields.credit = createTranslatorFieldUpdate(credit, 0.72, "deterministic");
+  }
+
+  if (tal) {
+    providedFields.tal = createTranslatorFieldUpdate(tal, 0.72, "deterministic");
+  }
+
+  if (fullName) {
+    providedFields.full_name = createTranslatorFieldUpdate(fullName, 0.9, "deterministic");
+  }
+
+  if (phone) {
+    providedFields.phone = createTranslatorFieldUpdate(phone, 0.95, "deterministic");
+  }
+
+  if (email) {
+    providedFields.email = createTranslatorFieldUpdate(email, 0.95, "deterministic");
+  }
+
+  const answersPreviousStep = Boolean(
+    threadState?.last_asked_step &&
+    providedFields[threadState.last_asked_step]
+  );
+  const hasListingQuestion = listingQuestionType !== "none";
+  const hasProvidedFields = Object.keys(providedFields).length > 0;
+
+  return {
+    translation,
+    message_type: hasListingQuestion && hasProvidedFields
+      ? "mixed"
+      : hasListingQuestion
+        ? "listing_question"
+        : hasProvidedFields
+          ? "qualification_answer"
+          : "general",
+    listing_question_type: listingQuestionType,
+    provided_fields: providedFields,
+    answers_previous_step: answersPreviousStep,
+    confidence: hasProvidedFields || hasListingQuestion ? 0.82 : 0.55
+  };
+}
+
+function mergeTranslatorExtraction(baseExtraction, aiExtraction = {}) {
+  const mergedProvidedFields = {
+    ...normalizeAiProvidedFields(aiExtraction?.provided_fields),
+    ...(baseExtraction?.provided_fields || {})
+  };
+
+  return {
+    translation: String(aiExtraction?.translation || "").trim() || baseExtraction.translation,
+    message_type: String(aiExtraction?.message_type || "").trim() || baseExtraction.message_type,
+    listing_question_type: TRANSLATOR_QUESTION_TYPES.includes(String(aiExtraction?.listing_question_type || "").trim())
+      ? String(aiExtraction.listing_question_type).trim()
+      : baseExtraction.listing_question_type,
+    provided_fields: mergedProvidedFields,
+    answers_previous_step: Boolean(aiExtraction?.answers_previous_step) || Boolean(baseExtraction.answers_previous_step),
+    confidence: Number(aiExtraction?.confidence || baseExtraction.confidence || 0.5)
+  };
+}
+
+function getNextTranslatorStateStep(threadState) {
+  for (const step of TRANSLATOR_STEP_ORDER) {
+    if (step === "animal_type") {
+      if (!isTranslatorFieldKnown(threadState, "has_animals")) {
+        continue;
+      }
+
+      if (getTranslatorFieldValue(threadState, "has_animals") !== true) {
+        continue;
+      }
+    }
+
+    if (!isTranslatorFieldKnown(threadState, step)) {
+      return step;
+    }
+  }
+
+  return null;
+}
+
+function computeTranslatorVisitPrequalificationReady(threadState) {
+  const requiredSteps = [
+    "move_in_date",
+    "occupants_total",
+    "has_animals",
+    "employment_status",
+    "income",
+    "credit",
+    "tal"
+  ];
+
+  return requiredSteps.every((step) => isTranslatorFieldKnown(threadState, step));
+}
+
+function updateTranslatorThreadState(threadState, extraction, options = {}) {
+  const now = new Date().toISOString();
+  const updatedState = {
+    ...threadState,
+    employee_user_id: String(options?.employeeUserId || threadState.employee_user_id || "").trim(),
+    listing_ref: options?.listingRef ? `L-${normalizeRef(options.listingRef)}` : threadState.listing_ref,
+    last_detected_listing_question: extraction.listing_question_type !== "none"
+      ? extraction.listing_question_type
+      : threadState.last_detected_listing_question,
+    last_message_at: now,
+    qualification: {
+      ...createTranslatorQualificationState(),
+      ...(threadState?.qualification || {})
+    },
+    visit_prequalification: {
+      required: true,
+      ready: false,
+      ...(threadState?.visit_prequalification || {})
+    }
+  };
+
+  Object.entries(extraction.provided_fields || {}).forEach(([fieldKey, fieldUpdate]) => {
+    if (!updatedState.qualification[fieldKey]) return;
+
+    updatedState.qualification[fieldKey] = {
+      value: fieldUpdate.value,
+      known: true,
+      confidence: Number(fieldUpdate.confidence || 0.7),
+      source: String(fieldUpdate.source || "message").trim() || "message",
+      updated_at: now
+    };
+  });
+
+  updatedState.current_step = getNextTranslatorStateStep(updatedState);
+  updatedState.visit_prequalification.ready = computeTranslatorVisitPrequalificationReady(updatedState);
+
+  return updatedState;
+}
+
+function buildTranslatorStepQuestion(step, listing = null) {
+  switch (step) {
+    case "move_in_date":
+      return "Quand seriez-vous prêt à emménager ?";
+    case "occupants_total":
+      return "Vous seriez combien à habiter le logement ?";
+    case "has_animals":
+      return "Avez-vous des animaux à considérer pour le dossier ?";
+    case "animal_type":
+      return "Quel type d’animal avez-vous ?";
+    case "employment_status":
+      return "Quel est votre statut d’emploi en ce moment ?";
+    case "employer":
+      return "Chez quel employeur travaillez-vous actuellement ?";
+    case "employment_duration":
+      return "Depuis combien de temps occupez-vous cet emploi ?";
+    case "income":
+      return "Quel est votre revenu mensuel approximatif ?";
+    case "credit":
+      return "Comment décririez-vous votre niveau de crédit ?";
+    case "tal":
+      return "Avez-vous un dossier au TAL ?";
+    case "full_name":
+      return "Quel est votre nom complet ?";
+    case "phone":
+      return "Quel est le meilleur numéro pour vous joindre ?";
+    case "email":
+      return "Quelle est la meilleure adresse courriel pour vous joindre ?";
+    default:
+      return listing?.ville
+        ? `Est-ce que le secteur de ${listing.ville} vous convient toujours ?`
+        : "Est-ce que ce logement pourrait vous convenir ?";
+  }
+}
+
+function getTranslatorLocationLine(listing) {
+  if (!listing) {
+    return "Je peux vous donner plus de détails sur l’emplacement du logement.";
+  }
+
+  const address = String(listing?.adresse || listing?.address || "").trim();
+  const city = String(listing?.ville || listing?.city || "").trim();
+
+  if (address && city) {
+    return `Le logement est situé au ${address}, à ${city}.`;
+  }
+
+  if (address) {
+    return `Le logement est situé au ${address}.`;
+  }
+
+  if (city) {
+    return `Le logement est situé à ${city}.`;
+  }
+
+  return "Je peux vous donner plus de détails sur l’emplacement du logement.";
+}
+
+function getListingParkingLine(listing) {
+  const explicitParking = String(listing?.stationnement || listing?.parking || "").trim();
+  const normalizedExplicit = normalizeTranslatorText(explicitParking);
+
+  if (explicitParking) {
+    if (
+      parseBoolean(explicitParking) ||
+      /\b(?:oui|inclus|inclu|compris|disponible|1 place|une place|stationnement disponible|parking disponible)\b/.test(normalizedExplicit)
+    ) {
+      return "Oui, il y a du stationnement disponible pour ce logement.";
+    }
+
+    if (
+      /\b(?:non|aucun|pas de stationnement|pas de parking|sans stationnement|indisponible)\b/.test(normalizedExplicit)
+    ) {
+      return "Non, il n’y a pas de stationnement pour ce logement.";
+    }
+
+    return "Non, il n’y a pas de stationnement pour ce logement.";
+  }
+
+  const listingText = [
+    listing?.notes,
+    listing?.description,
+    listing?.inclusions
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const normalizedListingText = normalizeTranslatorText(listingText);
+
+  if (!normalizedListingText) {
+    return "Non, il n’y a pas de stationnement pour ce logement.";
+  }
+
+  if (
+    /\b(?:stationnement|parking)\b.*\b(?:non|aucun|pas de|sans)\b/.test(normalizedListingText) ||
+    /\b(?:non|aucun|pas de|sans)\b.*\b(?:stationnement|parking)\b/.test(normalizedListingText)
+  ) {
+    return "Non, il n’y a pas de stationnement pour ce logement.";
+  }
+
+  if (
+    /\b(?:stationnement|parking)\b.*\b(?:disponible|inclus|inclu|compris)\b/.test(normalizedListingText) ||
+    /\b(?:disponible|inclus|inclu|compris)\b.*\b(?:stationnement|parking)\b/.test(normalizedListingText)
+  ) {
+    return "Oui, il y a du stationnement disponible pour ce logement.";
+  }
+
+  return "Non, il n’y a pas de stationnement pour ce logement.";
+}
+
+function resolveTranslatorListingAnswer(questionType, listing, message = "") {
+  switch (questionType) {
+    case "availability":
+      return getListingAvailabilityLine(listing) || "Oui, le logement est encore disponible.";
+    case "price":
+    case "electricity":
+    case "heating":
+    case "inclusions":
+    case "appliances":
+      return getTranslatorPricingAnswerLine(message, listing);
+    case "pets":
+      return getListingPetsLine(listing) || "Non, les animaux ne sont pas acceptés pour ce logement.";
+    case "parking":
+      return getListingParkingLine(listing);
+    case "location":
+      return getTranslatorLocationLine(listing);
+    case "deposit":
+      return "En location résidentielle au Québec, ce n’est généralement pas un dépôt qui est demandé.";
+    case "visit":
+      return "Oui, c’est possible. J’ai d’abord besoin de quelques informations pour pouvoir planifier une visite avec la personne en charge.";
+    default:
+      return "";
+  }
+}
+
+function getTranslatorNextStepForState(threadState, extraction, listing = null) {
+  if (!threadState) {
+    return null;
+  }
+
+  if (extraction?.listing_question_type === "visit" && threadState.visit_prequalification?.required) {
+    return threadState.current_step || "move_in_date";
+  }
+
+  if (threadState.current_step) {
+    return threadState.current_step;
+  }
+
+  return null;
+}
+
+function buildTranslatorDeterministicReply({ extraction, threadState, listing, message }) {
+  const answerLine = resolveTranslatorListingAnswer(
+    extraction?.listing_question_type || "none",
+    listing,
+    message
+  );
+  const nextStep = getTranslatorNextStepForState(threadState, extraction, listing);
+  const nextQuestion = nextStep ? buildTranslatorStepQuestion(nextStep, listing) : "";
+  const hasProvidedFields = Object.keys(extraction?.provided_fields || {}).length > 0;
+
+  if (answerLine) {
+    return [answerLine, nextQuestion].filter(Boolean).join("\n\n");
+  }
+
+  if (hasProvidedFields && nextQuestion) {
+    return nextQuestion;
+  }
+
+  if (nextQuestion) {
+    return nextQuestion;
+  }
+
+  return listing
+    ? "Est-ce que ce logement pourrait vous convenir ?"
+    : "Comment souhaitez-vous poursuivre pour ce logement ?";
+}
+
+async function generateTranslatorAiExtraction(message, options = {}) {
+  if (!openai) {
+    return null;
+  }
+
+  const response = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un extracteur structuré pour un traducteur interne d’équipe locative. Tu dois répondre uniquement avec un objet JSON valide contenant au maximum ces champs: translation, message_type, listing_question_type, provided_fields, answers_previous_step, confidence.\n\nRègles:\n- translation: reformule le message du locataire en français international clair, court et fidèle au sens\n- message_type doit être l’un de: listing_question, qualification_answer, mixed, general\n- listing_question_type doit être l’un de: availability, price, electricity, heating, inclusions, appliances, pets, parking, location, deposit, visit, none\n- provided_fields doit être un objet dont les clés autorisées sont: move_in_date, occupants_total, has_animals, animal_type, employment_status, employer, employment_duration, income, credit, tal, full_name, phone, email\n- answers_previous_step doit être true seulement si le message répond clairement à la dernière question posée\n- confidence est un nombre entre 0 et 1\n- n’invente pas d’information sur la fiche logement\n- sois robuste aux fautes, au français québécois oral, aux abréviations, au style Marketplace et aux réponses courtes dépendantes du contexte"
+      },
+      {
+        role: "user",
+        content: [
+          `Message actuel du locataire :\n${message}`,
+          options?.listing ? `\nAppartement sélectionné :\n${buildTranslatorListingContext(options.listing)}` : "\nAppartement sélectionné : aucun.",
+          options?.conversationEntries?.length
+            ? `\nHistorique récent utile :\n${options.conversationEntries.map((entry, index) => `${index + 1}. ${renderTranslatorHistoryEntry(entry)}`).join("\n\n")}`
+            : "\nHistorique récent utile : aucun.",
+          options?.threadState?.last_asked_step
+            ? `\nDernière information demandée : ${options.threadState.last_asked_step}`
+            : "\nDernière information demandée : aucune.",
+          `\nExtraction déterministe déjà repérée : ${JSON.stringify({
+            listing_question_type: options?.deterministicExtraction?.listing_question_type || "none",
+            provided_fields: Object.fromEntries(
+              Object.entries(options?.deterministicExtraction?.provided_fields || {}).map(([key, value]) => [key, value.value])
+            ),
+            answers_previous_step: Boolean(options?.deterministicExtraction?.answers_previous_step)
+          })}`
+        ].join("\n")
+      }
+    ]
+  });
+
+  const content = response.choices?.[0]?.message?.content?.trim();
+
+  if (!content) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
+function trimCurrentTranslatorMessageFromHistory(history = [], currentMessage = "") {
+  if (!Array.isArray(history) || !history.length) {
+    return [];
+  }
+
+  const normalizedCurrentMessage = String(currentMessage || "").trim();
+
+  if (!normalizedCurrentMessage) {
+    return history.slice(-12);
+  }
+
+  const lastEntry = history[history.length - 1];
+  const lastText = String(lastEntry?.text || "").trim();
+  const isDuplicateCurrentUserMessage =
+    String(lastEntry?.sender || "").trim().toLowerCase() === "user" &&
+    lastText === normalizedCurrentMessage;
+
+  return (isDuplicateCurrentUserMessage ? history.slice(0, -1) : history).slice(-12);
+}
+
+async function loadRecentTranslatorHistoryByThread(threadKey, limit = 10) {
+  if (!threadKey) {
+    return [];
+  }
+
+  const messages = await readJsonFile(CHAT_MESSAGES_PATH, []);
+
+  return messages
+    .filter((message) =>
+      String(message.mode) === "translator" &&
+      String(message.translator_thread_key || "") === String(threadKey)
+    )
+    .slice(-limit)
+    .map((message) => {
+      const sender = String(message.sender || "").trim().toLowerCase() === "user" ? "user" : "assistant";
+      const text = String(message.text || "").trim();
+      const sections = [];
+
+      if (message.translation) {
+        sections.push({
+          title: "Français international",
+          text: String(message.translation || "").trim()
+        });
+      }
+
+      if (message.reply) {
+        sections.push({
+          title: "Réponse suggérée",
+          text: String(message.reply || "").trim()
+        });
+      }
+
+      if (!text && !sections.length) {
+        return null;
+      }
+
+      return {
+        sender,
+        label: sender === "user" ? "Locataire" : "Traducteur",
+        text,
+        sections
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildTranslatorListingContext(listing) {
+  if (!listing) return "";
+
+  const formattedAvailability = formatTranslatorAvailabilityForContext(
+    String(listing.disponibilite || listing.availability || "").trim()
+  );
+
+  const details = {
+    ref: `L-${normalizeRef(listing.ref)}`,
+    adresse: listing.adresse || listing.address || "",
+    ville: listing.ville || listing.city || "",
+    loyer: listing.loyer || listing.rent || "",
+    disponibilite: formattedAvailability || listing.disponibilite || listing.availability || "",
+    inclusions: listing.inclusions || "",
+    animaux_acceptes: listing.animaux_acceptes || "",
+    stationnement: listing.stationnement || "",
+    electricite: listing.electricite || "",
+    notes: listing.notes || "",
+    description: listing.description || ""
+  };
+
+  return JSON.stringify(details, null, 2);
+}
+
+function formatTranslatorDate(value) {
+  const text = String(value || "").trim();
+  const isoDateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  const normalizedDateText = isoDateMatch ? isoDateMatch[1] : text;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDateText)) {
+    return "";
+  }
+
+  const date = new Date(`${normalizedDateText}T12:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const formatter = new Intl.DateTimeFormat("fr-CA", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+
+  const formatted = formatter.format(date);
+  const [day, ...rest] = formatted.split(" ");
+
+  if (day === "1" && rest.length) {
+    return `1er ${rest.join(" ")}`;
+  }
+
+  return formatted;
+}
+
+function formatTranslatorAvailabilityForContext(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  const formattedDate = formatTranslatorDate(text);
+  if (formattedDate) {
+    return `disponible à partir du ${formattedDate}`;
+  }
+
+  return text;
+}
+
+function buildTranslatorSafeUnknownLine(subject) {
+  return `Je n’ai pas l’information confirmée pour ${subject} dans cette fiche pour le moment.`;
+}
+
+function getListingAvailabilityLine(listing) {
+  const availability = String(listing?.disponibilite || listing?.availability || "").trim();
+
+  if (!availability) {
+    return "";
+  }
+
+  const normalized = availability.toLowerCase();
+  const formattedDate = formatTranslatorDate(availability);
+
+  if (formattedDate) {
+    return `Oui, le logement est disponible à partir du ${formattedDate}.`;
+  }
+
+  if (
+    /plus disponible|n['’]est plus disponible|indisponible|lou[ée]|non disponible/.test(normalized)
+  ) {
+    return "Non, le logement n’est plus disponible.";
+  }
+
+  if (
+    parseBoolean(availability) ||
+    /\boui\b|disponible|maintenant|immédiat|immediat|available|still available/.test(normalized)
+  ) {
+    if (/maintenant|immédiat|immediat/.test(normalized)) {
+      return "Oui, le logement est disponible maintenant.";
+    }
+
+    return "Oui, le logement est encore disponible.";
+  }
+
+  return `La disponibilité indiquée pour ce logement est : ${availability}.`;
+}
+
+function getListingElectricityLine(listing) {
+  const explicitValue = String(listing?.electricite || "").trim();
+  const normalizedExplicit = normalizeTranslatorText(explicitValue);
+
+  if (explicitValue) {
+    if (
+      parseBoolean(explicitValue) ||
+      /\b(?:inclu|inclus|compris|oui)\b/.test(normalizedExplicit)
+    ) {
+      return "Oui, l’électricité est incluse pour ce logement.";
+    }
+
+    if (
+      /\b(?:non|pas incluse?|non incluse?|a la charge du locataire|aux frais du locataire)\b/.test(normalizedExplicit)
+    ) {
+      return "Non, l’électricité n’est pas incluse pour ce logement.";
+    }
+
+    return "Non, l’électricité n’est pas incluse pour ce logement.";
+  }
+
+  const listingText = [
+    listing?.inclusions,
+    listing?.notes,
+    listing?.description
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const normalizedListingText = normalizeTranslatorText(listingText);
+
+  if (!normalizedListingText) {
+    return "Non, l’électricité n’est pas incluse pour ce logement.";
+  }
+
+  if (
+    /\b(?:hydro|electricite)\b.*\b(?:non inclus?|pas inclus?|a la charge du locataire|aux frais du locataire)\b/.test(normalizedListingText) ||
+    /\b(?:non inclus?|pas inclus?)\b.*\b(?:hydro|electricite)\b/.test(normalizedListingText)
+  ) {
+    return "Non, l’électricité n’est pas incluse pour ce logement.";
+  }
+
+  if (
+    /\b(?:hydro|electricite)\b.*\b(?:inclu|inclus|compris)\b/.test(normalizedListingText) ||
+    /\b(?:inclu|inclus|compris)\b.*\b(?:hydro|electricite)\b/.test(normalizedListingText)
+  ) {
+    return "Oui, l’électricité est incluse pour ce logement.";
+  }
+
+  return "Non, l’électricité n’est pas incluse pour ce logement.";
+}
+
+function getListingHeatingLine(listing) {
+  const listingText = [
+    listing?.notes,
+    listing?.description,
+    listing?.inclusions
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const normalizedListingText = normalizeTranslatorText(listingText);
+
+  if (!normalizedListingText) {
+    return "Non, le chauffage n’est pas inclus pour ce logement.";
+  }
+
+  if (
+    /\bchauffage\b.*\b(?:non inclus?|pas inclus?)\b/.test(normalizedListingText) ||
+    /\b(?:non inclus?|pas inclus?)\b.*\bchauffage\b/.test(normalizedListingText)
+  ) {
+    return "Non, le chauffage n’est pas inclus pour ce logement.";
+  }
+
+  if (
+    /\bchauffage\b.*\b(?:inclu|inclus|compris)\b/.test(normalizedListingText) ||
+    /\b(?:inclu|inclus|compris)\b.*\bchauffage\b/.test(normalizedListingText)
+  ) {
+    return "Oui, le chauffage est inclus pour ce logement.";
+  }
+
+  return "Non, le chauffage n’est pas inclus pour ce logement.";
+}
+
+function getListingInclusionsLine(listing) {
+  const inclusions = String(listing?.inclusions || "").trim();
+
+  if (!inclusions) {
+    return "";
+  }
+
+  return `Les inclusions indiquées pour ce logement sont : ${inclusions}.`;
+}
+
+function getListingAppliancesLine(listing) {
+  const explicitAppliances = String(listing?.electros_inclus || "").trim();
+  const washerDryer = String(listing?.laveuse_secheuse || "").trim();
+  const normalizedAppliances = normalizeTranslatorText(explicitAppliances);
+  const normalizedWasherDryer = normalizeTranslatorText(washerDryer);
+
+  if (explicitAppliances) {
+    if (
+      parseBoolean(explicitAppliances) ||
+      /\b(?:oui|inclu|inclus|compris)\b/.test(normalizedAppliances)
+    ) {
+      return "Oui, il y a des électroménagers inclus avec ce logement.";
+    }
+
+    if (/\b(?:non|pas inclus?|aucun)\b/.test(normalizedAppliances)) {
+      return "Non, il n’y a pas d’électroménagers inclus avec ce logement.";
+    }
+  }
+
+  if (washerDryer) {
+    if (
+      parseBoolean(washerDryer) ||
+      /\b(?:oui|inclu|inclus|compris)\b/.test(normalizedWasherDryer)
+    ) {
+      return "Oui, il y a au moins les entrées ou les appareils de laveuse-sécheuse indiqués pour ce logement.";
+    }
+
+    if (/\b(?:non|pas inclus?|aucun)\b/.test(normalizedWasherDryer)) {
+      return "Non, il n’y a pas de laveuse-sécheuse incluse pour ce logement.";
+    }
+  }
+
+  const listingText = [
+    listing?.inclusions,
+    listing?.notes,
+    listing?.description
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const normalizedListingText = normalizeTranslatorText(listingText);
+
+  if (
+    /\bentrees?\s+laveuse[-\s]+secheuse\b/.test(normalizedListingText) ||
+    /\bbranchements?\s+laveuse[-\s]+secheuse\b/.test(normalizedListingText)
+  ) {
+    return "La fiche mentionne des entrées laveuse-sécheuse, mais elle ne confirme pas que des électroménagers sont inclus.";
+  }
+
+  if (
+    /\b(?:electro|electromenager|electromenagers|laveuse|secheuse)\b.*\b(?:inclu|inclus|compris)\b/.test(normalizedListingText) ||
+    /\b(?:inclu|inclus|compris)\b.*\b(?:electro|electromenager|electromenagers|laveuse|secheuse)\b/.test(normalizedListingText)
+  ) {
+    return "Oui, il y a des électroménagers inclus avec ce logement.";
+  }
+
+  if (
+    /\b(?:electro|electromenager|electromenagers|laveuse|secheuse)\b.*\b(?:non inclus?|pas inclus?|aucun)\b/.test(normalizedListingText) ||
+    /\b(?:non inclus?|pas inclus?|aucun)\b.*\b(?:electro|electromenager|electromenagers|laveuse|secheuse)\b/.test(normalizedListingText)
+  ) {
+    return "Non, il n’y a pas d’électroménagers inclus avec ce logement.";
+  }
+
+  return buildTranslatorSafeUnknownLine("les électroménagers");
+}
+
+function getTranslatorPricingAnswerLine(message, listing) {
+  const signals = getTranslatorMessageSignals(message);
+
+  if (signals.asksElectricity) {
+    return getListingElectricityLine(listing);
+  }
+
+  if (signals.asksHeating) {
+    return getListingHeatingLine(listing);
+  }
+
+  if (signals.asksInclusions) {
+    return getListingInclusionsLine(listing) || buildTranslatorSafeUnknownLine("les inclusions");
+  }
+
+  if (signals.asksAppliances) {
+    return getListingAppliancesLine(listing);
+  }
+
+  if (signals.asksRent) {
+    return listing?.loyer
+      ? `Le loyer demandé est de ${listing.loyer}.`
+      : buildTranslatorSafeUnknownLine("le loyer");
+  }
+
+  if (listing?.loyer) {
+    return `Le loyer demandé est de ${listing.loyer}.`;
+  }
+
+  return buildTranslatorSafeUnknownLine("les informations du logement");
+}
+
+function getListingPetsLine(listing) {
+  const explicitPolicy = String(listing?.animaux_acceptes || "").trim();
+
+  if (explicitPolicy) {
+    const normalized = normalizeTranslatorText(explicitPolicy);
+
+    if (
+      parseBoolean(explicitPolicy) ||
+      /accept|autorise|permis|oui/.test(normalized)
+    ) {
+      return "Oui, les animaux sont acceptés pour ce logement.";
+    }
+
+    if (
+      /non|interdit|refus|pas d['’ ]animaux|aucun animal|sans animaux/.test(normalized)
+    ) {
+      return "Non, les animaux ne sont pas acceptés pour ce logement.";
+    }
+
+    return "Non, les animaux ne sont pas acceptés pour ce logement.";
+  }
+
+  const listingNotes = [
+    listing?.notes,
+    listing?.description,
+    listing?.inclusions
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const normalizedNotes = listingNotes.toLowerCase();
+
+  if (!normalizedNotes) {
+    return "Non, les animaux ne sont pas acceptés pour ce logement.";
+  }
+
+  if (/pas d['’ ]animaux|aucun animal|animaux? non accept|sans animaux/.test(normalizedNotes)) {
+    return "Non, les animaux ne sont pas acceptés pour ce logement.";
+  }
+
+  if (/animaux? accept|chiens? accept|chats? accept/.test(normalizedNotes)) {
+    return "Oui, les animaux sont acceptés pour ce logement.";
+  }
+
+  if (/restriction[s]? pour les animaux|restrictions? animaux|animaux? avec restrictions?/.test(normalizedNotes)) {
+    return "Non, les animaux ne sont pas acceptés pour ce logement.";
+  }
+
+  return "Non, les animaux ne sont pas acceptés pour ce logement.";
+}
+
+function getListingPricingNotes(message, listing) {
+  const notes = String(listing?.notes || "").trim();
+
+  if (!notes) {
+    return [];
+  }
+
+  const lowerMessage = String(message || "").toLowerCase();
+  const lowerNotes = notes.toLowerCase();
+  const details = [];
+
+  if ((lowerMessage.includes("hydro") || lowerMessage.includes("électricité") || lowerMessage.includes("electricite")) && /hydro|électric|electric/.test(lowerNotes)) {
+    details.push(notes);
+    return details;
+  }
+
+  if ((lowerMessage.includes("chauff") || lowerMessage.includes("inclus")) && /chauff|inclus|non inclus/.test(lowerNotes)) {
+    details.push(notes);
+    return details;
+  }
+
+  if (/inclus|non inclus|stationnement|non-fumeur|fumeur|laveuse|sécheuse|secheuse/.test(lowerNotes)) {
+    details.push(notes);
+  }
+
+  return details;
+}
+
+function buildTranslatorFieldQuestion(fieldKey, context, listing) {
+  switch (fieldKey) {
+    case "move_in_timing":
+      if (context === "visit" || context === "availability") {
+        return "Quand seriez-vous prêt à emménager ?";
+      }
+      if (context === "pricing" || context === "pets") {
+        return "Si le logement vous convient, quand seriez-vous prêt à emménager ?";
+      }
+      return "Quand seriez-vous prêt à emménager ?";
+
+    case "occupants_total":
+      return context === "visit"
+        ? "Avant d’aller plus loin, vous seriez combien à habiter le logement ?"
+        : "Vous seriez combien à habiter le logement ?";
+
+    case "animals":
+      return "Avez-vous des animaux à considérer pour le dossier ?";
+
+    case "search_area":
+      return listing?.ville
+        ? `Est-ce que le secteur de ${listing.ville} vous convient pour votre recherche ?`
+        : "Quel secteur ou quelle ville recherchez-vous ?";
+
+    case "nearby_area":
+      return listing?.ville
+        ? `Seriez-vous aussi ouvert à des secteurs voisins autour de ${listing.ville} ?`
+        : "Seriez-vous aussi ouvert à des secteurs voisins dans un rayon d’environ 20 km ?";
+
+    case "employment_status":
+      return "Quel est votre statut d’emploi en ce moment ?";
+
+    case "job":
+      return "Quel type d’emploi occupez-vous actuellement ?";
+
+    case "employer":
+      return "Chez quel employeur travaillez-vous actuellement ?";
+
+    case "employment_duration":
+      return "Depuis combien de temps occupez-vous cet emploi ?";
+
+    case "monthly_income":
+      return "Quel est votre revenu mensuel approximatif ?";
+
+    case "credit_level":
+      return "Comment décririez-vous votre niveau de crédit ?";
+
+    case "tal_record":
+      return "Avez-vous un dossier au TAL ?";
+
+    case "full_name":
+      return "Quel est votre nom complet ?";
+
+    case "phone":
+      return "Quel est le meilleur numéro pour vous joindre ?";
+
+    case "email":
+      return "Quelle est la meilleure adresse courriel pour vous joindre ?";
+
+    default:
+      return "Quand seriez-vous prêt à emménager ?";
+  }
+}
+
+function buildTranslatorNextStep(context, qualificationSnapshot = {}, listing = null, message = "") {
+  const fields = qualificationSnapshot?.fields || {};
+  const messageSignals = getTranslatorMessageSignals(message);
+  const lowerMessage = String(message || "").toLowerCase();
+  const mentionsSpecificAnimal = /chien|chat|dog|cat/.test(lowerMessage);
+
+  if (context === "pets" && !mentionsSpecificAnimal) {
+    return "Quel type d’animal avez-vous ?";
+  }
+
+  if (context === "pricing" && (messageSignals.asksElectricity || messageSignals.asksHeating || messageSignals.asksInclusions || messageSignals.asksAppliances)) {
+    if (!fields.move_in_timing) {
+      return "Quand seriez-vous prêt à emménager ?";
+    }
+
+    return "Est-ce que ce logement pourrait vous convenir ?";
+  }
+
+  const fieldOrderByContext = {
+    availability: ["move_in_timing", "occupants_total", "animals", "employment_status", "job", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    pricing: ["move_in_timing", "occupants_total", "animals", "employment_status", "job", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    pets: ["move_in_timing", "occupants_total", "employment_status", "job", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    visit: ["move_in_timing", "occupants_total", "animals", "employment_status", "job", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    "move-in timing": ["occupants_total", "animals", "employment_status", "job", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    location: ["search_area", "nearby_area", "move_in_timing", "occupants_total", "animals", "employment_status", "job"],
+    qualification: ["employment_status", "job", "employer", "employment_duration", "monthly_income", "credit_level", "tal_record", "full_name", "phone", "email"],
+    "general inquiry": ["move_in_timing", "search_area", "occupants_total", "animals", "employment_status", "job", "full_name", "phone", "email"]
+  };
+
+  const orderedFields = fieldOrderByContext[context] || fieldOrderByContext["general inquiry"];
+  const nextField = orderedFields.find((fieldKey) => !fields[fieldKey]);
+
+  if (nextField) {
+    return buildTranslatorFieldQuestion(nextField, context, listing);
+  }
+
+  if (context === "pricing") {
+    return "Est-ce que ce logement correspond à ce que vous cherchez ?";
+  }
+
+  if (context === "visit") {
+    return "Avant d’aller plus loin pour une visite, est-ce que ce logement correspond bien à ce que vous recherchez ?";
+  }
+
+  return "Est-ce que ce logement correspond à ce que vous recherchez ?";
+}
+
+function extractQualificationSnapshot(message, conversationEntries = []) {
+  const rawJoinedText = [
+    ...conversationEntries.map((entry) => renderTranslatorHistoryEntry(entry)),
+    String(message || "").trim()
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const joinedText = normalizeTranslatorText(rawJoinedText);
+  const occupantsCount = extractTranslatorOccupantsCount(rawJoinedText);
+  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
+
+  const fields = {
+    full_name: /je m['’]appelle|mon nom est|moi c['’]est/.test(joinedText),
+    phone: /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(rawJoinedText),
+    email: /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(rawJoinedText),
+    search_area: /(?:je cherche|je cherche dans|dans le secteur de|je veux louer à|je cherche à|quartier|secteur|ville de)\s+[a-zà-ÿ-]{3,}/.test(joinedText),
+    nearby_area: /20\s?km|secteurs? voisins?|secteurs? autour|ouvert à.*secteurs?|flexible sur le secteur|pas obligé.*secteur|proche secteur/.test(joinedText),
+    move_in_timing: /emménag|emmenag|d[èe]s maintenant|maintenant|immédiat|immediat|mois prochain|prochaine semaine|1er|janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre|\d{4}-\d{2}-\d{2}/.test(joinedText),
+    job: /je travaille|je suis\s+(?:infirmi|serveur|serveuse|technicien|technicienne|enseignant|enseignante|employ|prépos|prepos|chauffeur|vendeur|vendeuse|gestionnaire|commis|mécanicien|mecanicien|ouvrier|journalier|étudiant|etudiant|autonome|retraité|retraite)|emploi|travail|job|poste/.test(joinedText),
+    employer: /employeur|je travaille chez|je suis chez|compagnie|entreprise|pour\s+[a-z0-9&'. -]{3,}/.test(joinedText),
+    employment_duration: /depuis\s+\d|ça fait\s+\d|ca fait\s+\d|\d+\s*(?:an|ans|mois)/.test(joinedText),
+    employment_status: /temps plein|temps partiel|autonome|travailleur autonome|étudiant|etudiant|retraité|retraite|sans emploi|permanent|temporaire|contractuel/.test(joinedText),
+    monthly_income: /\b\d{3,5}\s*\$|\brevenu|\bsalaire|\bpar mois|\bmensuel/.test(rawJoinedText.toLowerCase()),
+    credit_level: /crédit|credit|cote|score/.test(joinedText),
+    tal_record: /\btal\b|régie|regie/.test(joinedText),
+    occupants_total:
+      Boolean(occupantsCount) ||
+      inferredShortReplyContext.answersOccupantsQuestion ||
+      /occupant|personne|nous sommes|on est|famille|enfant|avec mon conjoint|avec ma conjointe|avec ma femme|avec mon mari/.test(joinedText),
+    animals: /chien|chat|animal/.test(joinedText)
+  };
+
+  const fieldLabels = {
+    full_name: "nom complet",
+    phone: "téléphone",
+    email: "courriel",
+    search_area: "ville ou secteur recherché",
+    nearby_area: "ouverture à un secteur voisin",
+    move_in_timing: "date d’emménagement",
+    job: "emploi",
+    employer: "employeur",
+    employment_duration: "ancienneté en emploi",
+    employment_status: "statut d’emploi",
+    monthly_income: "revenu mensuel",
+    credit_level: "niveau de crédit",
+    tal_record: "situation TAL",
+    occupants_total: "nombre d’occupants",
+    animals: "animaux"
+  };
+
+  const orderedFields = [
+    "full_name",
+    "phone",
+    "email",
+    "search_area",
+    "nearby_area",
+    "move_in_timing",
+    "job",
+    "employer",
+    "employment_duration",
+    "employment_status",
+    "monthly_income",
+    "credit_level",
+    "tal_record",
+    "occupants_total",
+    "animals"
+  ];
+
+  return {
+    fields,
+    known: orderedFields.filter((fieldKey) => fields[fieldKey]).map((fieldKey) => fieldLabels[fieldKey]),
+    missing: orderedFields.filter((fieldKey) => !fields[fieldKey]).map((fieldKey) => fieldLabels[fieldKey])
+  };
+}
+
+function buildTranslatorFallbackReply(message, options = {}) {
+  const context = detectTranslatorContext(message);
+  const listing = options?.listing || null;
+  const qualificationSnapshot = options?.qualificationSnapshot || { missing: [] };
+  const signals = getTranslatorMessageSignals(message);
+  const nextStep = buildTranslatorNextStep(context, qualificationSnapshot, listing, message);
+
+  if (context === "availability") {
+    const availabilityLine = getListingAvailabilityLine(listing);
+
+    return [
+      availabilityLine || buildTranslatorSafeUnknownLine("la disponibilité"),
+      nextStep
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (context === "pricing") {
+    const pricingAnswerLine = getTranslatorPricingAnswerLine(message, listing);
+    const pricingNotes =
+      signals.asksElectricity || signals.asksHeating || signals.asksInclusions || signals.asksAppliances
+        ? []
+        : getListingPricingNotes(message, listing);
+
+    return [
+      pricingAnswerLine,
+      ...pricingNotes,
+      signals.asksInclusions ? "" : (listing?.inclusions ? `Les inclusions notées sont : ${listing.inclusions}.` : ""),
+      nextStep
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (context === "pets") {
+    const petsLine = getListingPetsLine(listing);
+
+    return [
+      petsLine
+        ? petsLine
+        : "Je peux vérifier la politique concernant les animaux pour ce logement.",
+      nextStep
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (context === "visit") {
+    return [
+      "Oui, c’est possible. J’ai d’abord besoin de quelques informations pour pouvoir planifier une visite avec la personne en charge.",
+      nextStep
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (context === "deposit") {
+    return [
+      "En location résidentielle au Québec, ce n’est généralement pas un dépôt qui est demandé.",
+      "Je peux vous préciser les conditions applicables au logement si vous voulez."
+    ].join("\n\n");
+  }
+
+  if (context === "move-in timing") {
+    const availabilityLine = getListingAvailabilityLine(listing);
+
+    return [
+      availabilityLine
+        ? availabilityLine
+        : "Je peux vous confirmer la date de disponibilité du logement.",
+      nextStep
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (context === "qualification") {
+    return [
+      "Merci pour les précisions.",
+      nextStep
+    ].join("\n\n");
+  }
+
+  if (context === "location") {
+    return [
+      listing?.adresse || listing?.ville
+        ? `Le logement est situé ${listing?.adresse ? `au ${listing.adresse}` : ""}${listing?.ville ? `${listing?.adresse ? ", " : ""}${listing.ville}` : ""}.`
+        : "Je peux vous donner plus de détails sur l’emplacement du logement.",
+      nextStep
+    ].join("\n\n");
+  }
+
+  return [
+    listing?.loyer || listing?.disponibilite
+      ? `Je peux vous confirmer les informations du logement${listing?.loyer ? `, notamment le loyer à ${listing.loyer}` : ""}${listing?.disponibilite ? ` et la disponibilité ${String(listing.disponibilite).toLowerCase()}` : ""}.`
+      : "Je peux vous donner les informations utiles sur le logement.",
+    nextStep
+  ].join("\n\n");
+}
+
+function shouldPreferDeterministicTranslatorReply(context, reply, listing, qualificationSnapshot = {}) {
+  const normalizedReply = String(reply || "").trim().toLowerCase();
+
+  if (!normalizedReply) {
+    return true;
+  }
+
+  const asksIdentityTooEarly = /(nom complet|votre nom|num[eé]ro|t[ée]l[ée]phone|courriel|email)/.test(normalizedReply);
+
+  if (context === "availability") {
+    const availability = String(listing?.disponibilite || listing?.availability || "").trim();
+    if (availability) {
+      if (normalizedReply.includes(availability.toLowerCase())) {
+        return true;
+      }
+
+      if (!qualificationSnapshot?.fields?.move_in_timing && asksIdentityTooEarly) {
+        return true;
+      }
+    }
+  }
+
+  if (context === "pets" && getListingPetsLine(listing) && /je peux v[ée]rifier|je peux verifier/.test(normalizedReply)) {
+    return true;
+  }
+
+  return false;
+}
+
+function buildTranslatorFallbackPayload(message, options = {}) {
+  return {
+    translation: buildTranslatorFallbackTranslation(message, options?.conversationEntries || []),
+    reply: buildTranslatorFallbackReply(message, options),
     context: detectTranslatorContext(message)
   };
 }
@@ -1837,56 +3357,68 @@ async function handleClientRoute(req, res, handler) {
   }
 }
 
-async function generateTranslatorPayload(message) {
-  if (!openai) {
-    return buildTranslatorFallbackPayload(message);
-  }
-
-  const response = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-    temperature: 0.7,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content:
-          "Tu es un assistant de correction locative specialise en messages de locataires ecrits en francais quebecois oral, familier, abrege, phonétique ou mal ponctue. Tu dois bien comprendre le francais quebecois parle, y compris le slang, les abreviations, les raccourcis oraux, l'ecriture phonétique, les fautes d'orthographe, les phrases tres sales et les expressions locales. Suppose toujours un contexte d'appartement ou de location sauf si c'est clairement impossible. Ton travail n'est pas de traduire mot a mot, mais d'interpreter correctement l'intention reelle du locataire et de la reformuler clairement.\n\nRetourne uniquement un objet JSON avec trois champs string: translation, reply, context.\n\ntranslation: reformulation en francais international, propre, naturelle, courte, bien ponctuee et fidele au sens reel du message.\nreply: reponse suggeree en francais canadien, humaine, breve, professionnelle, naturelle pour un contexte locatif au Quebec. Cette reponse est seulement une suggestion. L'employe doit utiliser son jugement et peut l'adapter avant envoi.\ncontext: etiquette courte en anglais, par exemple availability, pricing, pets, qualification, move-in timing, location, deposit, visit ou general inquiry.\n\nRegles:\n- aucun emoji\n- aucun ton robotique\n- aucun ton excessivement formel\n- ne traduis jamais mot a mot si le sens est clair dans le contexte locatif\n- n'invente pas d'information\n- ne propose pas une visite trop tot\n- pose au maximum une seule question naturelle a la fois si une relance est utile\n- la reponse doit faire avancer la conversation de facon naturelle dans un contexte de location\n- si le locataire ecrit en francais quebecois tres familier, corrige le sens vers un francais international normal, pas vers un calque litteral\n\nExemples:\nMessage: stu dispo big\ntranslation: Est-ce que le logement est disponible ?\nreply: Bonjour, oui, le logement est toujours disponible pour le moment. Souhaitez-vous que je vous confirme les principaux details ?\ncontext: availability\n\nMessage: c tu loin du metro\ntranslation: Est-ce que le logement est loin du metro ?\nreply: Bonjour, je peux vous donner plus de details sur l'emplacement. Quel secteur ou quel point de repere vous interesse ?\ncontext: location\n\nMessage: jai un chien pis chu temp plein\ntranslation: J'ai un chien et je travaille a temps plein.\nreply: Bonjour, merci pour les precisions. Je peux verifier la politique pour les animaux et vous confirmer les criteres de base du logement.\ncontext: qualification\n\nMessage: combien le loyer ak hydro\ntranslation: Quel est le loyer, et est-ce que l'electricite est incluse ?\nreply: Bonjour, je peux vous confirmer le loyer ainsi que ce qui est inclus. Voulez-vous que je vous precise les inclusions ?\ncontext: pricing\n\nMessage: jpeux tu visiter sa\ntranslation: Est-ce qu'il serait possible de visiter le logement ?\nreply: Bonjour, je peux d'abord vous confirmer les principaux details du logement et sa disponibilite. Souhaitez-vous que je vous les resume ?\ncontext: visit\n\nMessage: allo jai tu besoin dun depot\ntranslation: Est-ce qu'un depot est requis pour louer le logement ?\nreply: Bonjour, en location residentielle au Quebec, ce n'est generalement pas un depot qui est demande. Je peux vous preciser les conditions applicables au logement.\ncontext: deposit\n\nMessage: chu interesser mais jme demandais si ces chauffé\ntranslation: Je suis interesse, mais je me demandais si le logement est chauffe.\nreply: Bonjour, je peux vous confirmer ce qui est inclus avec le logement. Voulez-vous que je vous precise le chauffage et les autres inclusions ?\ncontext: pricing"
-      },
-      {
-        role: "user",
-        content: `Message a traiter :\n${message}`
-      }
-    ]
+async function generateTranslatorPayload(message, options = {}) {
+  const persistedThreadHistory = options?.translatorThreadKey
+    ? trimCurrentTranslatorMessageFromHistory(
+        await loadRecentTranslatorHistoryByThread(options?.translatorThreadKey, 12),
+        message
+      )
+    : [];
+  const requestConversationHistory = options?.translatorThreadKey
+    ? []
+    : trimCurrentTranslatorMessageFromHistory(
+        extractTranslatorHistoryEntries(options?.conversationHistory),
+        message
+      );
+  const listing = options?.listing || null;
+  const combinedHistory = persistedThreadHistory.length
+    ? persistedThreadHistory
+    : requestConversationHistory;
+  const threadState = options?.translatorThreadKey
+    ? await getTranslatorThreadState(options.translatorThreadKey, {
+        employeeUserId: options?.userId,
+        listingRef: listing?.ref || ""
+      })
+    : createDefaultTranslatorThreadState("", options?.userId, listing?.ref || "");
+  const deterministicExtraction = buildDeterministicTranslatorExtraction(message, combinedHistory, threadState);
+  const aiExtraction = await generateTranslatorAiExtraction(message, {
+    listing,
+    conversationEntries: combinedHistory,
+    threadState,
+    deterministicExtraction
   });
+  const extraction = mergeTranslatorExtraction(deterministicExtraction, aiExtraction || {});
+  const updatedThreadState = updateTranslatorThreadState(threadState, extraction, {
+    employeeUserId: options?.userId,
+    listingRef: listing?.ref || ""
+  });
+  const nextStep = getTranslatorNextStepForState(updatedThreadState, extraction, listing);
 
-  const content = response.choices?.[0]?.message?.content?.trim();
+  updatedThreadState.current_step = nextStep;
+  updatedThreadState.last_asked_step = nextStep;
 
-  if (!content) {
-    return buildTranslatorFallbackPayload(message);
+  if (options?.translatorThreadKey) {
+    await saveTranslatorThreadState(updatedThreadState);
   }
 
-  try {
-    const parsed = JSON.parse(content);
-
-    if (
-      typeof parsed?.translation === "string" &&
-      parsed.translation.trim() &&
-      typeof parsed?.reply === "string" &&
-      parsed.reply.trim()
-    ) {
-      return {
-        translation: parsed.translation.trim(),
-        reply: parsed.reply.trim(),
-        context: typeof parsed?.context === "string" && parsed.context.trim()
-          ? parsed.context.trim()
+  const context = extraction.listing_question_type === "none"
+    ? (
+        Object.keys(extraction.provided_fields || {}).length
+          ? "qualification"
           : detectTranslatorContext(message)
-      };
-    }
-  } catch {
-    return buildTranslatorFallbackPayload(message);
-  }
+      )
+    : detectTranslatorContext(message);
 
-  return buildTranslatorFallbackPayload(message);
+  return {
+    translation: String(extraction.translation || "").trim() || buildTranslatorFallbackTranslation(message, combinedHistory),
+    reply: buildTranslatorDeterministicReply({
+      extraction,
+      threadState: updatedThreadState,
+      listing,
+      message
+    }),
+    context
+  };
 }
 
 async function generateListingReply(message, listing) {
@@ -1947,6 +3479,10 @@ app.post("/api/chat", async (req, res) => {
   const mode = String(req.body?.mode || "").trim();
   const message = String(req.body?.message || "").trim();
   const userId = String(req.body?.user_id || "employee-manuel");
+  const listingRef = normalizeRef(req.body?.listing_ref || "");
+  const resolvedListingRef = listingRef ? `L-${listingRef}` : "";
+  const translatorThreadKey = String(req.body?.translator_thread_key || "").trim();
+  const conversationHistory = Array.isArray(req.body?.conversation_history) ? req.body.conversation_history : [];
 
   if (!mode || !message) {
     return res.status(400).json({
@@ -1958,29 +3494,43 @@ app.post("/api/chat", async (req, res) => {
   try {
     await upsertChatSession(userId);
     await recordUserDailyTime(userId);
+    const userMessageId = createId("msg");
     await appendChatMessage({
-      id: createId("msg"),
+      id: userMessageId,
       user_id: userId,
       mode,
+      listing_ref: resolvedListingRef || null,
+      translator_thread_key: translatorThreadKey || null,
       sender: "user",
       text: message,
       created_at: new Date().toISOString()
     });
 
     if (mode === "translator") {
-      const translatorPayload = await generateTranslatorPayload(message);
+      const listings = listingRef ? await loadListingsMap() : null;
+      const translatorPayload = await generateTranslatorPayload(message, {
+        userId,
+        translatorThreadKey,
+        listing: listingRef && listings ? listings[listingRef] || null : null,
+        conversationHistory
+      });
       const assistantText = [
         `Français international : ${translatorPayload.translation}`,
-        `Réponse suggérée : ${translatorPayload.reply}`,
-        `Contexte : ${translatorPayload.context}`
+        `Réponse suggérée : ${translatorPayload.reply}`
       ].join("\n\n");
 
+      const assistantMessageId = createId("msg");
       await appendChatMessage({
-        id: createId("msg"),
+        id: assistantMessageId,
         user_id: userId,
         mode,
+        listing_ref: resolvedListingRef || null,
+        translator_thread_key: translatorThreadKey || null,
         sender: "assistant",
         text: assistantText,
+        translation: translatorPayload.translation,
+        reply: translatorPayload.reply,
+        context: translatorPayload.context,
         created_at: new Date().toISOString()
       });
 
@@ -1988,6 +3538,10 @@ app.post("/api/chat", async (req, res) => {
         ok: true,
         label: "Traducteur",
         variant: "success",
+        user_message_id: userMessageId,
+        assistant_message_id: assistantMessageId,
+        translator_thread_key: translatorThreadKey || "",
+        listing_ref: resolvedListingRef || "",
         translation: translatorPayload.translation,
         reply: translatorPayload.reply,
         context: translatorPayload.context
@@ -2988,6 +4542,46 @@ app.get("/api/admin/workspace/listing-tasks", async (req, res) => handleAdminRou
   return res.json({ ok: true, tasks });
 }));
 
+app.get("/api/admin/translator-reports", async (req, res) => handleAdminRoute(req, res, async () => {
+  const [reports, employees] = await Promise.all([
+    readJsonFile(TRANSLATOR_REPORTS_PATH, []),
+    loadEmployeeUsersSummary().catch(() => [])
+  ]);
+  const employeeMap = new Map(
+    (employees || []).map((employee) => [String(employee.user_id), employee])
+  );
+
+  return res.json({
+    ok: true,
+    reports: sortByCreatedAtDesc(reports).map((report) => ({
+      ...report,
+      employee: employeeMap.get(String(report.employee_user_id || "")) || null
+    }))
+  });
+}));
+
+app.put("/api/admin/translator-reports/:id", async (req, res) => handleAdminRoute(req, res, async () => {
+  const reportId = String(req.params.id || "").trim();
+  const nextStatus = String(req.body?.status || "").trim().toLowerCase();
+
+  if (!["open", "reviewed"].includes(nextStatus)) {
+    throw createHttpError(400, "Statut de signalement invalide.");
+  }
+
+  const reports = await readJsonFile(TRANSLATOR_REPORTS_PATH, []);
+  const report = reports.find((item) => String(item.id) === reportId);
+
+  if (!report) {
+    throw createHttpError(404, "Signalement Traducteur introuvable.");
+  }
+
+  report.status = nextStatus;
+  report.reviewed_at = nextStatus === "reviewed" ? new Date().toISOString() : null;
+  await writeJsonFile(TRANSLATOR_REPORTS_PATH, reports);
+
+  return res.json({ ok: true, report });
+}));
+
 app.get("/api/employee/workspace/conversation", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
   const messages = await loadWorkspaceMessages();
   let changedMessages = false;
@@ -3089,6 +4683,77 @@ app.get("/api/employee/workspace/notifications", async (req, res) => handleEmplo
   ).slice(0, 12);
 
   return res.json({ ok: true, notifications });
+}));
+
+app.post("/api/employee/translator-reports", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {
+  const reason = String(req.body?.reason || "").trim();
+  const translatorThreadKey = String(req.body?.translator_thread_key || "").trim();
+  const listingRef = normalizeRef(req.body?.listing_ref || "");
+  const rawTenantMessage = String(req.body?.raw_tenant_message || "").trim();
+  const translation = String(req.body?.translation || "").trim();
+  const suggestedReply = String(req.body?.suggested_reply || "").trim();
+  const assistantMessageId = String(req.body?.assistant_message_id || "").trim();
+  const tenantMessageId = String(req.body?.tenant_message_id || "").trim();
+  const recentContext = Array.isArray(req.body?.recent_context)
+    ? req.body.recent_context
+        .slice(-6)
+        .map((entry) => ({
+          sender: String(entry?.sender || "").trim(),
+          label: String(entry?.label || "").trim(),
+          text: String(entry?.text || "").trim(),
+          sections: Array.isArray(entry?.sections)
+            ? entry.sections
+                .slice(0, 4)
+                .map((section) => ({
+                  title: String(section?.title || "").trim(),
+                  text: String(section?.text || "").trim()
+                }))
+                .filter((section) => section.title || section.text)
+            : []
+        }))
+        .filter((entry) => entry.sender || entry.text || entry.sections.length)
+    : [];
+
+  if (!TRANSLATOR_REPORT_REASONS.includes(reason)) {
+    throw createHttpError(400, "Raison de signalement invalide.");
+  }
+
+  const reports = await readJsonFile(TRANSLATOR_REPORTS_PATH, []);
+  const threadStateSnapshot = translatorThreadKey
+    ? await getTranslatorThreadState(translatorThreadKey, {
+        employeeUserId: user.id,
+        listingRef
+      })
+    : null;
+
+  const report = {
+    id: createId("translator_report"),
+    created_at: new Date().toISOString(),
+    employee_user_id: user.id,
+    translator_thread_key: translatorThreadKey || null,
+    listing_ref: listingRef ? `L-${listingRef}` : null,
+    reason,
+    note: null,
+    status: "open",
+    assistant_message_id: assistantMessageId || null,
+    tenant_message_id: tenantMessageId || null,
+    raw_tenant_message: rawTenantMessage,
+    translation,
+    suggested_reply: suggestedReply,
+    recent_context: recentContext,
+    thread_state_snapshot: threadStateSnapshot
+      ? {
+          current_step: threadStateSnapshot.current_step || null,
+          last_asked_step: threadStateSnapshot.last_asked_step || null,
+          last_detected_listing_question: threadStateSnapshot.last_detected_listing_question || null
+        }
+      : null
+  };
+
+  reports.push(report);
+  await writeJsonFile(TRANSLATOR_REPORTS_PATH, reports);
+
+  return res.json({ ok: true, report_id: report.id });
 }));
 
 app.post("/api/employee/workspace/notifications/:id/read", async (req, res) => handleEmployeeRoute(req, res, async ({ user }) => {

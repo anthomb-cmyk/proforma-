@@ -26,6 +26,7 @@
         <button class="menu-btn" data-tab="clients">Clients</button>
         <button class="menu-btn" data-tab="apartments">Appartements</button>
         <button class="menu-btn" data-tab="candidates">Candidats</button>
+        <button class="menu-btn" data-tab="translatorReports">Signalements Traducteur</button>
       </div>
     </aside>
 
@@ -514,6 +515,34 @@
             <tbody id="candidatesBody"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="card hidden" id="translatorReportsTab">
+        <div class="workspace-section-head" style="margin-bottom:18px;">
+          <span class="eyebrow">Beta feedback</span>
+          <h3>Signalements Traducteur</h3>
+          <p>Consultez les réponses Traducteur signalées par les employés pendant la phase beta.</p>
+        </div>
+
+        <div class="filters">
+          <select id="translatorReportReasonFilter">
+            <option value="">Toutes les raisons</option>
+            <option value="off_topic">Pas rapport</option>
+            <option value="misunderstood_message">Mauvaise compréhension</option>
+            <option value="wrong_listing_info">Mauvaises infos sur le logement</option>
+            <option value="wrong_next_question">Mauvaises prochaines questions</option>
+            <option value="other">Autres</option>
+          </select>
+          <select id="translatorReportStatusFilter">
+            <option value="">Tous les statuts</option>
+            <option value="open">Ouvert</option>
+            <option value="reviewed">Révisé</option>
+          </select>
+          <input id="translatorReportSearch" type="text" placeholder="Recherche: logement, employé, thread, message..." />
+          <button type="button" id="clearTranslatorReportFiltersBtn" class="secondary-btn">Réinitialiser</button>
+        </div>
+
+        <div id="translatorReportsList" class="translator-report-list"></div>
       </section>
     </main>
   </div>

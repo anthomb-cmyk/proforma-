@@ -22,7 +22,9 @@ const clientShell = document.getElementById("clientShell");
 const pageTitle = document.getElementById("pageTitle");
 const clientMeta = document.getElementById("clientMeta");
 const refreshBtn = document.getElementById("refreshBtn");
+const apartmentsSupervisionSummary = document.getElementById("apartmentsSupervisionSummary");
 const apartmentsBody = document.getElementById("apartmentsBody");
+const candidatesReviewSummary = document.getElementById("candidatesReviewSummary");
 const candidatesBody = document.getElementById("candidatesBody");
 const criteriaForm = document.getElementById("criteriaForm");
 const criteriaStatus = document.getElementById("criteriaStatus");
@@ -31,6 +33,10 @@ const statTotalApartments = document.getElementById("statTotalApartments");
 const statAvailableApartments = document.getElementById("statAvailableApartments");
 const statCandidates = document.getElementById("statCandidates");
 const statDecisionSplit = document.getElementById("statDecisionSplit");
+const dashboardDecisionQueue = document.getElementById("dashboardDecisionQueue");
+const dashboardApartmentOverview = document.getElementById("dashboardApartmentOverview");
+const dashboardCriteriaSummary = document.getElementById("dashboardCriteriaSummary");
+const dashboardWatchlist = document.getElementById("dashboardWatchlist");
 
 const candidateModal = document.getElementById("candidateModal");
 const closeCandidateModalBtn = document.getElementById("closeCandidateModalBtn");
@@ -53,8 +59,22 @@ function isClientDomain() {
   return String(window.location.hostname || "").trim().toLowerCase() === "client.fluxlocatif.com";
 }
 
+function isPreviewSafeClientHost() {
+  const hostname = String(window.location.hostname || "").trim().toLowerCase();
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".up.railway.app")
+  );
+}
+
 function redirectToClientPortalEntry() {
   const targetPath = "/client.html";
+  if (isPreviewSafeClientHost()) {
+    return false;
+  }
+
   const targetUrl = `${CLIENT_APP_URL}${targetPath}`;
   const currentPath = String(window.location.pathname || "").trim() || "/";
 
@@ -123,6 +143,694 @@ function fromYesNo(value) {
 function formatCurrency(value) {
   if (value === null || value === undefined || value === "") return "-";
   return `${value} $`;
+}
+
+function formatDisplayDate(value) {
+  if (!value) return "";
+  const normalized = String(value).trim();
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+  if (!match) {
+    return "";
+  }
+
+  const parsed = new Date(`${match[1]}-${match[2]}-${match[3]}T12:00:00`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("fr-CA", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  }).format(parsed);
+}
+
+function getAvailabilityMeta(value) {
+  if (value === null || value === undefined || value === "") {
+    return {
+      label: "Non précisé",
+      tone: "neutral"
+    };
+  }
+
+  const rawValue = String(value).trim();
+  const normalized = rawValue.toLowerCase();
+  const formattedDate = formatDisplayDate(rawValue);
+
+  if (formattedDate) {
+    return {
+      label: `Dès le ${formattedDate}`,
+      tone: "info"
+    };
+  }
+
+  if (/immédiat|immediat/.test(normalized)) {
+    return {
+      label: "Disponible maintenant",
+      tone: "positive"
+    };
+  }
+
+  if (/disponible/.test(normalized)) {
+    return {
+      label: "Disponible",
+      tone: "positive"
+    };
+  }
+
+  if (/loué|loue|indisponible|occupé|occupe/.test(normalized)) {
+    return {
+      label: "Non disponible",
+      tone: "danger"
+    };
+  }
+
+  return {
+    label: rawValue,
+    tone: "neutral"
+  };
+}
+
+function getScoreMeta(score) {
+  if (score === null || score === undefined || String(score).trim() === "") {
+    return {
+      label: "-",
+      className: "score-mid"
+    };
+  }
+
+  const numericScore = Number(score);
+
+  if (!Number.isFinite(numericScore)) {
+    return {
+      label: "-",
+      className: "score-mid"
+    };
+  }
+
+  if (numericScore >= 85) {
+    return {
+      label: String(numericScore),
+      className: ""
+    };
+  }
+
+  if (numericScore >= 70) {
+    return {
+      label: String(numericScore),
+      className: "score-mid"
+    };
+  }
+
+  return {
+    label: String(numericScore),
+    className: "score-low"
+  };
+}
+
+function getMatchMeta(matchStatus) {
+  const normalized = String(matchStatus || "").trim().toLowerCase();
+
+  if (!normalized || normalized === "refusé" || normalized === "refuse") {
+    return {
+      label: "À confirmer",
+      tone: "neutral"
+    };
+  }
+
+  return {
+    label: "Aligné",
+    tone: "positive"
+  };
+}
+
+function getCandidateStatusMeta(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+
+  if (/approuv/.test(normalized)) {
+    return {
+      label: "Approuvé",
+      tone: "positive"
+    };
+  }
+
+  if (/refus/.test(normalized)) {
+    return {
+      label: "Refusé",
+      tone: "danger"
+    };
+  }
+
+  if (/attente/.test(normalized)) {
+    return {
+      label: "En attente",
+      tone: "warning"
+    };
+  }
+
+  if (/visite/.test(normalized)) {
+    return {
+      label: "Visite",
+      tone: "info"
+    };
+  }
+
+  return {
+    label: status || "En revue",
+    tone: "neutral"
+  };
+}
+
+function getCandidateScoreValue(candidate) {
+  const rawScore = candidate?.match_score;
+
+  if (rawScore === null || rawScore === undefined || String(rawScore).trim() === "") {
+    return -1;
+  }
+
+  const value = Number(rawScore);
+  return Number.isFinite(value) ? value : -1;
+}
+
+function getApartmentCandidates(apartmentRef) {
+  return state.candidates.filter(
+    (candidate) => normalizeRef(candidate.apartment_ref) === normalizeRef(apartmentRef)
+  );
+}
+
+function getApartmentByRef(apartmentRef) {
+  return state.apartments.find((apartment) => normalizeRef(apartment.ref) === normalizeRef(apartmentRef)) || null;
+}
+
+function getBestCandidateForApartment(apartmentRef) {
+  return getApartmentCandidates(apartmentRef)
+    .slice()
+    .sort((a, b) => getCandidateScoreValue(b) - getCandidateScoreValue(a))[0] || null;
+}
+
+function deriveApartmentStage(apartment, candidates = []) {
+  const availabilityMeta = getAvailabilityMeta(apartment?.disponibilite);
+  const bestScore = candidates.reduce((max, candidate) => {
+    return Math.max(max, getCandidateScoreValue(candidate));
+  }, -1);
+
+  if (availabilityMeta.tone === "danger") {
+    return {
+      label: "Non disponible",
+      tone: "neutral"
+    };
+  }
+
+  if (!candidates.length) {
+    return {
+      label: "Demandes à venir",
+      tone: "neutral"
+    };
+  }
+
+  if (bestScore >= 85) {
+    return {
+      label: "Dossiers à revoir",
+      tone: "info"
+    };
+  }
+
+  return {
+    label: "Présélection en cours",
+    tone: "warning"
+  };
+}
+
+function getSafeStageMeta(stage) {
+  return {
+    label: stage?.label || "Statut à confirmer",
+    tone: stage?.tone || "neutral"
+  };
+}
+
+function deriveApartmentNextStep(apartment, candidates = []) {
+  const availabilityMeta = getAvailabilityMeta(apartment?.disponibilite);
+  const bestCandidate = getBestCandidateForApartment(apartment?.ref);
+
+  if (availabilityMeta.tone === "danger") {
+    return "Aucune action immédiate pour cette unité.";
+  }
+
+  if (!candidates.length) {
+    return "Nous continuons la réception des demandes.";
+  }
+
+  if (bestCandidate && getCandidateScoreValue(bestCandidate) >= 85) {
+    return "Des dossiers méritent votre attention.";
+  }
+
+  return "Le tri des dossiers se poursuit avant revue.";
+}
+
+function deriveApartmentNeedsAttention(apartment, candidates = []) {
+  const availabilityMeta = getAvailabilityMeta(apartment?.disponibilite);
+  const bestCandidate = getBestCandidateForApartment(apartment?.ref);
+  const bestScore = bestCandidate ? getCandidateScoreValue(bestCandidate) : -1;
+
+  if (availabilityMeta.tone === "danger") {
+    return false;
+  }
+
+  if (!candidates.length) {
+    return true;
+  }
+
+  return bestScore < 70;
+}
+
+function deriveCandidatePriority(candidate) {
+  const score = getCandidateScoreValue(candidate);
+  const statusMeta = getCandidateStatusMeta(candidate?.status);
+
+  if (statusMeta.tone === "danger" || statusMeta.tone === "positive") {
+    return "low";
+  }
+
+  if (score >= 85) {
+    return "high";
+  }
+
+  if (score >= 70) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function deriveCandidateRecommendation(candidate) {
+  const priority = deriveCandidatePriority(candidate);
+
+  if (priority === "high") {
+    return {
+      label: "À revoir",
+      tone: "info"
+    };
+  }
+
+  if (priority === "medium") {
+    return {
+      label: "Bon potentiel",
+      tone: "positive"
+    };
+  }
+
+  return {
+    label: "À surveiller",
+    tone: "neutral"
+  };
+}
+
+const RESPONSIBILITY_LABELS = {
+  CLIENT: "En attente du client",
+  TEAM: "Pris en charge par l’équipe",
+  WATCH: "À surveiller",
+  DONE: "Complété"
+};
+
+function getResponsibilityVisual(label) {
+  switch (label) {
+    case RESPONSIBILITY_LABELS.CLIENT:
+      return { tone: "info", className: "client" };
+    case RESPONSIBILITY_LABELS.TEAM:
+      return { tone: "positive", className: "team" };
+    case RESPONSIBILITY_LABELS.WATCH:
+      return { tone: "warning", className: "watch" };
+    case RESPONSIBILITY_LABELS.DONE:
+    default:
+      return { tone: "neutral", className: "done" };
+  }
+}
+
+function hasCompletedCandidateStatus(candidate) {
+  const tone = getCandidateStatusMeta(candidate?.status).tone;
+  return tone === "positive" || tone === "danger";
+}
+
+function getOpenCandidates(candidates = []) {
+  return candidates.filter((candidate) => !hasCompletedCandidateStatus(candidate));
+}
+
+function hasMaterialNegativeReasons(candidate) {
+  const riskReasons = getCandidateReasonGroups(candidate).risks.map((reason) => String(reason || "").toLowerCase());
+  return riskReasons.some((reason) =>
+    /crédit faible|credit faible|tal défavorable|tal defavorable|revenu insuffisant|refus|défavorable|defavorable|faible/.test(reason)
+  );
+}
+
+function deriveApartmentResponsibility(apartment, candidates = []) {
+  const availabilityMeta = getAvailabilityMeta(apartment?.disponibilite);
+  const openCandidates = getOpenCandidates(candidates);
+  const bestCandidate = openCandidates
+    .slice()
+    .sort((a, b) => getCandidateScoreValue(b) - getCandidateScoreValue(a))[0] || null;
+  const bestScore = bestCandidate ? getCandidateScoreValue(bestCandidate) : -1;
+
+  if (availabilityMeta.tone === "danger") {
+    return RESPONSIBILITY_LABELS.DONE;
+  }
+
+  if (candidates.length > 0 && !openCandidates.length) {
+    return RESPONSIBILITY_LABELS.DONE;
+  }
+
+  if (bestScore >= 85 && bestCandidate && !hasMaterialNegativeReasons(bestCandidate)) {
+    return RESPONSIBILITY_LABELS.CLIENT;
+  }
+
+  if (!openCandidates.length || bestScore < 70) {
+    return RESPONSIBILITY_LABELS.WATCH;
+  }
+
+  return RESPONSIBILITY_LABELS.TEAM;
+}
+
+function deriveApartmentResponsibilityReason(apartment, candidates = []) {
+  const responsibility = deriveApartmentResponsibility(apartment, candidates);
+
+  if (responsibility === RESPONSIBILITY_LABELS.DONE) {
+    return candidates.length > 0 && !getOpenCandidates(candidates).length
+      ? "Tous les dossiers liés sont déjà traités."
+      : "Le logement n’est plus actif dans le cycle de relocation.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.CLIENT) {
+    return "Des dossiers solides sont prêts à être revus.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.TEAM) {
+    return "L’équipe poursuit encore le tri et la présélection.";
+  }
+
+  if (!candidates.length) {
+    return "Aucun dossier n’est encore visible pour cette unité.";
+  }
+
+  return "Les dossiers reçus restent encore faibles ou peu alignés.";
+}
+
+function deriveApartmentNextAction(apartment, candidates = []) {
+  const responsibility = deriveApartmentResponsibility(apartment, candidates);
+
+  if (responsibility === RESPONSIBILITY_LABELS.DONE) {
+    return "Aucune action requise.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.CLIENT) {
+    return "Revoir les meilleurs dossiers reçus.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.TEAM) {
+    return "Nous poursuivons la présélection avant de vous solliciter.";
+  }
+
+  if (!candidates.length) {
+    return "Surveiller l’arrivée de nouvelles candidatures.";
+  }
+
+  return "Surveiller la qualité des prochains dossiers.";
+}
+
+function getApartmentResponsibilityMeta(apartment, candidates = []) {
+  const label = deriveApartmentResponsibility(apartment, candidates);
+  const visual = getResponsibilityVisual(label);
+
+  return {
+    label,
+    tone: visual.tone,
+    className: visual.className,
+    reason: deriveApartmentResponsibilityReason(apartment, candidates),
+    nextStep: deriveApartmentNextAction(apartment, candidates)
+  };
+}
+
+function deriveCandidateResponsibility(candidate) {
+  const statusMeta = getCandidateStatusMeta(candidate?.status);
+  const score = getCandidateScoreValue(candidate);
+  const matchMeta = getMatchMeta(candidate?.match_status);
+  const hasNegativeReasons = hasMaterialNegativeReasons(candidate);
+
+  if (statusMeta.tone === "positive" || statusMeta.tone === "danger") {
+    return RESPONSIBILITY_LABELS.DONE;
+  }
+
+  if (score < 0) {
+    return RESPONSIBILITY_LABELS.WATCH;
+  }
+
+  if (score >= 85 && !hasNegativeReasons) {
+    return RESPONSIBILITY_LABELS.CLIENT;
+  }
+
+  if ((score >= 70 || matchMeta.tone === "positive") && !hasNegativeReasons) {
+    return RESPONSIBILITY_LABELS.TEAM;
+  }
+
+  return RESPONSIBILITY_LABELS.WATCH;
+}
+
+function deriveCandidateResponsibilityReason(candidate) {
+  const responsibility = deriveCandidateResponsibility(candidate);
+  const statusMeta = getCandidateStatusMeta(candidate?.status);
+
+  if (responsibility === RESPONSIBILITY_LABELS.DONE) {
+    return statusMeta.tone === "positive"
+      ? "Le dossier a déjà été validé."
+      : "Le dossier a déjà été traité.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.CLIENT) {
+    return "Le dossier ressort suffisamment pour une revue de votre part.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.TEAM) {
+    return "L’équipe poursuit encore l’analyse de ce dossier.";
+  }
+
+  if (getCandidateScoreValue(candidate) < 0) {
+    return "Le dossier reste incomplet pour le moment.";
+  }
+
+  if (hasMaterialNegativeReasons(candidate)) {
+    return "Le dossier comporte encore des points sensibles à clarifier.";
+  }
+
+  return "Le dossier reste secondaire à ce stade.";
+}
+
+function deriveCandidateNextAction(candidate) {
+  const responsibility = deriveCandidateResponsibility(candidate);
+
+  if (responsibility === RESPONSIBILITY_LABELS.DONE) {
+    return "Aucune action requise.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.CLIENT) {
+    return "Revoir ce dossier plus en détail.";
+  }
+
+  if (responsibility === RESPONSIBILITY_LABELS.TEAM) {
+    return "Nous poursuivons l’analyse avant de vous solliciter.";
+  }
+
+  if (getCandidateScoreValue(candidate) < 0) {
+    return "Attendre davantage d’éléments avant revue.";
+  }
+
+  return "Conserver ce dossier en suivi secondaire.";
+}
+
+function getCandidateResponsibilityMeta(candidate) {
+  const label = deriveCandidateResponsibility(candidate);
+  const visual = getResponsibilityVisual(label);
+
+  return {
+    label,
+    tone: visual.tone,
+    className: visual.className,
+    reason: deriveCandidateResponsibilityReason(candidate),
+    nextStep: deriveCandidateNextAction(candidate)
+  };
+}
+
+function getCandidateReasonGroups(candidate) {
+  const reasons = Array.isArray(candidate?.match_reasons) ? candidate.match_reasons.filter(Boolean) : [];
+  return {
+    strengths: reasons.filter(isPositiveReason),
+    risks: reasons.filter((reason) => !isPositiveReason(reason))
+  };
+}
+
+function deriveCandidateReviewSection(candidate) {
+  const priority = deriveCandidatePriority(candidate);
+
+  if (priority === "high") {
+    return "review";
+  }
+
+  if (priority === "medium") {
+    return "recommended";
+  }
+
+  return "other";
+}
+
+function deriveCandidateFocusNote(candidate) {
+  const statusMeta = getCandidateStatusMeta(candidate?.status);
+  const section = deriveCandidateReviewSection(candidate);
+  const score = getCandidateScoreValue(candidate);
+
+  if (statusMeta.tone === "positive") {
+    return "Dossier déjà validé, conservé pour suivi.";
+  }
+
+  if (statusMeta.tone === "danger") {
+    return "Dossier conservé pour référence, sans priorité immédiate.";
+  }
+
+  if (section === "review") {
+    return "Ce dossier mérite une revue prioritaire.";
+  }
+
+  if (section === "recommended") {
+    return score >= 80
+      ? "Profil solide, proche d’un dossier prioritaire."
+      : "Profil prometteur, avec quelques points à confirmer.";
+  }
+
+  if (score < 0) {
+    return "Évaluation encore en cours.";
+  }
+
+  return "À garder en suivi secondaire pour le moment.";
+}
+
+function groupCandidatesForWorkspace(candidates = []) {
+  const groups = {
+    review: [],
+    recommended: [],
+    other: []
+  };
+
+  candidates
+    .slice()
+    .sort((a, b) => {
+      const sectionOrder = { review: 0, recommended: 1, other: 2 };
+      const sectionCompare =
+        (sectionOrder[deriveCandidateReviewSection(a)] ?? 3) - (sectionOrder[deriveCandidateReviewSection(b)] ?? 3);
+
+      if (sectionCompare !== 0) {
+        return sectionCompare;
+      }
+
+      return getCandidateScoreValue(b) - getCandidateScoreValue(a);
+    })
+    .forEach((candidate) => {
+      groups[deriveCandidateReviewSection(candidate)].push(candidate);
+    });
+
+  return groups;
+}
+
+function deriveDecisionQueue(candidates = []) {
+  return candidates
+    .filter((candidate) => deriveCandidateResponsibility(candidate) === RESPONSIBILITY_LABELS.CLIENT)
+    .sort((a, b) => getCandidateScoreValue(b) - getCandidateScoreValue(a))
+    .slice(0, 3);
+}
+
+function deriveWatchlist(apartments = []) {
+  return apartments
+    .map((apartment) => {
+      const candidates = getApartmentCandidates(apartment.ref);
+      const responsibility = getApartmentResponsibilityMeta(apartment, candidates);
+      const stage = getSafeStageMeta(deriveApartmentStage(apartment, candidates));
+
+      return {
+        apartment,
+        candidates,
+        responsibility,
+        stage
+      };
+    })
+    .filter((item) => item.responsibility.label === RESPONSIBILITY_LABELS.WATCH)
+    .slice(0, 3);
+}
+
+function countStrongCandidates(candidates = []) {
+  return candidates.filter((candidate) => getCandidateScoreValue(candidate) >= 85).length;
+}
+
+function getApartmentStrengthSummary(candidates = []) {
+  if (!candidates.length) {
+    return "Aucun dossier reçu pour le moment";
+  }
+
+  const strongCount = countStrongCandidates(candidates);
+  const promisingCount = candidates.filter((candidate) => {
+    const score = getCandidateScoreValue(candidate);
+    return score >= 70 && score < 85;
+  }).length;
+
+  if (strongCount > 0) {
+    return `${strongCount} dossier${strongCount > 1 ? "s" : ""} fort${strongCount > 1 ? "s" : ""} actuellement`;
+  }
+
+  if (promisingCount > 0) {
+    return `${promisingCount} dossier${promisingCount > 1 ? "s" : ""} prometteur${promisingCount > 1 ? "s" : ""}`;
+  }
+
+  return "Aucun dossier fort actuellement";
+}
+
+function deriveApartmentAttentionMeta(apartment, candidates = []) {
+  const availabilityMeta = getAvailabilityMeta(apartment?.disponibilite);
+  const bestCandidate = getBestCandidateForApartment(apartment?.ref);
+  const bestScore = bestCandidate ? getCandidateScoreValue(bestCandidate) : -1;
+
+  if (availabilityMeta.tone === "danger") {
+    return {
+      label: "Aucune attention requise",
+      tone: "low",
+      note: "Le logement n’est pas actuellement à relouer."
+    };
+  }
+
+  if (!candidates.length) {
+    return {
+      label: "À surveiller",
+      tone: "high",
+      note: "Aucun dossier n’a encore été reçu pour cette unité."
+    };
+  }
+
+  if (bestScore >= 85) {
+    return {
+      label: "Attention utile",
+      tone: "medium",
+      note: "Des dossiers ressortent et pourront bientôt mériter votre avis."
+    };
+  }
+
+  if (bestScore >= 70) {
+    return {
+      label: "Suivi en cours",
+      tone: "medium",
+      note: "La présélection avance, mais aucun dossier fort n’est encore confirmé."
+    };
+  }
+
+  return {
+    label: "À renforcer",
+    tone: "high",
+    note: "Les dossiers reçus restent encore faibles ou peu alignés."
+  };
 }
 
 function normalizeRef(value) {
@@ -307,7 +1015,7 @@ function switchTab(tabName) {
   const titles = {
     dashboard: "Tableau de bord",
     apartments: "Appartements",
-    candidates: "Candidats",
+    candidates: "Dossiers",
     criteria: "Critères"
   };
 
@@ -324,61 +1032,555 @@ function renderDashboard() {
   const approvedCount = state.candidates.filter((item) => item.status === "approuvé").length;
   const refusedCount = state.candidates.filter((item) => item.status === "refusé").length;
   statDecisionSplit.textContent = `${approvedCount} / ${refusedCount}`;
+
+  renderDashboardDecisionQueue();
 }
 
-function renderApartments() {
-  apartmentsBody.innerHTML = "";
+function renderDashboardDecisionQueue() {
+  if (!dashboardDecisionQueue) return;
 
-  if (!state.apartments.length) {
-    apartmentsBody.innerHTML = `<tr><td colspan="6">Aucun appartement lié à ce client.</td></tr>`;
+  const decisionCandidates = deriveDecisionQueue(state.candidates).slice(0, 3).map((candidate) => {
+    const responsibility = getCandidateResponsibilityMeta(candidate);
+    const scoreMeta = getScoreMeta(candidate.match_score);
+    const statusMeta = getCandidateStatusMeta(candidate.status);
+
+    return {
+      typeLabel: "Dossier",
+      title: candidate.candidate_name || "Candidat",
+      meta: formatApartmentLabel(candidate.apartment_ref),
+      responsibility,
+      secondaryPill: `<span class="score-pill ${scoreMeta.className}">${scoreMeta.label}</span>`,
+      tertiaryPill: `<span class="status-pill ${statusMeta.tone}">${statusMeta.label}</span>`,
+      nextStep: responsibility.nextStep,
+      tab: "candidates",
+      actionLabel: "Ouvrir"
+    };
+  });
+
+  const watchlistApartments = deriveWatchlist(state.apartments).slice(0, 2).map((item) => ({
+    typeLabel: "Logement",
+    title: item.apartment.adresse || `Appartement L-${item.apartment.ref || "-"}`,
+    meta: `${item.apartment.ville || "Ville à confirmer"} · ${item.candidates.length} dossier${item.candidates.length > 1 ? "s" : ""}`,
+    responsibility: item.responsibility,
+    stage: getSafeStageMeta(item.stage),
+    tertiaryPill: `<span class="status-pill ${getAvailabilityMeta(item.apartment.disponibilite).tone}">${getAvailabilityMeta(item.apartment.disponibilite).label}</span>`,
+    nextStep: item.responsibility.nextStep,
+    tab: "apartments",
+    actionLabel: "Voir"
+  }));
+
+  const priorityItems = [...decisionCandidates, ...watchlistApartments].slice(0, 5);
+
+  if (!priorityItems.length) {
+    dashboardDecisionQueue.innerHTML = `
+      <div class="dashboard-empty-state">
+        Aucune priorité immédiate pour le moment. Consultez les onglets Appartements, Dossiers et Critères pour le détail.
+      </div>
+    `;
     return;
   }
 
-  state.apartments.forEach((apartment) => {
-    const apartmentCandidates = state.candidates.filter(
-      (candidate) => normalizeRef(candidate.apartment_ref) === normalizeRef(apartment.ref)
-    );
-    const bestScore = apartmentCandidates.reduce((max, candidate) => {
-      const score = Number(candidate.match_score ?? -1);
-      return score > max ? score : max;
-    }, -1);
-
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${apartment.adresse || "-"}</td>
-      <td>${apartment.ville || "-"}</td>
-      <td>${formatCurrency(apartment.loyer)}</td>
-      <td>${apartment.disponibilite || "-"}</td>
-      <td>${apartmentCandidates.length}</td>
-      <td>${bestScore >= 0 ? bestScore : "-"}</td>
+  dashboardDecisionQueue.innerHTML = priorityItems.map((item) => {
+    return `
+      <div class="dashboard-priority-row">
+        <div class="dashboard-priority-main">
+          <div class="dashboard-priority-title">${item.title}</div>
+          <div class="dashboard-priority-meta">${item.meta}</div>
+        </div>
+        <div class="dashboard-priority-tags">
+          <span class="data-pill">${item.typeLabel}</span>
+          <span class="responsibility-pill ${item.responsibility.className}">${item.responsibility.label}</span>
+          ${item.stage ? `<span class="status-pill ${item.stage.tone}">${item.stage.label}</span>` : ""}
+        </div>
+        <div class="dashboard-priority-next">${item.nextStep}</div>
+        <div>
+          <button type="button" class="dashboard-priority-action" data-dashboard-tab="${item.tab}">${item.actionLabel}</button>
+        </div>
+      </div>
     `;
-    apartmentsBody.appendChild(row);
+  }).join("");
+}
+
+function renderDashboardApartmentOverview() {
+  if (!dashboardApartmentOverview) return;
+
+  if (!state.apartments.length) {
+    dashboardApartmentOverview.innerHTML = `
+      <div class="dashboard-empty-state">
+        Aucun logement actif pour le moment.
+      </div>
+    `;
+    return;
+  }
+
+  const apartmentItems = state.apartments
+    .map((apartment) => {
+      const candidates = getApartmentCandidates(apartment.ref);
+      const stage = getSafeStageMeta(deriveApartmentStage(apartment, candidates));
+      const responsibility = getApartmentResponsibilityMeta(apartment, candidates);
+      const bestCandidate = getBestCandidateForApartment(apartment.ref);
+      const scoreMeta = getScoreMeta(bestCandidate?.match_score);
+
+      return {
+        apartment,
+        candidates,
+        stage,
+        responsibility,
+        bestCandidate,
+        scoreMeta
+      };
+    })
+    .sort((a, b) => {
+      const responsibilityOrder = {
+        [RESPONSIBILITY_LABELS.CLIENT]: 0,
+        [RESPONSIBILITY_LABELS.TEAM]: 1,
+        [RESPONSIBILITY_LABELS.WATCH]: 2,
+        [RESPONSIBILITY_LABELS.DONE]: 3
+      };
+      const responsibilityCompare =
+        (responsibilityOrder[a.responsibility.label] ?? 4) - (responsibilityOrder[b.responsibility.label] ?? 4);
+
+      if (responsibilityCompare !== 0) {
+        return responsibilityCompare;
+      }
+
+      return b.candidates.length - a.candidates.length;
+    })
+    .slice(0, 4);
+
+  dashboardApartmentOverview.innerHTML = apartmentItems.map((item) => `
+    <div class="dashboard-item">
+      <div class="dashboard-item-top">
+        <div class="dashboard-item-main">
+          <div class="dashboard-item-title">${item.apartment.adresse || `Appartement L-${item.apartment.ref || "-"}`}</div>
+          <div class="dashboard-item-meta">${item.apartment.ville || "Ville à confirmer"} · ${formatCurrency(item.apartment.loyer)}</div>
+        </div>
+        <span class="responsibility-pill ${item.responsibility.className}">${item.responsibility.label}</span>
+      </div>
+      <div class="dashboard-item-summary">
+        <span class="status-pill ${item.stage.tone}">${item.stage.label}</span>
+        <span class="status-pill ${getAvailabilityMeta(item.apartment.disponibilite).tone}">${getAvailabilityMeta(item.apartment.disponibilite).label}</span>
+        <span class="data-pill">${item.candidates.length} dossier${item.candidates.length > 1 ? "s" : ""}</span>
+        <span class="score-pill ${item.scoreMeta.className}">${item.scoreMeta.label}</span>
+      </div>
+      <div class="next-step-note">
+        <div class="next-step-label">Prochaine étape</div>
+        <div class="next-step-copy">${item.responsibility.nextStep}</div>
+      </div>
+      <div class="responsibility-note">${item.responsibility.reason}</div>
+    </div>
+  `).join("");
+}
+
+function renderDashboardCriteriaSummary() {
+  if (!dashboardCriteriaSummary) return;
+
+  if (!state.client) {
+    dashboardCriteriaSummary.innerHTML = `
+      <div class="dashboard-empty-state">
+        Vos critères actifs apparaîtront ici.
+      </div>
+    `;
+    return;
+  }
+
+  const criteria = state.client?.criteres || {};
+  const jobs = Array.isArray(criteria.emplois_acceptes) && criteria.emplois_acceptes.length
+    ? criteria.emplois_acceptes.join(", ")
+    : "Non précisé";
+
+  const previewItems = [
+    {
+      label: "Revenu minimum",
+      value: criteria.revenu_minimum ? formatCurrency(criteria.revenu_minimum) : "Non précisé",
+      note: "Seuil"
+    },
+    {
+      label: "Crédit",
+      value: criteria.credit_min || "Non précisé",
+      note: "Niveau"
+    },
+    {
+      label: "Animaux / TAL",
+      value: `${criteria.animaux_acceptes === true ? "Animaux oui" : criteria.animaux_acceptes === false ? "Animaux non" : "Animaux n.c."} · ${criteria.accepte_tal === true ? "TAL oui" : criteria.accepte_tal === false ? "TAL non" : "TAL n.c."}`,
+      note: "Règles"
+    },
+    {
+      label: "Occupants / emplois",
+      value: `${criteria.max_occupants ? `${criteria.max_occupants} max` : "Occupants n.c."} · ${jobs}`,
+      note: "Cadre"
+    }
+  ];
+
+  dashboardCriteriaSummary.innerHTML = previewItems.map((item) => `
+    <div class="criteria-preview-item">
+      <div class="criteria-preview-label">${item.label}</div>
+      <div class="criteria-preview-value">${item.value}</div>
+      <div class="criteria-preview-note">${item.note}</div>
+    </div>
+  `).join("");
+}
+
+function renderDashboardWatchlist() {
+  if (!dashboardWatchlist) return;
+
+  const watchlistItems = deriveWatchlist(state.apartments);
+
+  if (!watchlistItems.length) {
+    dashboardWatchlist.innerHTML = `
+      <div class="dashboard-empty-state">
+        Aucun point de vigilance pour le moment.
+      </div>
+    `;
+    return;
+  }
+
+  dashboardWatchlist.innerHTML = watchlistItems.map((item) => {
+    const availabilityMeta = getAvailabilityMeta(item.apartment.disponibilite);
+    const responsibility = item.responsibility;
+
+    return `
+      <div class="dashboard-item">
+        <div class="dashboard-item-top">
+          <div class="dashboard-item-main">
+            <div class="dashboard-item-title">${item.apartment.adresse || `Appartement L-${item.apartment.ref || "-"}`}</div>
+            <div class="dashboard-item-meta">${item.apartment.ville || "Ville à confirmer"}</div>
+          </div>
+          <span class="responsibility-pill ${responsibility.className}">${responsibility.label}</span>
+        </div>
+        <div class="dashboard-item-summary">
+          <span class="status-pill ${availabilityMeta.tone}">${availabilityMeta.label}</span>
+          <span class="data-pill">${item.candidates.length} dossier${item.candidates.length > 1 ? "s" : ""}</span>
+        </div>
+        <div class="next-step-note">
+          <div class="next-step-label">Prochaine étape</div>
+          <div class="next-step-copy">${responsibility.nextStep}</div>
+        </div>
+        <div class="responsibility-note">${responsibility.reason}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderApartments() {
+  if (!apartmentsBody) return;
+
+  apartmentsBody.innerHTML = "";
+
+  if (apartmentsSupervisionSummary) {
+    const responsibilityCounts = state.apartments.reduce((accumulator, apartment) => {
+      const label = deriveApartmentResponsibility(apartment, getApartmentCandidates(apartment.ref));
+      accumulator[label] = (accumulator[label] || 0) + 1;
+      return accumulator;
+    }, {});
+
+    apartmentsSupervisionSummary.innerHTML = `
+      <div class="apartments-supervision-metric">
+        <div class="apartments-supervision-label">En attente du client</div>
+        <div class="apartments-supervision-value">${responsibilityCounts[RESPONSIBILITY_LABELS.CLIENT] || 0}</div>
+        <div class="apartments-supervision-note">Unités à revoir.</div>
+      </div>
+      <div class="apartments-supervision-metric">
+        <div class="apartments-supervision-label">Pris en charge par l’équipe</div>
+        <div class="apartments-supervision-value">${responsibilityCounts[RESPONSIBILITY_LABELS.TEAM] || 0}</div>
+        <div class="apartments-supervision-note">Unités en cours de tri.</div>
+      </div>
+      <div class="apartments-supervision-metric">
+        <div class="apartments-supervision-label">À surveiller</div>
+        <div class="apartments-supervision-value">${responsibilityCounts[RESPONSIBILITY_LABELS.WATCH] || 0}</div>
+        <div class="apartments-supervision-note">Unités à suivre de près.</div>
+      </div>
+    `;
+  }
+
+  if (!state.apartments.length) {
+    apartmentsBody.innerHTML = `
+      <div class="dashboard-empty-state">
+        Aucun appartement lié à ce client.
+      </div>
+    `;
+    return;
+  }
+
+  const apartmentItems = state.apartments
+    .map((apartment) => {
+      const apartmentCandidates = getApartmentCandidates(apartment.ref);
+      const availabilityMeta = getAvailabilityMeta(apartment.disponibilite);
+      const stage = getSafeStageMeta(deriveApartmentStage(apartment, apartmentCandidates));
+      const responsibility = getApartmentResponsibilityMeta(apartment, apartmentCandidates);
+      const bestCandidate = getBestCandidateForApartment(apartment.ref);
+      const strongSummary = getApartmentStrengthSummary(apartmentCandidates);
+
+      return {
+        apartment,
+        apartmentCandidates,
+        availabilityMeta,
+        stage,
+        responsibility,
+        bestCandidate,
+        strongSummary
+      };
+    })
+    .sort((a, b) => {
+      const responsibilityOrder = {
+        [RESPONSIBILITY_LABELS.CLIENT]: 0,
+        [RESPONSIBILITY_LABELS.WATCH]: 1,
+        [RESPONSIBILITY_LABELS.TEAM]: 2,
+        [RESPONSIBILITY_LABELS.DONE]: 3
+      };
+      const responsibilityCompare =
+        (responsibilityOrder[a.responsibility.label] ?? 4) - (responsibilityOrder[b.responsibility.label] ?? 4);
+
+      if (responsibilityCompare !== 0) {
+        return responsibilityCompare;
+      }
+
+      return b.apartmentCandidates.length - a.apartmentCandidates.length;
+    });
+
+  apartmentsBody.innerHTML = apartmentItems.map((item) => `
+    <article class="apartment-pipeline-card">
+      <div class="apartment-pipeline-header">
+        <div class="apartment-pipeline-main">
+          <div class="apartment-pipeline-title">${item.apartment.adresse || `Appartement L-${item.apartment.ref || "-"}`}</div>
+          <div class="apartment-pipeline-meta">
+            ${item.apartment.ville || "Ville à confirmer"} · Réf. L-${item.apartment.ref || "-"} · ${formatCurrency(item.apartment.loyer)}
+          </div>
+        </div>
+        <div class="apartment-pipeline-statuses">
+          <span class="status-pill ${item.stage.tone}">${item.stage.label}</span>
+          <span class="responsibility-pill ${item.responsibility.className}">${item.responsibility.label}</span>
+        </div>
+      </div>
+
+      <div class="apartment-pipeline-grid">
+        <div class="apartment-pipeline-panel">
+          <div class="apartment-pipeline-panel-label">Responsabilité</div>
+          <div class="apartment-pipeline-summary">
+            <span class="status-pill ${item.availabilityMeta.tone}">${item.availabilityMeta.label}</span>
+            <span class="data-pill">${item.apartmentCandidates.length} dossier${item.apartmentCandidates.length > 1 ? "s" : ""} reçu${item.apartmentCandidates.length > 1 ? "s" : ""}</span>
+            <span class="data-pill">${item.strongSummary}</span>
+          </div>
+          <div class="responsibility-note">${item.responsibility.reason}</div>
+        </div>
+
+        <div class="apartment-pipeline-next-step">
+          <div class="apartment-pipeline-next-step-title">Prochaine étape</div>
+          <div class="apartment-pipeline-next-step-copy">${item.responsibility.nextStep}</div>
+          <div class="apartment-pipeline-panel-copy">
+            ${item.bestCandidate
+              ? `Dossier le plus avancé actuellement : ${item.bestCandidate.candidate_name || "Candidat"}`
+              : "Aucun dossier fort actuellement pour cette unité."}
+          </div>
+        </div>
+      </div>
+
+      <div class="apartment-pipeline-actions">
+        <button type="button" class="secondary-btn compact-action apartment-review-btn">Voir les dossiers liés</button>
+      </div>
+    </article>
+  `).join("");
+
+  document.querySelectorAll(".apartment-review-btn").forEach((button) => {
+    button.addEventListener("click", () => switchTab("candidates"));
   });
 }
 
 function renderCandidates() {
+  if (!candidatesBody) return;
+
   candidatesBody.innerHTML = "";
 
+  const groupedCandidates = groupCandidatesForWorkspace(state.candidates);
+  const clientCount = state.candidates.filter(
+    (candidate) => deriveCandidateResponsibility(candidate) === RESPONSIBILITY_LABELS.CLIENT
+  ).length;
+  const teamCount = state.candidates.filter(
+    (candidate) => deriveCandidateResponsibility(candidate) === RESPONSIBILITY_LABELS.TEAM
+  ).length;
+  const isSparseState = state.candidates.length > 0 && state.candidates.length < 3;
+
+  if (candidatesReviewSummary) {
+    candidatesReviewSummary.innerHTML = `
+      <div class="candidates-review-metric">
+        <div class="candidates-review-label">Dossiers reçus</div>
+        <div class="candidates-review-value">${state.candidates.length}</div>
+        <div class="candidates-review-note">Dossiers visibles.</div>
+      </div>
+      <div class="candidates-review-metric">
+        <div class="candidates-review-label">En attente du client</div>
+        <div class="candidates-review-value">${clientCount}</div>
+        <div class="candidates-review-note">À revoir.</div>
+      </div>
+      <div class="candidates-review-metric">
+        <div class="candidates-review-label">Pris en charge par l’équipe</div>
+        <div class="candidates-review-value">${teamCount}</div>
+        <div class="candidates-review-note">Encore suivis.</div>
+      </div>
+      ${
+        isSparseState
+          ? `
+            <div class="candidates-review-note-card">
+              <div class="candidates-review-label">Portefeuille en constitution</div>
+              <div class="candidates-review-note">Peu de dossiers pour le moment. La vue se remplira au fil des réceptions.</div>
+            </div>
+          `
+          : ""
+      }
+    `;
+  }
+
   if (!state.candidates.length) {
-    candidatesBody.innerHTML = `<tr><td colspan="6">Aucun candidat lié à vos appartements.</td></tr>`;
+    candidatesBody.innerHTML = `
+      <div class="candidate-zero-state">
+        <div>
+          <span class="panel-kicker">Aucun dossier pour le moment</span>
+          <h4>Les premiers dossiers apparaîtront ici.</h4>
+          <p>Les dossiers y seront regroupés par priorité.</p>
+        </div>
+        <div class="candidate-zero-state-grid">
+          <div class="candidate-zero-state-item">
+            <strong>À revoir</strong>
+            <span>Les dossiers les plus solides remonteront ici.</span>
+          </div>
+          <div class="candidate-zero-state-item">
+            <strong>Recommandés</strong>
+            <span>Les profils prometteurs resteront visibles ici.</span>
+          </div>
+          <div class="candidate-zero-state-item">
+            <strong>Autres dossiers</strong>
+            <span>Les dossiers secondaires resteront accessibles pour contexte.</span>
+          </div>
+        </div>
+      </div>
+    `;
     return;
   }
 
-  state.candidates.forEach((candidate) => {
-    const row = document.createElement("tr");
-    const matchValue = candidate.match_status && candidate.match_status !== "refusé" ? "Oui" : "Non";
+  const sectionConfig = [
+    {
+      key: "review",
+      title: "À revoir",
+      description: "Les dossiers à regarder en premier.",
+      emptyCopy: "Aucun dossier prioritaire pour le moment."
+    },
+    {
+      key: "recommended",
+      title: "Recommandés",
+      description: "Les profils prometteurs à garder en vue.",
+      emptyCopy: "Aucun profil recommandé pour le moment."
+    },
+    {
+      key: "other",
+      title: "Autres dossiers",
+      description: "Les dossiers secondaires ou déjà traités.",
+      emptyCopy: "Aucun autre dossier n’est visible actuellement."
+    }
+  ];
 
-    row.innerHTML = `
-      <td>${candidate.candidate_name || "-"}</td>
-      <td>${formatApartmentLabel(candidate.apartment_ref)}</td>
-      <td>${candidate.match_score ?? "-"}</td>
-      <td>${matchValue}</td>
-      <td>${candidate.status || "-"}</td>
-      <td><button type="button" class="secondary-btn candidate-details-btn" data-id="${candidate.id}">Voir</button></td>
-    `;
+  candidatesBody.innerHTML = sectionConfig
+    .map((section) => {
+      const items = groupedCandidates[section.key] || [];
 
-    candidatesBody.appendChild(row);
-  });
+      return `
+        <section class="candidate-group">
+          <div class="candidate-group-header">
+            <div>
+              <span class="panel-kicker">${section.title}</span>
+              <h4>${section.title}</h4>
+              <div class="candidate-group-copy">${section.description}</div>
+            </div>
+            <span class="data-pill">${items.length} dossier${items.length > 1 ? "s" : ""}</span>
+          </div>
+          <div class="candidate-group-grid">
+            ${
+              items.length
+                ? items
+                    .map((candidate) => {
+                      const apartment = getApartmentByRef(candidate.apartment_ref);
+                      const apartmentLabel = apartment?.adresse || formatApartmentLabel(candidate.apartment_ref);
+                      const apartmentMeta = [
+                        apartment?.ville || null,
+                        apartment?.loyer ? formatCurrency(apartment.loyer) : null,
+                        getAvailabilityMeta(apartment?.disponibilite).label
+                      ].filter(Boolean);
+                      const recommendation = deriveCandidateRecommendation(candidate);
+                      const responsibility = getCandidateResponsibilityMeta(candidate);
+                      const matchMeta = getMatchMeta(candidate.match_status);
+                      const statusMeta = getCandidateStatusMeta(candidate.status);
+                      const scoreMeta = getScoreMeta(candidate.match_score);
+                      const scoreLabel = scoreMeta.label === "-" ? "Éval. en cours" : `Score ${scoreMeta.label}`;
+                      const reasonGroups = getCandidateReasonGroups(candidate);
+                      const strengths = reasonGroups.strengths.slice(0, 2);
+                      const risks = reasonGroups.risks.slice(0, 2);
+
+                      return `
+                        <article class="candidate-review-card">
+                          <div class="candidate-review-top">
+                            <div class="candidate-review-main">
+                              <div class="candidate-review-title">${candidate.candidate_name || "Dossier candidat"}</div>
+                              <div class="candidate-review-meta">
+                                <span>${apartmentLabel}</span>
+                                ${apartmentMeta.map((item) => `<span>${item}</span>`).join("")}
+                              </div>
+                              <div class="candidate-review-contact">${candidate.email || candidate.phone || "Coordonnées à confirmer"}</div>
+                            </div>
+                            <div class="candidate-review-statuses">
+                              <span class="status-pill ${recommendation.tone}">${recommendation.label}</span>
+                              <span class="responsibility-pill ${responsibility.className}">${responsibility.label}</span>
+                            </div>
+                          </div>
+
+                          <div class="candidate-review-summary">
+                            <span class="score-pill ${scoreMeta.className}">${scoreLabel}</span>
+                            <span class="status-pill ${matchMeta.tone}">${matchMeta.label}</span>
+                            <span class="status-pill ${statusMeta.tone}">${statusMeta.label}</span>
+                          </div>
+
+                          <div class="candidate-review-grid">
+                            <div class="candidate-review-panel">
+                              <div class="candidate-review-panel-label">Points forts</div>
+                              <ul class="candidate-review-list">
+                                ${
+                                  (strengths.length ? strengths : ["Les points forts validés apparaîtront ici."])
+                                    .map((reason) => `<li>${reason}</li>`)
+                                    .join("")
+                                }
+                              </ul>
+                            </div>
+
+                            <div class="candidate-review-panel">
+                              <div class="candidate-review-panel-label">Points de vigilance</div>
+                              <ul class="candidate-review-list">
+                                ${
+                                  (risks.length ? risks : ["Aucun point bloquant relevé."])
+                                    .map((reason) => `<li>${reason}</li>`)
+                                    .join("")
+                                }
+                              </ul>
+                            </div>
+                          </div>
+
+                          <div class="candidate-review-focus">
+                            <div class="next-step-label">Prochaine étape</div>
+                            <div class="next-step-copy">${responsibility.nextStep}</div>
+                            <div class="responsibility-note">${responsibility.reason}</div>
+                          </div>
+
+                          <div class="candidate-review-actions">
+                            <button type="button" class="secondary-btn compact-action candidate-details-btn" data-id="${candidate.id}">Voir le dossier</button>
+                          </div>
+                        </article>
+                      `;
+                    })
+                    .join("")
+                : `<div class="candidate-group-empty">${section.emptyCopy}</div>`
+            }
+          </div>
+        </section>
+      `;
+    })
+    .join("");
 
   document.querySelectorAll(".candidate-details-btn").forEach((button) => {
     button.addEventListener("click", () => {
@@ -504,6 +1706,10 @@ async function saveCriteria(event) {
 
 document.querySelectorAll(".menu-btn").forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
+});
+
+document.querySelectorAll("[data-dashboard-tab]").forEach((button) => {
+  button.addEventListener("click", () => switchTab(button.dataset.dashboardTab));
 });
 
 if (refreshBtn) {

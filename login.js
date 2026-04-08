@@ -10,12 +10,26 @@ const emailInput = document.getElementById("email");
 const passwordInput = document.getElementById("password");
 const loginStatus = document.getElementById("loginStatus");
 
+function isPreviewSafeClientHost() {
+  const hostname = String(window.location.hostname || "").trim().toLowerCase();
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".up.railway.app")
+  );
+}
+
 function getRoleDestination(role) {
   if (role === "admin") {
     return `${EMPLOYEE_APP_URL}/admin`;
   }
 
   if (role === "client") {
+    if (isPreviewSafeClientHost()) {
+      return `${window.location.origin}/client.html`;
+    }
+
     return `${CLIENT_APP_URL}/client.html`;
   }
 

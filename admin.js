@@ -11,7 +11,8 @@ const tabs = {
   messages: document.getElementById("messagesTab"),
   clients: document.getElementById("clientsTab"),
   apartments: document.getElementById("apartmentsTab"),
-  candidates: document.getElementById("candidatesTab")
+  candidates: document.getElementById("candidatesTab"),
+  translatorReports: document.getElementById("translatorReportsTab")
 };
 
 const pageTitle = document.getElementById("pageTitle");
@@ -23,6 +24,11 @@ const messagesBody = document.getElementById("messagesBody");
 const clientsBody = document.getElementById("clientsBody");
 const apartmentsBody = document.getElementById("apartmentsBody");
 const candidatesBody = document.getElementById("candidatesBody");
+const translatorReportsList = document.getElementById("translatorReportsList");
+const translatorReportReasonFilter = document.getElementById("translatorReportReasonFilter");
+const translatorReportStatusFilter = document.getElementById("translatorReportStatusFilter");
+const translatorReportSearch = document.getElementById("translatorReportSearch");
+const clearTranslatorReportFiltersBtn = document.getElementById("clearTranslatorReportFiltersBtn");
 
 const workspaceConversationList = document.getElementById("workspaceConversationList");
 const workspaceChatTitle = document.getElementById("workspaceChatTitle");
@@ -67,6 +73,7 @@ const clearCandidateFiltersBtn = document.getElementById("clearCandidateFiltersB
 let currentTab = "users";
 let allApartments = [];
 let allCandidates = [];
+let allTranslatorReports = [];
 let lastPendingCandidatesCount = 0;
 let allClients = [];
 let workspaceEmployees = [];
@@ -168,6 +175,29 @@ async function requireAdmin() {
 function formatDate(value) {
   if (!value) return "-";
   return new Date(value).toLocaleString("fr-CA");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatTranslatorReportReason(value) {
+  if (value === "off_topic") return "Pas rapport";
+  if (value === "misunderstood_message") return "Mauvaise compréhension";
+  if (value === "wrong_listing_info") return "Mauvaises infos sur le logement";
+  if (value === "wrong_next_question") return "Mauvaises prochaines questions";
+  if (value === "other") return "Autres";
+  return value || "-";
+}
+
+function formatTranslatorReportStatus(value) {
+  if (value === "reviewed") return "Révisé";
+  return "Ouvert";
 }
 
 function clientLabel(clientId) {
@@ -294,7 +324,8 @@ function switchTab(tabName) {
     messages: "Conversations",
     clients: "Clients",
     apartments: "Appartements",
-    candidates: "Candidats"
+    candidates: "Candidats",
+    translatorReports: "Signalements Traducteur"
   };
 
   pageTitle.textContent = titles[tabName] || "Admin";
@@ -1564,6 +1595,181 @@ async function loadCandidates() {
   applyCandidateFilters();
 }
 
+function getFilteredTranslatorReports() {
+  const reason = translatorReportReasonFilter?.value || "";
+  const status = translatorReportStatusFilter?.value || "";
+  const search = (translatorReportSearch?.value || "").trim().toLowerCase();
+
+  return allTranslatorReports.filter((report) => {
+    const matchesReason = !reason || report.reason === reason;
+    const matchesStatus = !status || (report.status || "open") === status;
+    const searchBlob = [
+      report.listing_ref,
+      report.translator_thread_key,
+      report.employee?.full_name,
+      report.employee?.email,
+      report.employee_user_id,
+      report.raw_tenant_message,
+      report.translation,
+      report.suggested_reply,
+      formatTranslatorReportReason(report.reason)
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const matchesSearch = !search || searchBlob.includes(search);
+
+    return matchesReason && matchesStatus && matchesSearch;
+  });
+}
+
+function renderTranslatorReports(rows) {
+  if (!translatorReportsList) return;
+
+  translatorReportsList.innerHTML = "";
+
+  if (!rows.length) {
+    translatorReportsList.innerHTML = `<div style="color:#6b7280;">Aucun signalement Traducteur trouvé.</div>`;
+    return;
+  }
+
+  rows.forEach((report) => {
+    const employeeLabel = report.employee?.full_name || report.employee?.email || report.employee_user_id || "-";
+    const recentContextMarkup = Array.isArray(report.recent_context) && report.recent_context.length
+      ? report.recent_context.map((entry) => `
+          <div class="translator-report-context-item">
+            <div class="translator-report-context-head">${escapeHtml(entry.label || entry.sender || "-")}</div>
+            <div class="translator-report-value">${escapeHtml(entry.text || "")}</div>
+            ${Array.isArray(entry.sections) && entry.sections.length
+              ? entry.sections.map((section) => `
+                  <div style="margin-top:8px;">
+                    <div class="translator-report-label">${escapeHtml(section.title || "Section")}</div>
+                    <div class="translator-report-value">${escapeHtml(section.text || "")}</div>
+                  </div>
+                `).join("")
+              : ""}
+          </div>
+        `).join("")
+      : `<div class="translator-report-context-item"><div class="translator-report-value">Aucun contexte récent enregistré.</div></div>`;
+
+    const threadStateMarkup = report.thread_state_snapshot
+      ? `
+          <div class="translator-report-field">
+            <div class="translator-report-label">Étape actuelle</div>
+            <div class="translator-report-value">${escapeHtml(report.thread_state_snapshot.current_step || "-")}</div>
+          </div>
+          <div class="translator-report-field">
+            <div class="translator-report-label">Dernière étape demandée</div>
+            <div class="translator-report-value">${escapeHtml(report.thread_state_snapshot.last_asked_step || "-")}</div>
+          </div>
+          <div class="translator-report-field wide">
+            <div class="translator-report-label">Dernière question logement détectée</div>
+            <div class="translator-report-value">${escapeHtml(report.thread_state_snapshot.last_detected_listing_question || "-")}</div>
+          </div>
+        `
+      : `<div class="translator-report-field wide"><div class="translator-report-label">État du thread</div><div class="translator-report-value">Aucun instantané enregistré.</div></div>`;
+
+    const details = document.createElement("details");
+    details.className = "translator-report-card";
+    details.innerHTML = `
+      <summary>
+        <div class="translator-report-summary">
+          <div class="translator-report-summary-main">
+            <div class="translator-report-summary-meta">
+              <span class="translator-report-chip">${escapeHtml(formatTranslatorReportReason(report.reason))}</span>
+              <span class="translator-report-chip status-${escapeHtml((report.status || "open"))}">${escapeHtml(formatTranslatorReportStatus(report.status))}</span>
+              ${report.listing_ref ? `<span class="translator-report-chip">${escapeHtml(report.listing_ref)}</span>` : ""}
+            </div>
+            <div style="font-weight:800;">${escapeHtml(employeeLabel)}</div>
+            <div class="translator-report-snippet">${escapeHtml(report.raw_tenant_message || report.translation || "-")}</div>
+          </div>
+          <div class="translator-report-summary-side">
+            <div>${escapeHtml(formatDate(report.created_at))}</div>
+            <div style="margin-top:6px;">${escapeHtml(report.translator_thread_key || "-")}</div>
+          </div>
+        </div>
+      </summary>
+      <div class="translator-report-body">
+        <div class="translator-report-grid">
+          <div class="translator-report-field">
+            <div class="translator-report-label">Employé</div>
+            <div class="translator-report-value">${escapeHtml(employeeLabel)}</div>
+          </div>
+          <div class="translator-report-field">
+            <div class="translator-report-label">Listing</div>
+            <div class="translator-report-value">${escapeHtml(report.listing_ref || "-")}</div>
+          </div>
+          <div class="translator-report-field wide">
+            <div class="translator-report-label">Thread</div>
+            <div class="translator-report-value">${escapeHtml(report.translator_thread_key || "-")}</div>
+          </div>
+          <div class="translator-report-field wide">
+            <div class="translator-report-label">Message locataire brut</div>
+            <div class="translator-report-value">${escapeHtml(report.raw_tenant_message || "-")}</div>
+          </div>
+          <div class="translator-report-field wide">
+            <div class="translator-report-label">Français international</div>
+            <div class="translator-report-value">${escapeHtml(report.translation || "-")}</div>
+          </div>
+          <div class="translator-report-field wide">
+            <div class="translator-report-label">Réponse suggérée</div>
+            <div class="translator-report-value">${escapeHtml(report.suggested_reply || "-")}</div>
+          </div>
+        </div>
+
+        <div class="translator-report-context">
+          <div class="translator-report-label">Contexte récent</div>
+          ${recentContextMarkup}
+        </div>
+
+        <div class="translator-report-grid">
+          ${threadStateMarkup}
+        </div>
+
+        <div class="translator-report-actions">
+          <button
+            type="button"
+            class="secondary-btn translator-report-status-btn"
+            data-id="${escapeHtml(report.id)}"
+            data-status="${report.status === "reviewed" ? "open" : "reviewed"}"
+          >
+            ${report.status === "reviewed" ? "Remettre ouvert" : "Marquer révisé"}
+          </button>
+        </div>
+      </div>
+    `;
+
+    translatorReportsList.appendChild(details);
+  });
+
+  document.querySelectorAll(".translator-report-status-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+
+      try {
+        await fetchJSON(`/api/admin/translator-reports/${encodeURIComponent(button.dataset.id)}`, {
+          method: "PUT",
+          body: JSON.stringify({ status: button.dataset.status })
+        });
+        await loadTranslatorReports();
+      } catch (error) {
+        alert(error.message || "Impossible de mettre à jour ce signalement.");
+        button.disabled = false;
+      }
+    });
+  });
+}
+
+function applyTranslatorReportFilters() {
+  renderTranslatorReports(getFilteredTranslatorReports());
+}
+
+async function loadTranslatorReports() {
+  const data = await fetchJSON("/api/admin/translator-reports");
+  allTranslatorReports = data.reports || [];
+  applyTranslatorReportFilters();
+}
+
 async function checkNewCandidates() {
   try {
     const data = await fetchJSON("/api/admin/candidates?status=en attente");
@@ -1586,6 +1792,7 @@ async function refreshCurrentTab() {
   if (currentTab === "clients") await loadClients();
   if (currentTab === "apartments") await loadApartments();
   if (currentTab === "candidates") await loadCandidates();
+  if (currentTab === "translatorReports") await loadTranslatorReports();
 }
 
 document.querySelectorAll(".menu-btn").forEach((btn) => {
@@ -1657,6 +1864,27 @@ if (clearCandidateFiltersBtn) {
     candidateStatusFilter.value = "";
     candidateSearch.value = "";
     applyCandidateFilters();
+  });
+}
+
+if (translatorReportReasonFilter) {
+  translatorReportReasonFilter.addEventListener("change", applyTranslatorReportFilters);
+}
+
+if (translatorReportStatusFilter) {
+  translatorReportStatusFilter.addEventListener("change", applyTranslatorReportFilters);
+}
+
+if (translatorReportSearch) {
+  translatorReportSearch.addEventListener("input", applyTranslatorReportFilters);
+}
+
+if (clearTranslatorReportFiltersBtn) {
+  clearTranslatorReportFiltersBtn.addEventListener("click", () => {
+    translatorReportReasonFilter.value = "";
+    translatorReportStatusFilter.value = "";
+    translatorReportSearch.value = "";
+    applyTranslatorReportFilters();
   });
 }
 

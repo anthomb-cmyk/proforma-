@@ -30,7 +30,6 @@
             Listings
             <span id="workspaceListingsBadge" class="workspace-nav-badge hidden">0</span>
           </button>
-          <button type="button" class="workspace-nav-btn" data-workspace-tab="prequalification">Préqualification</button>
         </div>
       </header>
 
@@ -79,7 +78,24 @@
               <span class="eyebrow">Console</span>
               <h3>Conversation</h3>
             </div>
-            <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
+            <div class="chat-card-header-actions">
+              <div class="mode-pill" id="modePill">Mode actif : Assistant des immeubles</div>
+              <div id="translatorContextBar" class="translator-context hidden">
+                <div class="translator-context-details">
+                  <div class="translator-context-copy">
+                    <div class="translator-context-label">Conversation active</div>
+                    <div id="translatorContextValue" class="translator-context-value">Aucune conversation active</div>
+                  </div>
+                  <div class="translator-context-copy">
+                    <div class="translator-context-label">Appartement sélectionné</div>
+                    <div id="translatorListingValue" class="translator-context-value">Aucun appartement sélectionné</div>
+                  </div>
+                </div>
+                <button type="button" id="newTranslatorConversationBtn" class="secondary-btn translator-reset-btn">
+                  Nouvelle conversation
+                </button>
+              </div>
+            </div>
           </div>
 
           <div class="chat-messages" id="chatMessages"></div>
@@ -98,59 +114,13 @@
           </form>
         </section>
 
-        <section class="dashboard-grid dashboard-grid-single">
-          <div class="panel compact">
-            <span class="eyebrow">Références</span>
-            <h2>Références d’exemple</h2>
-            <div class="sample-list" id="sampleRefs"></div>
-          </div>
-        </section>
-      </section>
-
-      <section id="messagesWorkspaceTab" class="workspace-page hidden">
-        <div class="workspace-layout">
-          <div class="workspace-sidebar-card glass-card">
-            <div class="workspace-section-head">
-              <span class="eyebrow">Messages</span>
-              <h3>Administration</h3>
-            </div>
-            <div id="employeeConversationList" class="workspace-conversation-list"></div>
+        <section class="panel compact dashboard-prequalification-panel">
+          <div class="workspace-section-head">
+            <span class="eyebrow">Préqualification</span>
+            <h3>Workflow employé</h3>
+            <p>Complétez la fiche de préqualification et transmettez-la à l’administration pour traitement.</p>
           </div>
 
-          <div class="workspace-content-card glass-card">
-            <div class="workspace-section-head">
-              <span class="eyebrow">Conversation</span>
-              <h3 id="employeeConversationTitle">Messagerie interne</h3>
-              <p id="employeeConversationMeta">Échange direct avec l’administration.</p>
-            </div>
-            <div id="employeeMessageThread" class="workspace-message-thread"></div>
-            <form id="employeeMessageForm" class="chat-form workspace-compose">
-              <textarea id="employeeMessageInput" placeholder="Écrire un message à l’administration" rows="3"></textarea>
-              <div class="chat-actions">
-                <button type="submit" class="primary-btn">Envoyer</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </section>
-
-      <section id="listingsWorkspaceTab" class="workspace-page hidden">
-        <div class="workspace-section-head">
-          <span class="eyebrow">Listings</span>
-          <h3>Mandats assignés</h3>
-          <p>Copiez le texte, signalez vos questions à l’administration et mettez vos mandats à jour.</p>
-        </div>
-        <div id="employeeListingTasks" class="workspace-task-list"></div>
-      </section>
-
-      <section id="prequalificationWorkspaceTab" class="workspace-page hidden">
-        <div class="workspace-section-head">
-          <span class="eyebrow">Préqualification</span>
-          <h3>Workflow employé</h3>
-          <p>Complétez la fiche de préqualification et transmettez-la à l’administration pour traitement.</p>
-        </div>
-
-        <div class="panel compact">
           <form id="candidateForm" class="candidate-form">
             <input id="aptRef" type="text" placeholder="Appartement visé (ex: 1001)" required />
             <input id="preferredLocationInput" type="text" list="preferredLocationList" placeholder="Ville ou secteur recherché" required />
@@ -214,8 +184,53 @@
 
             <button type="submit" class="primary-btn candidate-submit-btn">Envoyer la fiche</button>
           </form>
+        </section>
+
+        <section class="dashboard-grid dashboard-grid-single">
+          <div class="panel compact">
+            <span class="eyebrow">Références</span>
+            <h2>Références d’exemple</h2>
+            <div class="sample-list" id="sampleRefs"></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="messagesWorkspaceTab" class="workspace-page hidden">
+        <div class="workspace-layout">
+          <div class="workspace-sidebar-card glass-card">
+            <div class="workspace-section-head">
+              <span class="eyebrow">Messages</span>
+              <h3>Administration</h3>
+            </div>
+            <div id="employeeConversationList" class="workspace-conversation-list"></div>
+          </div>
+
+          <div class="workspace-content-card glass-card">
+            <div class="workspace-section-head">
+              <span class="eyebrow">Conversation</span>
+              <h3 id="employeeConversationTitle">Messagerie interne</h3>
+              <p id="employeeConversationMeta">Échange direct avec l’administration.</p>
+            </div>
+            <div id="employeeMessageThread" class="workspace-message-thread"></div>
+            <form id="employeeMessageForm" class="chat-form workspace-compose">
+              <textarea id="employeeMessageInput" placeholder="Écrire un message à l’administration" rows="3"></textarea>
+              <div class="chat-actions">
+                <button type="submit" class="primary-btn">Envoyer</button>
+              </div>
+            </form>
+          </div>
         </div>
       </section>
+
+      <section id="listingsWorkspaceTab" class="workspace-page hidden">
+        <div class="workspace-section-head">
+          <span class="eyebrow">Listings</span>
+          <h3>Mandats assignés</h3>
+          <p>Copiez le texte, signalez vos questions à l’administration et mettez vos mandats à jour.</p>
+        </div>
+        <div id="employeeListingTasks" class="workspace-task-list"></div>
+      </section>
+
     </main>
   </div>
 

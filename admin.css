@@ -259,6 +259,158 @@ td.long {
   color: #92400e;
 }
 
+.translator-report-list {
+  display: grid;
+  gap: 14px;
+}
+
+.translator-report-card {
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.translator-report-card summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 16px 18px;
+}
+
+.translator-report-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.translator-report-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.translator-report-summary-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.translator-report-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.translator-report-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  background: rgba(79,70,229,.08);
+  color: var(--text);
+}
+
+.translator-report-chip.status-open {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.translator-report-chip.status-reviewed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.translator-report-snippet {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.translator-report-summary-side {
+  text-align: right;
+  color: var(--muted);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.translator-report-body {
+  border-top: 1px solid var(--border);
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.translator-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.translator-report-field {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(79,70,229,.04);
+}
+
+.translator-report-field.wide {
+  grid-column: 1 / -1;
+}
+
+.translator-report-label {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.translator-report-value {
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.translator-report-context {
+  display: grid;
+  gap: 10px;
+}
+
+.translator-report-context-item {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid rgba(79,70,229,.08);
+}
+
+.translator-report-context-head {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.translator-report-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .translator-report-summary {
+    flex-direction: column;
+  }
+
+  .translator-report-summary-side {
+    text-align: left;
+  }
+
+  .translator-report-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .match-badge.refused {
   background: #fee2e2;
   color: #991b1b;
