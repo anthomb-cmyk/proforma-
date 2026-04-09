@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FluxLocatif — Espace IA employés</title>
-  <link rel="stylesheet" href="/employee-style.css?v=18" />
+  <link rel="stylesheet" href="/style.css?v=19" />
 </head>
 <body>
   <div class="page-bg"></div>
 
   <div class="app-shell workspace-shell">
-    <main class="main-panel workspace-main">
+    <main class="main-panel workspace-main" id="mainContent" role="main" aria-label="Espace employé FluxLocatif">
       <header class="workspace-topbar glass-card">
         <div class="brand-block">
           <div class="brand-mark">F</div>
@@ -66,6 +66,9 @@
               <select id="listingSelect" class="listing-select">
                 <option value="">Sélectionnez un appartement</option>
               </select>
+              <button type="button" id="loadListingsBtn" class="secondary-btn listing-load-btn">
+                Charger les appartements
+              </button>
             </div>
           </div>
 
@@ -98,18 +101,26 @@
             </div>
           </div>
 
-          <div class="chat-messages" id="chatMessages"></div>
+          <div id="chatErrorBanner" class="chat-error-banner hidden" role="alert"></div>
+
+          <div class="chat-messages" id="chatMessages" aria-live="polite"></div>
 
           <form class="chat-form" id="chatForm">
             <textarea
               id="chatInput"
               placeholder="Entrez votre question ici..."
               rows="3"
+              aria-label="Message à envoyer à l’assistant"
             ></textarea>
 
+            <div class="chat-form-help" id="chatFormHelp">
+              Ctrl+Entrée pour envoyer. Entrée ajoute une nouvelle ligne.
+            </div>
+
             <div class="chat-actions">
-              <button type="button" class="secondary-btn" id="clearChatBtn">Effacer</button>
-              <button type="submit" class="primary-btn" id="sendBtn">Envoyer</button>
+              <button type="button" class="secondary-btn" id="clearChatBtn" aria-label="Effacer la conversation visible">Effacer</button>
+              <button type="button" class="secondary-btn hidden" id="cancelRequestBtn" aria-label="Annuler la requête en cours">Annuler</button>
+              <button type="submit" class="primary-btn" id="sendBtn" aria-label="Envoyer le message">Envoyer</button>
             </div>
           </form>
         </section>
@@ -235,6 +246,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="/employee.js?v=18"></script>
+  <script src="/employee.js?v=19"></script>
 </body>
 </html>

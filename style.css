@@ -70,6 +70,10 @@ code {
   align-items: start;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .glass-card {
   background: var(--card);
   border: 1px solid rgba(255, 255, 255, 0.7);
@@ -179,6 +183,12 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.sample-list.is-loading::after {
+  content: "Chargement des appartements…";
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 .sample-chip {
@@ -498,6 +508,16 @@ code {
   min-height: 280px;
 }
 
+.chat-error-banner {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .message {
   display: flex;
   flex-direction: column;
@@ -555,6 +575,20 @@ code {
 .message-bubble.loading {
   background: rgba(79, 70, 229, 0.08) !important;
   color: var(--text-strong) !important;
+}
+
+.message-bubble.loading::after {
+  content: "...";
+  display: inline-block;
+  width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  animation: typing-dots 1.2s steps(4, end) infinite;
+  vertical-align: bottom;
+}
+
+.message-bubble.loading.typing {
+  font-style: normal;
 }
 
 .message-section + .message-section {
@@ -651,6 +685,12 @@ code {
   margin-top: 14px;
 }
 
+.chat-form-help {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
 .chat-form textarea {
   width: 100%;
   resize: vertical;
@@ -674,6 +714,7 @@ code {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .primary-btn,
@@ -695,6 +736,10 @@ code {
 .secondary-btn {
   background: rgba(79, 70, 229, 0.08);
   color: var(--text-strong);
+}
+
+.listing-load-btn {
+  margin-top: 10px;
 }
 
 .primary-btn:disabled,
@@ -723,6 +768,12 @@ code {
   }
 
   .status-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-shell {
     grid-template-columns: 1fr;
   }
 }
@@ -799,6 +850,19 @@ code {
 
   .listing-select {
     font-size: 0.98rem;
+  }
+
+  .chat-actions > * {
+    width: 100%;
+  }
+}
+
+@keyframes typing-dots {
+  from {
+    width: 0;
+  }
+  to {
+    width: 1.2em;
   }
 }
 /* ===== HIDE SELECT IN TRANSLATOR MODE (CSS OVERRIDE) ===== */

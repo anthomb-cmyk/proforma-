@@ -4,11 +4,17 @@ import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 import cors from "cors";
+import compression from "compression";
 import dotenv from "dotenv";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import OpenAI from "openai";
 import { Resend } from "resend";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createChatRouter } from "./routes/chat.js";
+import { createListingsRouter } from "./routes/listings.js";
+import { createOpenAIService } from "./services/openaiService.js";
+import { createListingsService } from "./services/listingsService.js";
 
 dotenv.config();
 
@@ -87,6 +93,11 @@ const TRANSLATOR_REPORT_REASONS = [
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
+const openaiService = createOpenAIService({
+  openaiClient: openai,
+  assistantModel: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+  translatorModel: process.env.OPENAI_TRANSLATOR_MODEL || "gpt-4o-mini"
+});
 const resendClient = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 console.log("Resend initialized:", Boolean(resendClient));
 const hasSupabaseAdminAccess = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -102,7 +113,26 @@ const supabaseServerClient = SUPABASE_URL && SUPABASE_SERVER_KEY
   : null;
 
 app.use(cors());
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path === "/api/chat") {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
 app.use(express.json({ limit: "1mb" }));
+
+const chatLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    error: "Trop de requêtes IA en peu de temps. Réessayez dans quelques minutes."
+  }
+});
 
 app.use((req, res, next) => {
   const hostname = String(req.hostname || "").trim().toLowerCase();
@@ -573,16 +603,15 @@ function toListingRecord(key, value) {
   };
 }
 
+const listingsService = createListingsService({
+  readJsonFile,
+  writeJsonFile,
+  listingsPath: LISTINGS_PATH,
+  toListingRecord
+});
+
 async function loadListingsMap() {
-  const raw = await readJsonFile(LISTINGS_PATH, {});
-  const normalized = {};
-
-  Object.entries(raw).forEach(([key, value]) => {
-    const record = toListingRecord(key, value);
-    normalized[record.ref] = record;
-  });
-
-  return normalized;
+  return listingsService.loadListingsMap();
 }
 
 async function loadClientsMap() {
@@ -665,52 +694,18 @@ function buildEmploymentCriteria(requirement) {
 }
 
 async function saveListingsMap(listingsMap) {
-  const output = {};
-
-  Object.values(listingsMap)
-    .sort((a, b) => Number(a.ref) - Number(b.ref))
-    .forEach((listing) => {
-      output[`L-${listing.ref}`] = {
-        ref: `L-${listing.ref}`,
-        address: listing.address || listing.adresse || "",
-        city: listing.city || listing.ville || "",
-        rent: listing.rent || listing.loyer || "",
-        bedrooms: listing.bedrooms || listing.chambres || "",
-        availability: listing.availability || listing.disponibilite || "",
-        status: listing.status || listing.statut || "",
-        notes: listing.notes || "",
-        description: listing.description || "",
-        adresse: listing.adresse || listing.address || "",
-        ville: listing.ville || listing.city || "",
-        zone: listing.zone || "",
-        lat: parseCoordinate(listing.lat),
-        lng: parseCoordinate(listing.lng),
-        type_logement: listing.type_logement || "",
-        chambres: listing.chambres || listing.bedrooms || "",
-        superficie: listing.superficie || "",
-        loyer: listing.loyer || listing.rent || "",
-        inclusions: listing.inclusions || "",
-        statut: listing.statut || listing.status || "",
-        stationnement: listing.stationnement || "",
-        animaux_acceptes: listing.animaux_acceptes || "",
-        meuble: listing.meuble || "",
-        disponibilite: listing.disponibilite || listing.availability || "",
-        electricite: listing.electricite || "",
-        balcon: listing.balcon || "",
-        wifi: listing.wifi || "",
-        acces_au_terrain: listing.acces_au_terrain || "",
-        nombre_stationnements_gratuits: listing.nombre_stationnements_gratuits ?? null,
-        nombre_stationnements_payants: listing.nombre_stationnements_payants ?? null,
-        prix_stationnement_payant: listing.prix_stationnement_payant ?? null,
-        electros_inclus: listing.electros_inclus || "",
-        laveuse_secheuse: listing.laveuse_secheuse || "",
-        nombre_logements_batisse: listing.nombre_logements_batisse ?? null,
-        rangement: listing.rangement || "",
-        client_id: listing.client_id ?? null
-      };
-    });
-
-  await writeJsonFile(LISTINGS_PATH, output);
+  await listingsService.saveListingsMap(
+    Object.fromEntries(
+      Object.entries(listingsMap).map(([ref, listing]) => [
+        ref,
+        {
+          ...listing,
+          lat: parseCoordinate(listing?.lat),
+          lng: parseCoordinate(listing?.lng)
+        }
+      ])
+    )
+  );
 }
 
 async function saveClientsMap(clientsMap) {
@@ -2391,54 +2386,11 @@ function buildTranslatorDeterministicReply({ extraction, threadState, listing, m
 }
 
 async function generateTranslatorAiExtraction(message, options = {}) {
-  if (!openai) {
-    return null;
-  }
-
-  const response = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content:
-          "Tu es un extracteur structuré pour un traducteur interne d’équipe locative. Tu dois répondre uniquement avec un objet JSON valide contenant au maximum ces champs: translation, message_type, listing_question_type, provided_fields, answers_previous_step, confidence.\n\nRègles:\n- translation: reformule le message du locataire en français international clair, court et fidèle au sens\n- message_type doit être l’un de: listing_question, qualification_answer, mixed, general\n- listing_question_type doit être l’un de: availability, price, electricity, heating, inclusions, appliances, pets, parking, location, deposit, visit, none\n- provided_fields doit être un objet dont les clés autorisées sont: move_in_date, occupants_total, has_animals, animal_type, employment_status, employer, employment_duration, income, credit, tal, full_name, phone, email\n- answers_previous_step doit être true seulement si le message répond clairement à la dernière question posée\n- confidence est un nombre entre 0 et 1\n- n’invente pas d’information sur la fiche logement\n- sois robuste aux fautes, au français québécois oral, aux abréviations, au style Marketplace et aux réponses courtes dépendantes du contexte"
-      },
-      {
-        role: "user",
-        content: [
-          `Message actuel du locataire :\n${message}`,
-          options?.listing ? `\nAppartement sélectionné :\n${buildTranslatorListingContext(options.listing)}` : "\nAppartement sélectionné : aucun.",
-          options?.conversationEntries?.length
-            ? `\nHistorique récent utile :\n${options.conversationEntries.map((entry, index) => `${index + 1}. ${renderTranslatorHistoryEntry(entry)}`).join("\n\n")}`
-            : "\nHistorique récent utile : aucun.",
-          options?.threadState?.last_asked_step
-            ? `\nDernière information demandée : ${options.threadState.last_asked_step}`
-            : "\nDernière information demandée : aucune.",
-          `\nExtraction déterministe déjà repérée : ${JSON.stringify({
-            listing_question_type: options?.deterministicExtraction?.listing_question_type || "none",
-            provided_fields: Object.fromEntries(
-              Object.entries(options?.deterministicExtraction?.provided_fields || {}).map(([key, value]) => [key, value.value])
-            ),
-            answers_previous_step: Boolean(options?.deterministicExtraction?.answers_previous_step)
-          })}`
-        ].join("\n")
-      }
-    ]
+  return openaiService.generateTranslatorExtraction(message, {
+    ...options,
+    buildTranslatorListingContext,
+    renderTranslatorHistoryEntry
   });
-
-  const content = response.choices?.[0]?.message?.content?.trim();
-
-  if (!content) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
 }
 
 function trimCurrentTranslatorMessageFromHistory(history = [], currentMessage = "") {
@@ -3422,175 +3374,29 @@ async function generateTranslatorPayload(message, options = {}) {
 }
 
 async function generateListingReply(message, listing) {
-  if (!openai) {
-    return [
-      `Voici les informations disponibles pour L-${listing.ref}.`,
-      "",
-      listing.adresse ? `Adresse : ${listing.adresse}` : "",
-      listing.ville ? `Ville : ${listing.ville}` : "",
-      listing.type_logement ? `Type : ${listing.type_logement}` : "",
-      listing.chambres ? `Chambres : ${listing.chambres}` : "",
-      listing.superficie ? `Superficie : ${listing.superficie}` : "",
-      listing.loyer ? `Loyer : ${listing.loyer}` : "",
-      listing.disponibilite ? `Disponibilité : ${listing.disponibilite}` : "",
-      listing.statut ? `Statut : ${listing.statut}` : "",
-      listing.notes ? `Notes : ${listing.notes}` : ""
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  const response = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-    temperature: 0.3,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Tu es un assistant interne pour une equipe de location. Reponds seulement avec les informations fournies sur l'appartement. Si l'information manque, dis-le clairement sans inventer."
-      },
-      {
-        role: "user",
-        content: `Appartement : ${JSON.stringify(listing, null, 2)}\n\nQuestion : ${message}`
-      }
-    ]
-  });
-
-  return response.choices?.[0]?.message?.content?.trim() || "Aucune réponse disponible.";
+  return openaiService.streamListingReply(message, listing);
 }
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/listings", async (_req, res) => {
-  try {
-    const listings = await loadListingsMap();
-    res.json({ ok: true, listings });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Impossible de lire listings.json."
-    });
-  }
-});
+app.use("/api/listings", createListingsRouter({
+  listingsService
+}));
 
-app.post("/api/chat", async (req, res) => {
-  const mode = String(req.body?.mode || "").trim();
-  const message = String(req.body?.message || "").trim();
-  const userId = String(req.body?.user_id || "employee-manuel");
-  const listingRef = normalizeRef(req.body?.listing_ref || "");
-  const resolvedListingRef = listingRef ? `L-${listingRef}` : "";
-  const translatorThreadKey = String(req.body?.translator_thread_key || "").trim();
-  const conversationHistory = Array.isArray(req.body?.conversation_history) ? req.body.conversation_history : [];
-
-  if (!mode || !message) {
-    return res.status(400).json({
-      ok: false,
-      error: "Le mode et le message sont obligatoires."
-    });
-  }
-
-  try {
-    await upsertChatSession(userId);
-    await recordUserDailyTime(userId);
-    const userMessageId = createId("msg");
-    await appendChatMessage({
-      id: userMessageId,
-      user_id: userId,
-      mode,
-      listing_ref: resolvedListingRef || null,
-      translator_thread_key: translatorThreadKey || null,
-      sender: "user",
-      text: message,
-      created_at: new Date().toISOString()
-    });
-
-    if (mode === "translator") {
-      const listings = listingRef ? await loadListingsMap() : null;
-      const translatorPayload = await generateTranslatorPayload(message, {
-        userId,
-        translatorThreadKey,
-        listing: listingRef && listings ? listings[listingRef] || null : null,
-        conversationHistory
-      });
-      const assistantText = [
-        `Français international : ${translatorPayload.translation}`,
-        `Réponse suggérée : ${translatorPayload.reply}`
-      ].join("\n\n");
-
-      const assistantMessageId = createId("msg");
-      await appendChatMessage({
-        id: assistantMessageId,
-        user_id: userId,
-        mode,
-        listing_ref: resolvedListingRef || null,
-        translator_thread_key: translatorThreadKey || null,
-        sender: "assistant",
-        text: assistantText,
-        translation: translatorPayload.translation,
-        reply: translatorPayload.reply,
-        context: translatorPayload.context,
-        created_at: new Date().toISOString()
-      });
-
-      return res.json({
-        ok: true,
-        label: "Traducteur",
-        variant: "success",
-        user_message_id: userMessageId,
-        assistant_message_id: assistantMessageId,
-        translator_thread_key: translatorThreadKey || "",
-        listing_ref: resolvedListingRef || "",
-        translation: translatorPayload.translation,
-        reply: translatorPayload.reply,
-        context: translatorPayload.context
-      });
-    }
-
-    if (mode === "listing") {
-      const listings = await loadListingsMap();
-      const reference = extractListingReference(message);
-      const listing = listings[reference];
-
-      if (!reference || !listing) {
-        return res.status(400).json({
-          ok: false,
-          error: "Référence d'appartement introuvable dans le message."
-        });
-      }
-
-      const reply = await generateListingReply(message, listing);
-
-      await appendChatMessage({
-        id: createId("msg"),
-        user_id: userId,
-        mode,
-        sender: "assistant",
-        text: reply,
-        created_at: new Date().toISOString()
-      });
-
-      return res.json({
-        ok: true,
-        label: "Assistant des immeubles",
-        variant: "success",
-        reference,
-        reply
-      });
-    }
-
-    return res.status(400).json({
-      ok: false,
-      error: "Mode non pris en charge."
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: "Impossible de traiter la demande."
-    });
-  }
-});
+app.use("/api/chat", createChatRouter({
+  chatLimiter,
+  listingsService,
+  openaiService,
+  normalizeRef,
+  extractListingReference,
+  upsertChatSession,
+  recordUserDailyTime,
+  appendChatMessage,
+  createId,
+  generateTranslatorPayload
+}));
 
 app.post("/api/match", async (req, res) => {
   const listing = req.body?.listing;

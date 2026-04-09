@@ -8,9 +8,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.3.2",
     "openai": "^4.104.0",
     "resend": "^4.0.0"
   }

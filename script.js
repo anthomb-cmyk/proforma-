@@ -2,6 +2,7 @@ const SUPABASE_URL = "https://nuuzkvgyolxbawvqyugu.supabase.co";
 const SUPABASE_KEY = "sb_publishable_103-rw3MwM7k2xUeMMUodg_fRr9vUD4";
 const EMPLOYEE_APP_URL = "https://fluxlocatif.up.railway.app";
 const CLIENT_APP_URL = "https://client.fluxlocatif.com";
+const CHAT_STORAGE_KEY = "fluxlocatif.employee.chat.v1";
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -23,11 +24,15 @@ const chatState = {
     }
   ],
   listings: {},
+  listingsLoaded: false,
+  listingsLoadingPromise: null,
   serverReady: false,
   pending: false,
+  abortController: null,
   currentUser: null,
   currentSession: null,
   activeTranslatorThreadKey: "",
+  selectedListingRef: "",
   workspaceMessages: [],
   workspaceTasks: [],
   notifications: [],
@@ -53,6 +58,9 @@ const chatMessages = document.getElementById("chatMessages");
 const chatForm = document.getElementById("chatForm");
 const chatInput = document.getElementById("chatInput");
 const clearChatBtn = document.getElementById("clearChatBtn");
+const cancelRequestBtn = document.getElementById("cancelRequestBtn");
+const loadListingsBtn = document.getElementById("loadListingsBtn");
+const chatErrorBanner = document.getElementById("chatErrorBanner");
 const modeStatus = document.getElementById("modeStatus");
 const listingModeBtn = document.getElementById("listingModeBtn");
 const translatorModeBtn = document.getElementById("translatorModeBtn");
@@ -111,6 +119,82 @@ function resolveUserRole(user) {
 function formatDate(value) {
   if (!value) return "-";
   return new Date(value).toLocaleString("fr-CA");
+}
+
+function getSerializableHistory(history = []) {
+  return history
+    .filter((message) => message && message.variant !== "loading")
+    .map((message) => ({
+      sender: message.sender || "",
+      label: message.label || "",
+      text: message.text || "",
+      variant: message.variant || "",
+      sections: Array.isArray(message.sections) ? message.sections : [],
+      rawText: message.rawText || "",
+      listingRef: message.listingRef || "",
+      translatorThreadKey: message.translatorThreadKey || "",
+      messageId: message.messageId || "",
+      reportable: Boolean(message.reportable),
+      translation: message.translation || "",
+      suggestedReply: message.suggestedReply || "",
+      assistantMessageId: message.assistantMessageId || "",
+      reported: Boolean(message.reported),
+      reportReason: message.reportReason || ""
+    }));
+}
+
+function persistChatState() {
+  try {
+    localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        currentMode: chatState.currentMode,
+        activeTranslatorThreadKey: chatState.activeTranslatorThreadKey,
+        selectedListingRef: chatState.selectedListingRef || getSelectedListingRef() || "",
+        listingHistory: getSerializableHistory(chatState.listingHistory),
+        translatorHistory: getSerializableHistory(chatState.translatorHistory)
+      })
+    );
+  } catch (error) {
+    console.warn("Unable to persist chat state:", error);
+  }
+}
+
+function restoreChatState() {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed.listingHistory) && parsed.listingHistory.length) {
+      chatState.listingHistory = parsed.listingHistory;
+    }
+
+    if (Array.isArray(parsed.translatorHistory) && parsed.translatorHistory.length) {
+      chatState.translatorHistory = parsed.translatorHistory;
+    }
+
+    if (parsed.activeTranslatorThreadKey) {
+      chatState.activeTranslatorThreadKey = String(parsed.activeTranslatorThreadKey);
+    }
+
+    if (parsed.selectedListingRef) {
+      chatState.selectedListingRef = normalizeRefKey(parsed.selectedListingRef);
+    }
+
+    if (parsed.currentMode === "translator" || parsed.currentMode === "listing") {
+      chatState.currentMode = parsed.currentMode;
+    }
+  } catch (error) {
+    console.warn("Unable to restore chat state:", error);
+  }
+}
+
+function setChatError(message = "") {
+  if (!chatErrorBanner) return;
+
+  chatErrorBanner.textContent = message;
+  chatErrorBanner.classList.toggle("hidden", !message);
 }
 
 async function isAdminUser(userId) {
@@ -209,8 +293,11 @@ function normalizeRefKey(ref) {
 
 function getSelectedListingRef() {
   const ref = listingSelect ? normalizeRefKey(listingSelect.value) : "";
-  if (!ref || !chatState.listings[ref]) return "";
-  return ref;
+  const fallbackRef = normalizeRefKey(chatState.selectedListingRef);
+  const resolvedRef = ref || fallbackRef;
+  if (!resolvedRef || !chatState.listings[resolvedRef]) return "";
+  chatState.selectedListingRef = resolvedRef;
+  return resolvedRef;
 }
 
 function buildTranslatorConversationHistory() {
@@ -296,6 +383,8 @@ function createNewTranslatorConversation() {
       chatInput.focus();
     }
   }
+
+  persistChatState();
 }
 
 function normalizeLocationText(value) {
@@ -311,9 +400,12 @@ function setPending(isPending) {
 
   if (sendBtn) sendBtn.disabled = isPending;
   if (clearChatBtn) clearChatBtn.disabled = isPending;
+  if (cancelRequestBtn) cancelRequestBtn.classList.toggle("hidden", !isPending);
+  if (cancelRequestBtn) cancelRequestBtn.disabled = !isPending;
   if (listingModeBtn) listingModeBtn.disabled = isPending;
   if (translatorModeBtn) translatorModeBtn.disabled = isPending;
   if (listingSelect) listingSelect.disabled = isPending;
+  if (loadListingsBtn) loadListingsBtn.disabled = isPending;
 }
 
 function setServerStatus(text, variant = "") {
@@ -329,6 +421,12 @@ function initSampleRefs() {
   if (!sampleRefs) return;
 
   sampleRefs.innerHTML = "";
+
+  if (!chatState.listingsLoaded) {
+    sampleRefs.classList.remove("is-loading");
+    sampleRefs.innerHTML = `<div class="muted">Chargez les appartements pour voir les références disponibles.</div>`;
+    return;
+  }
 
   Object.keys(chatState.listings).forEach((refKey) => {
     const chip = document.createElement("button");
@@ -357,6 +455,11 @@ function initSampleRefs() {
 function initListingDropdown() {
   if (!listingSelect) return;
 
+  if (!chatState.listingsLoaded) {
+    listingSelect.innerHTML = `<option value="">Chargez les appartements</option>`;
+    return;
+  }
+
   listingSelect.innerHTML = `<option value="">Sélectionnez un appartement</option>`;
 
   Object.keys(chatState.listings).forEach((refKey) => {
@@ -368,6 +471,55 @@ function initListingDropdown() {
     option.textContent = `${formatDisplayRef(normalizedRef)}${listing?.adresse ? " — " + listing.adresse : ""}`;
     listingSelect.appendChild(option);
   });
+
+  if (chatState.selectedListingRef && chatState.listings[chatState.selectedListingRef]) {
+    listingSelect.value = chatState.selectedListingRef;
+  }
+}
+
+function setListingsLoadingState(isLoading) {
+  if (sampleRefs) {
+    sampleRefs.classList.toggle("is-loading", isLoading);
+    if (isLoading) {
+      sampleRefs.innerHTML = "";
+    }
+  }
+
+  if (loadListingsBtn) {
+    loadListingsBtn.textContent = isLoading ? "Chargement..." : "Charger les appartements";
+    loadListingsBtn.classList.toggle("hidden", chatState.listingsLoaded);
+  }
+
+  if (listingSelect) {
+    listingSelect.disabled = isLoading || chatState.pending;
+  }
+}
+
+async function ensureListingsLoaded() {
+  if (chatState.listingsLoaded) {
+    return true;
+  }
+
+  if (chatState.listingsLoadingPromise) {
+    return chatState.listingsLoadingPromise;
+  }
+
+  setListingsLoadingState(true);
+
+  chatState.listingsLoadingPromise = (async () => {
+    try {
+      const ok = await loadListings();
+      if (!ok) {
+        setChatError("Impossible de charger les appartements pour le moment.");
+      }
+      return ok;
+    } finally {
+      setListingsLoadingState(false);
+      chatState.listingsLoadingPromise = null;
+    }
+  })();
+
+  return chatState.listingsLoadingPromise;
 }
 
 function buildMessageSectionsText(message) {
@@ -477,6 +629,10 @@ function addMessageToDOM(message) {
     bubble.classList.add(message.variant);
   }
 
+  if (message.variant === "loading") {
+    bubble.classList.add("typing");
+  }
+
   if (Array.isArray(message.sections) && message.sections.length) {
     message.sections.forEach((section) => {
       const sectionEl = document.createElement("div");
@@ -558,6 +714,7 @@ function renderMessages() {
 
   history.forEach((message) => addMessageToDOM(message));
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  persistChatState();
 }
 
 function pushMessage(sender, label, text, variant = "", sections = [], metadata = {}) {
@@ -568,6 +725,8 @@ function pushMessage(sender, label, text, variant = "", sections = [], metadata 
   if (chatMessages) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
+
+  persistChatState();
 
   return message;
 }
@@ -589,8 +748,23 @@ function replaceLastLoading(text, variant = "success", label = "Assistant", sect
   renderMessages();
 }
 
+function updateLastLoadingMessage(text, label = "Assistant") {
+  const history = currentHistory();
+  const last = history[history.length - 1];
+
+  if (!last || last.variant !== "loading") {
+    pushMessage("bot", label, text, "loading");
+    return;
+  }
+
+  last.text = text;
+  last.label = label;
+  renderMessages();
+}
+
 function switchMode(mode) {
   chatState.currentMode = mode;
+  setChatError("");
 
   if (listingModeBtn) {
     listingModeBtn.classList.toggle("active", mode === "listing");
@@ -642,6 +816,7 @@ function switchMode(mode) {
 
   renderTranslatorContext();
   renderMessages();
+  persistChatState();
 }
 
 function prevalidateListing() {
@@ -1001,11 +1176,22 @@ async function loadListings() {
     });
 
     chatState.listings = normalizedListings;
+    chatState.listingsLoaded = true;
+    if (loadListingsBtn) {
+      loadListingsBtn.classList.add("hidden");
+    }
     initSampleRefs();
     initListingDropdown();
+    setChatError("");
     return true;
   } catch (error) {
     console.error("Load listings error:", error);
+    chatState.listingsLoaded = false;
+    if (loadListingsBtn) {
+      loadListingsBtn.classList.remove("hidden");
+    }
+    initSampleRefs();
+    initListingDropdown();
     return false;
   }
 }
@@ -1018,26 +1204,85 @@ async function sendToAI(input, ref = "") {
   }
 
   const selectedListingRef = ref || getSelectedListingRef();
+  const controller = new AbortController();
+  chatState.abortController = controller;
 
-  return fetchJSON(
-    "/api/chat",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        mode: chatState.currentMode,
-        message,
-        user_id: chatState.currentUser?.id || "employee-manuel",
-        listing_ref: selectedListingRef || "",
-        translator_thread_key: chatState.currentMode === "translator"
-          ? (chatState.activeTranslatorThreadKey || "")
-          : "",
-        conversation_history: chatState.currentMode === "translator"
-          ? buildTranslatorConversationHistory()
-          : []
-      })
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
     },
-    25000
-  );
+    signal: controller.signal,
+    body: JSON.stringify({
+      mode: chatState.currentMode,
+      message,
+      user_id: chatState.currentUser?.id || "employee-manuel",
+      listing_ref: selectedListingRef || "",
+      translator_thread_key: chatState.currentMode === "translator"
+        ? (chatState.activeTranslatorThreadKey || "")
+        : "",
+      conversation_history: chatState.currentMode === "translator"
+        ? buildTranslatorConversationHistory()
+        : []
+    })
+  });
+
+  if (!response.ok || !response.body) {
+    let errorMessage = "Une erreur est survenue.";
+
+    try {
+      const data = await response.json();
+      errorMessage = data.error || errorMessage;
+    } catch {
+      try {
+        errorMessage = await response.text() || errorMessage;
+      } catch {
+        // ignore secondary parse errors
+      }
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamedText = "";
+  let finalPayload = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+
+      const event = JSON.parse(trimmedLine);
+
+      if (event.type === "chunk") {
+        streamedText += String(event.delta || "");
+        updateLastLoadingMessage(streamedText || "L’assistant rédige", chatState.currentMode === "translator" ? "Traducteur" : "Assistant des immeubles");
+      } else if (event.type === "error") {
+        throw new Error(event.error || "Une erreur est survenue.");
+      } else if (event.type === "done") {
+        finalPayload = event.payload || null;
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (!finalPayload) {
+    throw new Error("Le serveur n’a pas retourné de réponse finale.");
+  }
+
+  return finalPayload;
 }
 
 function setCandidateStatus(message = "", type = "") {
@@ -1227,8 +1472,10 @@ if (chatForm) {
 
     const input = chatInput.value.trim();
     if (!input || chatState.pending) return;
+    setChatError("");
 
     if (!chatState.serverReady) {
+      setChatError("Le serveur ne répond pas pour le moment.");
       pushMessage(
         "bot",
         "Système",
@@ -1241,9 +1488,16 @@ if (chatForm) {
     let selectedRef = "";
 
     if (chatState.currentMode === "listing") {
+      const listingsReady = await ensureListingsLoaded();
+      if (!listingsReady) {
+        pushMessage("bot", "Système", "Impossible de charger les appartements pour le moment.", "error");
+        return;
+      }
+
       const validation = prevalidateListing();
 
       if (!validation.ok) {
+        setChatError(validation.error);
         pushMessage("bot", "Système", validation.error, "error");
         return;
       }
@@ -1266,7 +1520,7 @@ if (chatForm) {
 
     chatInput.value = "";
     setPending(true);
-    pushMessage("bot", "Système", "Traitement en cours...", "loading");
+    pushMessage("bot", chatState.currentMode === "translator" ? "Traducteur" : "Assistant des immeubles", "L’assistant rédige", "loading");
 
     try {
       const result = await sendToAI(input, selectedRef);
@@ -1274,11 +1528,13 @@ if (chatForm) {
       if (chatState.currentMode === "listing") {
         const resultRef = normalizeRefKey(result.reference || selectedRef);
 
-        if (resultRef && chatState.listings[resultRef]) {
-          if (listingSelect) {
-            listingSelect.value = resultRef;
-          }
+      if (resultRef && chatState.listings[resultRef]) {
+        chatState.selectedListingRef = resultRef;
+        if (listingSelect) {
+          listingSelect.value = resultRef;
         }
+        persistChatState();
+      }
       }
 
       replaceLastLoading(
@@ -1321,12 +1577,20 @@ if (chatForm) {
       }
     } catch (error) {
       console.error("Chat error:", error);
+      const resolvedErrorMessage = error?.name === "AbortError"
+        ? "Requête annulée."
+        : (error.message || "Une erreur est survenue.");
+
+      if (resolvedErrorMessage !== "Requête annulée.") {
+        setChatError(resolvedErrorMessage);
+      }
       replaceLastLoading(
-        error.message || "Une erreur est survenue.",
+        resolvedErrorMessage,
         "error",
         "Système"
       );
     } finally {
+      chatState.abortController = null;
       setPending(false);
     }
   });
@@ -1334,7 +1598,7 @@ if (chatForm) {
 
 if (chatInput) {
   chatInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       if (chatForm) chatForm.requestSubmit();
     }
@@ -1343,6 +1607,7 @@ if (chatInput) {
 
 if (clearChatBtn) {
   clearChatBtn.addEventListener("click", () => {
+    setChatError("");
     if (chatState.currentMode === "listing") {
       chatState.listingHistory = [
         {
@@ -1360,6 +1625,14 @@ if (clearChatBtn) {
   });
 }
 
+if (cancelRequestBtn) {
+  cancelRequestBtn.addEventListener("click", () => {
+    chatState.abortController?.abort();
+    chatState.abortController = null;
+    setChatError("Requête annulée.");
+  });
+}
+
 if (listingModeBtn) {
   listingModeBtn.addEventListener("click", () => switchMode("listing"));
 }
@@ -1369,8 +1642,22 @@ if (translatorModeBtn) {
 }
 
 if (listingSelect) {
+  listingSelect.addEventListener("focus", async () => {
+    if (!chatState.listingsLoaded) {
+      await ensureListingsLoaded();
+    }
+  });
+
   listingSelect.addEventListener("change", () => {
+    chatState.selectedListingRef = normalizeRefKey(listingSelect.value);
+    persistChatState();
     renderTranslatorContext();
+  });
+}
+
+if (loadListingsBtn) {
+  loadListingsBtn.addEventListener("click", async () => {
+    await ensureListingsLoaded();
   });
 }
 
@@ -1431,9 +1718,23 @@ supabaseClient.auth.onAuthStateChange((event) => {
 });
 
 (async function init() {
-  createNewTranslatorConversation();
+  restoreChatState();
+  if (!Array.isArray(chatState.translatorHistory) || !chatState.translatorHistory.length) {
+    createNewTranslatorConversation();
+  }
+  if (!Array.isArray(chatState.listingHistory) || !chatState.listingHistory.length) {
+    chatState.listingHistory = [
+      {
+        sender: "bot",
+        label: "Système",
+        text: "Le mode Assistant des immeubles est actif. Sélectionnez un appartement puis posez votre question."
+      }
+    ];
+  }
   switchWorkspaceTab("dashboard");
-  switchMode("listing");
+  switchMode(chatState.currentMode === "translator" ? "translator" : "listing");
+  initSampleRefs();
+  initListingDropdown();
   renderMessages();
 
   try {
@@ -1443,10 +1744,7 @@ supabaseClient.auth.onAuthStateChange((event) => {
     return;
   }
 
-  const [serverOk, listingsOk] = await Promise.all([
-    checkServer(),
-    loadListings()
-  ]);
+  const serverOk = await checkServer();
 
   try {
     await loadPreferredLocations();
@@ -1457,8 +1755,6 @@ supabaseClient.auth.onAuthStateChange((event) => {
 
   if (!serverOk) {
     setServerStatus("Serveur non connecté", "error");
-  } else if (!listingsOk) {
-    setServerStatus("Serveur connecté", "ok");
   }
 
   try {
