@@ -803,6 +803,354 @@
       color: #2563eb;
     }
 
+    .candidate-table-shell {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .candidate-table-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .candidate-table-search-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1 1 420px;
+      min-width: 0;
+    }
+
+    .candidate-table-search {
+      flex: 1 1 auto;
+      min-width: 0;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .candidate-table-search:focus-within {
+      border-color: rgba(59,130,246,0.34);
+      box-shadow: 0 0 0 4px rgba(59,130,246,0.08);
+    }
+
+    .candidate-table-search input {
+      width: 100%;
+      min-width: 0;
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      font-size: 13px;
+      color: var(--text);
+      outline: none;
+    }
+
+    .candidate-table-search input::placeholder {
+      color: #94a3b8;
+    }
+
+    .candidate-table-filter-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .candidate-table-filter-btn:hover {
+      border-color: #bfdbfe;
+      color: #2563eb;
+    }
+
+    .candidate-status-filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .candidate-filter-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      padding: 6px 11px;
+      border-radius: 999px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+    }
+
+    .candidate-filter-pill.active {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #2563eb;
+    }
+
+    .candidate-table-wrap {
+      min-width: 0;
+      overflow-x: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      background: #ffffff;
+    }
+
+    .candidate-table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+    }
+
+    .candidate-table thead th {
+      padding: 13px 14px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      border-bottom: 1px solid #f1f5f9;
+      background: #ffffff;
+      white-space: nowrap;
+    }
+
+    .candidate-table tbody td {
+      padding: 14px;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: middle;
+      min-width: 0;
+    }
+
+    .candidate-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .candidate-sort-btn {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font: inherit;
+      color: inherit;
+      font-weight: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .candidate-sort-indicator {
+      font-size: 10px;
+      letter-spacing: 0;
+      color: #cbd5e1;
+    }
+
+    .candidate-sort-indicator.active {
+      color: #2563eb;
+    }
+
+    .candidate-identity {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .candidate-initials {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      background: #eff6ff;
+      color: #2563eb;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .candidate-identity-copy {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .candidate-identity-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+      overflow-wrap: anywhere;
+    }
+
+    .candidate-identity-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .candidate-property-cell,
+    .candidate-income-cell {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .candidate-score-cell {
+      min-width: 160px;
+    }
+
+    .candidate-score-display {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .candidate-score-track {
+      flex: 1 1 auto;
+      height: 6px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+      min-width: 70px;
+    }
+
+    .candidate-score-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: #22c55e;
+    }
+
+    .candidate-score-fill.mid {
+      background: #3b82f6;
+    }
+
+    .candidate-score-fill.low {
+      background: #f59e0b;
+    }
+
+    .candidate-score-number {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      min-width: 26px;
+      text-align: right;
+    }
+
+    .candidate-action-cell {
+      width: 1%;
+      white-space: nowrap;
+      position: relative;
+    }
+
+    .candidate-action-menu-shell {
+      position: relative;
+      display: inline-flex;
+      justify-content: flex-end;
+    }
+
+    .candidate-action-btn {
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      border-radius: 999px;
+      min-width: 34px;
+      min-height: 34px;
+      padding: 0 10px;
+      font-size: 16px;
+      line-height: 1;
+      color: #64748b;
+      cursor: pointer;
+    }
+
+    .candidate-action-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 150px;
+      padding: 6px;
+      border-radius: 14px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+      display: grid;
+      gap: 4px;
+      z-index: 10;
+    }
+
+    .candidate-action-menu.hidden {
+      display: none;
+    }
+
+    .candidate-action-option {
+      border: none;
+      background: transparent;
+      text-align: left;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .candidate-action-option:hover {
+      background: #f8fafc;
+    }
+
+    .candidate-table-empty {
+      padding: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    .stat-trend {
+      margin-top: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .stat-trend.positive {
+      color: #16a34a;
+    }
+
+    .stat-trend.neutral {
+      color: #94a3b8;
+    }
+
+    .stat-trend-arrow {
+      font-size: 12px;
+      line-height: 1;
+    }
+
     .dashboard-item-list {
       display: grid;
       gap: 10px;
@@ -2166,6 +2514,7 @@
               <div class="stat-card-glyph">01</div>
             </div>
             <div class="stat-value" id="statTotalApartments">0</div>
+            <div class="stat-trend neutral" id="statTotalApartmentsTrend">-</div>
             <div class="stat-foot">Unités suivies</div>
           </div>
           <div class="stat-card">
@@ -2174,6 +2523,7 @@
               <div class="stat-card-glyph">02</div>
             </div>
             <div class="stat-value" id="statAvailableApartments">0</div>
+            <div class="stat-trend neutral" id="statAvailableApartmentsTrend">-</div>
             <div class="stat-foot">Prêts à être reloués</div>
           </div>
           <div class="stat-card">
@@ -2182,6 +2532,7 @@
               <div class="stat-card-glyph">03</div>
             </div>
             <div class="stat-value" id="statCandidates">0</div>
+            <div class="stat-trend neutral" id="statCandidatesTrend">-</div>
             <div class="stat-foot">Dossiers reçus</div>
           </div>
           <div class="stat-card">
@@ -2190,6 +2541,7 @@
               <div class="stat-card-glyph">04</div>
             </div>
             <div class="stat-value" id="statDecisionSplit">0 / 0</div>
+            <div class="stat-trend neutral" id="statDecisionSplitTrend">-</div>
             <div class="stat-foot">Décisions prises</div>
           </div>
         </div>

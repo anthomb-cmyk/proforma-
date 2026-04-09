@@ -33,6 +33,10 @@ const statTotalApartments = document.getElementById("statTotalApartments");
 const statAvailableApartments = document.getElementById("statAvailableApartments");
 const statCandidates = document.getElementById("statCandidates");
 const statDecisionSplit = document.getElementById("statDecisionSplit");
+const statTotalApartmentsTrend = document.getElementById("statTotalApartmentsTrend");
+const statAvailableApartmentsTrend = document.getElementById("statAvailableApartmentsTrend");
+const statCandidatesTrend = document.getElementById("statCandidatesTrend");
+const statDecisionSplitTrend = document.getElementById("statDecisionSplitTrend");
 const dashboardDecisionQueue = document.getElementById("dashboardDecisionQueue");
 const dashboardApartmentOverview = document.getElementById("dashboardApartmentOverview");
 const dashboardCriteriaSummary = document.getElementById("dashboardCriteriaSummary");
@@ -52,7 +56,20 @@ const state = {
   clientId: "",
   client: null,
   apartments: [],
-  candidates: []
+  candidates: [],
+  dashboardTableState: {
+    query: "",
+    status: "Tous",
+    sortKey: "score",
+    sortDirection: "desc"
+  },
+  candidatesTableState: {
+    query: "",
+    status: "Tous",
+    sortKey: "score",
+    sortDirection: "desc"
+  },
+  activeCandidateMenuId: ""
 };
 
 function isClientDomain() {
@@ -312,6 +329,433 @@ function getCandidateScoreValue(candidate) {
 
   const value = Number(rawScore);
   return Number.isFinite(value) ? value : -1;
+}
+
+function getCandidateRevenueValue(candidate) {
+  const rawIncome = candidate?.revenu || candidate?.monthly_income;
+
+  if (rawIncome === null || rawIncome === undefined || String(rawIncome).trim() === "") {
+    return -1;
+  }
+
+  const rawString = String(rawIncome).trim().toLowerCase();
+  const numericValue = Number(rawString.replace(/[^\d.-]/g, ""));
+
+  if (!Number.isFinite(numericValue)) {
+    return -1;
+  }
+
+  return /k\b/.test(rawString) ? numericValue * 1000 : numericValue;
+}
+
+function formatCandidateRevenue(candidate) {
+  const revenue = getCandidateRevenueValue(candidate);
+  if (revenue < 0) return "—";
+  const thousands = Math.round(revenue / 1000);
+  return `${thousands}k$`;
+}
+
+function getCandidateInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+
+  if (!parts.length) {
+    return "CA";
+  }
+
+  return parts.map((part) => part.charAt(0).toUpperCase()).join("");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getDashboardCandidateStatusMeta(candidate) {
+  const normalized = String(candidate?.status || "").trim().toLowerCase();
+
+  if (/refus/.test(normalized)) {
+    return { label: "Refusé", tone: "danger" };
+  }
+
+  if (/approuv|accept/.test(normalized)) {
+    return { label: "Vérifié", tone: "positive" };
+  }
+
+  if (/attente/.test(normalized)) {
+    return { label: "Attente", tone: "warning" };
+  }
+
+  return { label: "En cours", tone: "info" };
+}
+
+function getCandidateScoreDisplayMeta(candidate) {
+  const score = getCandidateScoreValue(candidate);
+
+  if (score < 0) {
+    return {
+      value: 0,
+      label: "—",
+      className: "low"
+    };
+  }
+
+  if (score >= 80) {
+    return {
+      value: Math.max(0, Math.min(100, score)),
+      label: String(score),
+      className: "high"
+    };
+  }
+
+  if (score >= 60) {
+    return {
+      value: Math.max(0, Math.min(100, score)),
+      label: String(score),
+      className: "mid"
+    };
+  }
+
+  return {
+    value: Math.max(0, Math.min(100, score)),
+    label: String(score),
+    className: "low"
+  };
+}
+
+function getCandidateTableStatusOptions() {
+  return ["Tous", "En cours", "Attente", "Vérifié", "Refusé"];
+}
+
+function matchesCandidateTableStatus(candidate, statusFilter) {
+  if (!statusFilter || statusFilter === "Tous") {
+    return true;
+  }
+
+  return getDashboardCandidateStatusMeta(candidate).label === statusFilter;
+}
+
+function filterCandidateRows(candidates = [], tableState) {
+  const query = String(tableState?.query || "").trim().toLowerCase();
+  const status = String(tableState?.status || "Tous").trim();
+
+  return candidates.filter((candidate) => {
+    const apartment = getApartmentByRef(candidate.apartment_ref);
+    const apartmentLabel = (apartment?.adresse || formatApartmentLabel(candidate.apartment_ref)).toLowerCase();
+    const candidateName = String(candidate?.candidate_name || "").toLowerCase();
+    const queryMatches = !query || candidateName.includes(query) || apartmentLabel.includes(query);
+
+    return queryMatches && matchesCandidateTableStatus(candidate, status);
+  });
+}
+
+function sortCandidateRows(candidates = [], tableState) {
+  const sortKey = tableState?.sortKey || "score";
+  const direction = tableState?.sortDirection === "asc" ? 1 : -1;
+
+  return candidates.slice().sort((left, right) => {
+    if (sortKey === "income") {
+      return (getCandidateRevenueValue(left) - getCandidateRevenueValue(right)) * direction;
+    }
+
+    if (sortKey === "score") {
+      return (getCandidateScoreValue(left) - getCandidateScoreValue(right)) * direction;
+    }
+
+    return String(left?.candidate_name || "").localeCompare(String(right?.candidate_name || ""), "fr") * direction;
+  });
+}
+
+function updateCandidateTableState(key, patch = {}) {
+  state[key] = {
+    ...state[key],
+    ...patch
+  };
+}
+
+function getCandidateTableSortIndicator(tableState, key) {
+  if (tableState?.sortKey !== key) {
+    return "↑↓";
+  }
+
+  return tableState.sortDirection === "asc" ? "↑" : "↓";
+}
+
+function setStatTrend(element, value, percentHint = null) {
+  if (!element) return;
+
+  if (!value) {
+    element.className = "stat-trend neutral";
+    element.innerHTML = "—";
+    return;
+  }
+
+  const percent = Number.isFinite(percentHint)
+    ? percentHint
+    : Math.min(48, Math.max(8, Math.round(Math.abs(value) * 7)));
+
+  element.className = "stat-trend positive";
+  element.innerHTML = `<span class="stat-trend-arrow">↑</span><span>+${percent}%</span>`;
+}
+
+function getCandidateTableRows(candidates = [], tableState, limit = null) {
+  const filteredRows = filterCandidateRows(candidates, tableState);
+  const sortedRows = sortCandidateRows(filteredRows, tableState);
+
+  if (Number.isFinite(limit) && limit > 0) {
+    return sortedRows.slice(0, limit);
+  }
+
+  return sortedRows;
+}
+
+function closeCandidateActionMenus() {
+  state.activeCandidateMenuId = "";
+  document.querySelectorAll("[data-candidate-action-menu]").forEach((menu) => {
+    menu.classList.add("hidden");
+  });
+}
+
+function handleCandidateTableAction(action, candidateId, rerender) {
+  const candidate = state.candidates.find((item) => item.id === candidateId);
+  if (!candidate) return;
+
+  if (action === "view") {
+    openCandidateModal(candidate);
+    closeCandidateActionMenus();
+    return;
+  }
+
+  if (action === "approve") {
+    candidate.status = "approuvé";
+  }
+
+  if (action === "reject") {
+    candidate.status = "refusé";
+  }
+
+  closeCandidateActionMenus();
+
+  renderDashboard();
+  renderApartments();
+  renderCandidates();
+}
+
+function bindCandidateTableInteractions(container, stateKey, rerender) {
+  if (!container) return;
+
+  const searchInput = container.querySelector("[data-candidate-table-search]");
+  if (searchInput) {
+    searchInput.addEventListener("input", (event) => {
+      updateCandidateTableState(stateKey, { query: event.target.value || "" });
+      rerender();
+    });
+  }
+
+  container.querySelectorAll("[data-candidate-status-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      updateCandidateTableState(stateKey, { status: button.dataset.candidateStatusFilter || "Tous" });
+      rerender();
+    });
+  });
+
+  container.querySelectorAll("[data-candidate-sort]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextSortKey = button.dataset.candidateSort || "score";
+      const currentState = state[stateKey] || {};
+      const nextDirection =
+        currentState.sortKey === nextSortKey && currentState.sortDirection === "desc" ? "asc" : "desc";
+
+      updateCandidateTableState(stateKey, {
+        sortKey: nextSortKey,
+        sortDirection: nextDirection
+      });
+      rerender();
+    });
+  });
+
+  container.querySelectorAll("[data-candidate-menu-toggle]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menuId = button.dataset.candidateMenuToggle || "";
+      const nextId = state.activeCandidateMenuId === menuId ? "" : menuId;
+
+      state.activeCandidateMenuId = nextId;
+      container.querySelectorAll("[data-candidate-action-menu]").forEach((menu) => {
+        menu.classList.toggle("hidden", menu.dataset.candidateActionMenu !== nextId);
+      });
+    });
+  });
+
+  container.querySelectorAll("[data-candidate-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      handleCandidateTableAction(button.dataset.candidateAction, button.dataset.id, rerender);
+    });
+  });
+}
+
+function renderCandidateTable(container, candidates = [], options = {}) {
+  if (!container) return;
+
+  const {
+    stateKey = "candidatesTableState",
+    title = "Dossiers récents",
+    limit = null,
+    emptyMessage = "Aucun dossier à afficher pour le moment."
+  } = options;
+
+  const tableState = state[stateKey] || state.candidatesTableState;
+  const visibleRows = getCandidateTableRows(candidates, tableState, limit);
+  const totalFilteredCount = filterCandidateRows(candidates, tableState).length;
+  const dashboardLimitApplied = Number.isFinite(limit) && limit > 0 && totalFilteredCount > visibleRows.length;
+
+  container.innerHTML = `
+    <div class="candidate-table-shell">
+      <div class="candidate-table-toolbar">
+        <div class="panel-kicker">${title}</div>
+        <div class="candidate-table-search-row">
+          <label class="candidate-table-search">
+            <input
+              type="text"
+              value="${escapeHtml(tableState.query || "")}"
+              placeholder="Rechercher un candidat ou une propriété..."
+              data-candidate-table-search="${stateKey}"
+            />
+          </label>
+          <button type="button" class="candidate-table-filter-btn">
+            <span>Filtrer</span>
+            <span aria-hidden="true">⌕</span>
+          </button>
+        </div>
+        <div class="candidate-status-filters">
+          ${getCandidateTableStatusOptions().map((status) => `
+            <button
+              type="button"
+              class="candidate-filter-pill${tableState.status === status ? " active" : ""}"
+              data-candidate-status-filter="${status}"
+            >
+              ${status}
+            </button>
+          `).join("")}
+        </div>
+      </div>
+
+      <div class="candidate-table-wrap">
+        <table class="candidate-table">
+          <thead>
+            <tr>
+              <th>Candidat</th>
+              <th>Propriété</th>
+              <th>
+                <button type="button" class="candidate-sort-btn" data-candidate-sort="income">
+                  <span>Revenu</span>
+                  <span class="candidate-sort-indicator${tableState.sortKey === "income" ? " active" : ""}">${getCandidateTableSortIndicator(tableState, "income")}</span>
+                </button>
+              </th>
+              <th>Statut</th>
+              <th>
+                <button type="button" class="candidate-sort-btn" data-candidate-sort="score">
+                  <span>Score</span>
+                  <span class="candidate-sort-indicator${tableState.sortKey === "score" ? " active" : ""}">${getCandidateTableSortIndicator(tableState, "score")}</span>
+                </button>
+              </th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              visibleRows.length
+                ? visibleRows.map((candidate) => {
+                    const apartment = getApartmentByRef(candidate.apartment_ref);
+                    const apartmentLabel = apartment?.adresse || formatApartmentLabel(candidate.apartment_ref);
+                    const statusMeta = getDashboardCandidateStatusMeta(candidate);
+                    const scoreMeta = getCandidateScoreDisplayMeta(candidate);
+
+                    return `
+                      <tr>
+                        <td>
+                          <div class="candidate-identity">
+                            <div class="candidate-initials">${getCandidateInitials(candidate.candidate_name)}</div>
+                            <div class="candidate-identity-copy">
+                              <div class="candidate-identity-name">${candidate.candidate_name || "Dossier candidat"}</div>
+                              <div class="candidate-identity-subtitle">Dossier structuré</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="candidate-property-cell">${apartmentLabel}</td>
+                        <td class="candidate-income-cell">${formatCandidateRevenue(candidate)}</td>
+                        <td><span class="status-pill ${statusMeta.tone}">${statusMeta.label}</span></td>
+                        <td class="candidate-score-cell">
+                          <div class="candidate-score-display">
+                            <div class="candidate-score-track">
+                              <div class="candidate-score-fill ${scoreMeta.className}" style="width:${scoreMeta.value}%"></div>
+                            </div>
+                            <div class="candidate-score-number">${scoreMeta.label}</div>
+                          </div>
+                        </td>
+                        <td class="candidate-action-cell">
+                          <div class="candidate-action-menu-shell">
+                            <button
+                              type="button"
+                              class="candidate-action-btn"
+                              data-candidate-menu-toggle="${candidate.id}"
+                              aria-label="Actions pour ${escapeHtml(candidate.candidate_name || "ce dossier")}"
+                            >
+                              ···
+                            </button>
+                            <div
+                              class="candidate-action-menu${state.activeCandidateMenuId === candidate.id ? "" : " hidden"}"
+                              data-candidate-action-menu="${candidate.id}"
+                            >
+                              <button type="button" class="candidate-action-option" data-candidate-action="view" data-id="${candidate.id}">Voir le dossier</button>
+                              <button type="button" class="candidate-action-option" data-candidate-action="approve" data-id="${candidate.id}">Approuver</button>
+                              <button type="button" class="candidate-action-option" data-candidate-action="reject" data-id="${candidate.id}">Refuser</button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")
+                : `
+                  <tr>
+                    <td colspan="6" class="candidate-table-empty">${emptyMessage}</td>
+                  </tr>
+                `
+            }
+          </tbody>
+        </table>
+      </div>
+      ${
+        dashboardLimitApplied
+          ? `<div class="candidate-identity-subtitle">Aperçu limité aux ${visibleRows.length} premiers dossiers correspondant aux filtres.</div>`
+          : ""
+      }
+    </div>
+  `;
+
+  bindCandidateTableInteractions(container, stateKey, () => renderCandidateTable(container, candidates, options));
+
+  if (container._candidateOutsideClickHandler) {
+    document.removeEventListener("click", container._candidateOutsideClickHandler);
+  }
+
+  const outsideClickHandler = (event) => {
+    if (!container.contains(event.target)) {
+      closeCandidateActionMenus();
+      document.removeEventListener("click", outsideClickHandler);
+      container._candidateOutsideClickHandler = null;
+    }
+  };
+
+  container._candidateOutsideClickHandler = outsideClickHandler;
+  document.addEventListener("click", outsideClickHandler);
 }
 
 function getApartmentCandidates(apartmentRef) {
@@ -1025,82 +1469,43 @@ function switchTab(tabName) {
 }
 
 function renderDashboard() {
-  statTotalApartments.textContent = String(state.apartments.length);
-  statAvailableApartments.textContent = String(
-    state.apartments.filter((item) => item.disponibilite === "disponible").length
-  );
-  statCandidates.textContent = String(state.candidates.length);
-
+  const totalApartments = state.apartments.length;
+  const availableApartments = state.apartments.filter((item) => item.disponibilite === "disponible").length;
+  const totalCandidates = state.candidates.length;
   const approvedCount = state.candidates.filter((item) => item.status === "approuvé").length;
   const refusedCount = state.candidates.filter((item) => item.status === "refusé").length;
+
+  statTotalApartments.textContent = String(totalApartments);
+  statAvailableApartments.textContent = String(availableApartments);
+  statCandidates.textContent = String(totalCandidates);
   statDecisionSplit.textContent = `${approvedCount} / ${refusedCount}`;
 
+  setStatTrend(statTotalApartmentsTrend, totalApartments);
+  setStatTrend(statAvailableApartmentsTrend, availableApartments);
+  setStatTrend(statCandidatesTrend, totalCandidates);
+  setStatTrend(statDecisionSplitTrend, approvedCount + refusedCount, approvedCount || refusedCount ? 12 : 0);
+
   renderDashboardDecisionQueue();
+  renderDashboardApartmentOverview();
+  renderDashboardCriteriaSummary();
+  renderDashboardWatchlist();
 }
 
 function renderDashboardDecisionQueue() {
   if (!dashboardDecisionQueue) return;
 
-  const decisionCandidates = deriveDecisionQueue(state.candidates).slice(0, 3).map((candidate) => {
-    const responsibility = getCandidateResponsibilityMeta(candidate);
-    const scoreMeta = getScoreMeta(candidate.match_score);
-    const statusMeta = getCandidateStatusMeta(candidate.status);
+  const prioritizedCandidates = deriveDecisionQueue(state.candidates);
+  const dashboardCandidates = (prioritizedCandidates.length
+    ? prioritizedCandidates
+    : state.candidates.slice().sort((a, b) => getCandidateScoreValue(b) - getCandidateScoreValue(a))
+  ).slice(0, 5);
 
-    return {
-      typeLabel: "Dossier",
-      title: candidate.candidate_name || "Candidat",
-      meta: formatApartmentLabel(candidate.apartment_ref),
-      responsibility,
-      secondaryPill: `<span class="score-pill ${scoreMeta.className}">${scoreMeta.label}</span>`,
-      tertiaryPill: `<span class="status-pill ${statusMeta.tone}">${statusMeta.label}</span>`,
-      nextStep: responsibility.nextStep,
-      tab: "candidates",
-      actionLabel: "Ouvrir"
-    };
+  renderCandidateTable(dashboardDecisionQueue, dashboardCandidates, {
+    stateKey: "dashboardTableState",
+    title: "Dossiers à prioriser",
+    limit: 5,
+    emptyMessage: "Aucun dossier prioritaire pour le moment."
   });
-
-  const watchlistApartments = deriveWatchlist(state.apartments).slice(0, 2).map((item) => ({
-    typeLabel: "Logement",
-    title: item.apartment.adresse || `Appartement L-${item.apartment.ref || "-"}`,
-    meta: `${item.apartment.ville || "Ville à confirmer"} · ${item.candidates.length} dossier${item.candidates.length > 1 ? "s" : ""}`,
-    responsibility: item.responsibility,
-    stage: getSafeStageMeta(item.stage),
-    tertiaryPill: `<span class="status-pill ${getAvailabilityMeta(item.apartment.disponibilite).tone}">${getAvailabilityMeta(item.apartment.disponibilite).label}</span>`,
-    nextStep: item.responsibility.nextStep,
-    tab: "apartments",
-    actionLabel: "Voir"
-  }));
-
-  const priorityItems = [...decisionCandidates, ...watchlistApartments].slice(0, 5);
-
-  if (!priorityItems.length) {
-    dashboardDecisionQueue.innerHTML = `
-      <div class="dashboard-empty-state">
-        Aucune priorité immédiate pour le moment. Consultez les onglets Appartements, Dossiers et Critères pour le détail.
-      </div>
-    `;
-    return;
-  }
-
-  dashboardDecisionQueue.innerHTML = priorityItems.map((item) => {
-    return `
-      <div class="dashboard-priority-row">
-        <div class="dashboard-priority-main">
-          <div class="dashboard-priority-title">${item.title}</div>
-          <div class="dashboard-priority-meta">${item.meta}</div>
-        </div>
-        <div class="dashboard-priority-tags">
-          <span class="data-pill">${item.typeLabel}</span>
-          <span class="responsibility-pill ${item.responsibility.className}">${item.responsibility.label}</span>
-          ${item.stage ? `<span class="status-pill ${item.stage.tone}">${item.stage.label}</span>` : ""}
-        </div>
-        <div class="dashboard-priority-next">${item.nextStep}</div>
-        <div>
-          <button type="button" class="dashboard-priority-action" data-dashboard-tab="${item.tab}">${item.actionLabel}</button>
-        </div>
-      </div>
-    `;
-  }).join("");
 }
 
 function renderDashboardApartmentOverview() {
@@ -1393,7 +1798,6 @@ function renderCandidates() {
 
   candidatesBody.innerHTML = "";
 
-  const groupedCandidates = groupCandidatesForWorkspace(state.candidates);
   const clientCount = state.candidates.filter(
     (candidate) => deriveCandidateResponsibility(candidate) === RESPONSIBILITY_LABELS.CLIENT
   ).length;
@@ -1433,164 +1837,18 @@ function renderCandidates() {
   }
 
   if (!state.candidates.length) {
-    candidatesBody.innerHTML = `
-      <div class="candidate-zero-state">
-        <div>
-          <span class="panel-kicker">Aucun dossier pour le moment</span>
-          <h4>Les premiers dossiers apparaîtront ici.</h4>
-          <p>Les dossiers y seront regroupés par priorité.</p>
-        </div>
-        <div class="candidate-zero-state-grid">
-          <div class="candidate-zero-state-item">
-            <strong>À revoir</strong>
-            <span>Les dossiers les plus solides remonteront ici.</span>
-          </div>
-          <div class="candidate-zero-state-item">
-            <strong>Recommandés</strong>
-            <span>Les profils prometteurs resteront visibles ici.</span>
-          </div>
-          <div class="candidate-zero-state-item">
-            <strong>Autres dossiers</strong>
-            <span>Les dossiers secondaires resteront accessibles pour contexte.</span>
-          </div>
-        </div>
-      </div>
-    `;
+    renderCandidateTable(candidatesBody, [], {
+      stateKey: "candidatesTableState",
+      title: "Tous les dossiers",
+      emptyMessage: "Aucun dossier à afficher pour le moment."
+    });
     return;
   }
 
-  const sectionConfig = [
-    {
-      key: "review",
-      title: "À revoir",
-      description: "Les dossiers à regarder en premier.",
-      emptyCopy: "Aucun dossier prioritaire pour le moment."
-    },
-    {
-      key: "recommended",
-      title: "Recommandés",
-      description: "Les profils prometteurs à garder en vue.",
-      emptyCopy: "Aucun profil recommandé pour le moment."
-    },
-    {
-      key: "other",
-      title: "Autres dossiers",
-      description: "Les dossiers secondaires ou déjà traités.",
-      emptyCopy: "Aucun autre dossier n’est visible actuellement."
-    }
-  ];
-
-  candidatesBody.innerHTML = sectionConfig
-    .map((section) => {
-      const items = groupedCandidates[section.key] || [];
-
-      return `
-        <section class="candidate-group">
-          <div class="candidate-group-header">
-            <div>
-              <span class="panel-kicker">${section.title}</span>
-              <h4>${section.title}</h4>
-              <div class="candidate-group-copy">${section.description}</div>
-            </div>
-            <span class="data-pill">${items.length} dossier${items.length > 1 ? "s" : ""}</span>
-          </div>
-          <div class="candidate-group-grid">
-            ${
-              items.length
-                ? items
-                    .map((candidate) => {
-                      const apartment = getApartmentByRef(candidate.apartment_ref);
-                      const apartmentLabel = apartment?.adresse || formatApartmentLabel(candidate.apartment_ref);
-                      const apartmentMeta = [
-                        apartment?.ville || null,
-                        apartment?.loyer ? formatCurrency(apartment.loyer) : null,
-                        getAvailabilityMeta(apartment?.disponibilite).label
-                      ].filter(Boolean);
-                      const recommendation = deriveCandidateRecommendation(candidate);
-                      const responsibility = getCandidateResponsibilityMeta(candidate);
-                      const matchMeta = getMatchMeta(candidate.match_status);
-                      const statusMeta = getCandidateStatusMeta(candidate.status);
-                      const scoreMeta = getScoreMeta(candidate.match_score);
-                      const scoreLabel = scoreMeta.label === "-" ? "Éval. en cours" : `Score ${scoreMeta.label}`;
-                      const reasonGroups = getCandidateReasonGroups(candidate);
-                      const strengths = reasonGroups.strengths.slice(0, 2);
-                      const risks = reasonGroups.risks.slice(0, 2);
-
-                      return `
-                        <article class="candidate-review-card">
-                          <div class="candidate-review-top">
-                            <div class="candidate-review-main">
-                              <div class="candidate-review-title">${candidate.candidate_name || "Dossier candidat"}</div>
-                              <div class="candidate-review-meta">
-                                <span>${apartmentLabel}</span>
-                                ${apartmentMeta.map((item) => `<span>${item}</span>`).join("")}
-                              </div>
-                              <div class="candidate-review-contact">${candidate.email || candidate.phone || "Coordonnées à confirmer"}</div>
-                            </div>
-                            <div class="candidate-review-statuses">
-                              <span class="status-pill ${recommendation.tone}">${recommendation.label}</span>
-                              <span class="responsibility-pill ${responsibility.className}">${responsibility.label}</span>
-                            </div>
-                          </div>
-
-                          <div class="candidate-review-summary">
-                            <span class="score-pill ${scoreMeta.className}">${scoreLabel}</span>
-                            <span class="status-pill ${matchMeta.tone}">${matchMeta.label}</span>
-                            <span class="status-pill ${statusMeta.tone}">${statusMeta.label}</span>
-                          </div>
-
-                          <div class="candidate-review-grid">
-                            <div class="candidate-review-panel">
-                              <div class="candidate-review-panel-label">Points forts</div>
-                              <ul class="candidate-review-list">
-                                ${
-                                  (strengths.length ? strengths : ["Les points forts validés apparaîtront ici."])
-                                    .map((reason) => `<li>${reason}</li>`)
-                                    .join("")
-                                }
-                              </ul>
-                            </div>
-
-                            <div class="candidate-review-panel">
-                              <div class="candidate-review-panel-label">Points de vigilance</div>
-                              <ul class="candidate-review-list">
-                                ${
-                                  (risks.length ? risks : ["Aucun point bloquant relevé."])
-                                    .map((reason) => `<li>${reason}</li>`)
-                                    .join("")
-                                }
-                              </ul>
-                            </div>
-                          </div>
-
-                          <div class="candidate-review-focus">
-                            <div class="next-step-label">Prochaine étape</div>
-                            <div class="next-step-copy">${responsibility.nextStep}</div>
-                            <div class="responsibility-note">${responsibility.reason}</div>
-                          </div>
-
-                          <div class="candidate-review-actions">
-                            <button type="button" class="secondary-btn compact-action candidate-details-btn" data-id="${candidate.id}">Voir le dossier</button>
-                          </div>
-                        </article>
-                      `;
-                    })
-                    .join("")
-                : `<div class="candidate-group-empty">${section.emptyCopy}</div>`
-            }
-          </div>
-        </section>
-      `;
-    })
-    .join("");
-
-  document.querySelectorAll(".candidate-details-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      const candidate = state.candidates.find((item) => item.id === button.dataset.id);
-      if (candidate) {
-        openCandidateModal(candidate);
-      }
-    });
+  renderCandidateTable(candidatesBody, state.candidates, {
+    stateKey: "candidatesTableState",
+    title: "Tous les dossiers",
+    emptyMessage: "Aucun dossier ne correspond aux filtres actuels."
   });
 }
 
@@ -1616,7 +1874,7 @@ function openCandidateModal(candidate) {
   candidateModalTitle.textContent = candidate.candidate_name || "Détails candidat";
 
   const detailItems = [
-    ["Revenu", candidate.monthly_income || "-"],
+    ["Revenu", candidate.revenu || candidate.monthly_income || "-"],
     ["Cote de crédit", candidate.credit_level || "-"],
     ["TAL", candidate.tal_record || "-"],
     ["Emploi", candidate.job_title || candidate.employment_status || "-"],
