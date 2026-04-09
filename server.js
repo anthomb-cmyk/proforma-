@@ -81,6 +81,16 @@ const TRANSLATOR_QUESTION_TYPES = [
   "visit",
   "none"
 ];
+const LISTING_QUESTION_TYPES_THAT_HIJACK_DEMAIN = [
+  "pets",
+  "electricity",
+  "heating",
+  "inclusions",
+  "appliances",
+  "parking",
+  "visit",
+  "price"
+];
 
 const TRANSLATOR_REPORT_REASONS = [
   "off_topic",
@@ -1634,17 +1644,8 @@ function getTranslatorMessageSignals(message) {
   };
 }
 
-function hasTranslatorPetsContext(message, listingQuestionType = "none") {
-  if (listingQuestionType === "pets") {
-    return true;
-  }
-
-  const normalized = normalizeTranslatorText(message);
-
-  return (
-    /\b(?:chat|chats|chien|chiens|animal|animaux)\b/.test(normalized) ||
-    /\b(?:amener mon|amener ma|amener mes|apporter mon|apporter ma|apporter mes)\b/.test(normalized)
-  );
+function shouldIgnoreMoveInDate(listingQuestionType = "none") {
+  return LISTING_QUESTION_TYPES_THAT_HIJACK_DEMAIN.includes(String(listingQuestionType || "").trim());
 }
 
 function detectTranslatorListingQuestionType(message) {
@@ -1697,15 +1698,16 @@ function detectTranslatorContext(message) {
   return "general inquiry";
 }
 
-function buildTranslatorFallbackTranslation(message, conversationEntries = []) {
+function buildTranslatorFallbackTranslation(message, conversationEntries = [], threadState = null) {
   const text = normalizeTranslatorText(message);
   const signals = getTranslatorMessageSignals(message);
   const occupantsCount = extractTranslatorOccupantsCount(message);
-  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
+  const listingQuestionType = detectTranslatorListingQuestionType(message);
+  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries, threadState);
   const resolvedOccupantsCount = occupantsCount || inferredShortReplyContext.occupantsCountFromShortReply;
-  const moveInDate = hasTranslatorPetsContext(message, detectTranslatorListingQuestionType(message))
+  const moveInDate = shouldIgnoreMoveInDate(listingQuestionType)
     ? null
-    : extractMoveInDateValue(message);
+    : extractMoveInDateValue(message) || inferredShortReplyContext.moveInDateFromShortReply;
 
   if (!text) {
     return "Le locataire souhaite obtenir des informations sur le logement.";
@@ -1867,17 +1869,43 @@ function getLatestTranslatorAssistantReply(conversationEntries = []) {
   return "";
 }
 
-function inferShortReplyContext(message, conversationEntries = []) {
+function inferShortReplyContext(message, conversationEntries = [], threadState = null) {
+  const rawMessage = String(message || "").trim();
   const normalizedMessage = normalizeTranslatorText(message);
   const latestAssistantReply = normalizeTranslatorText(getLatestTranslatorAssistantReply(conversationEntries));
+  const lastAskedStep = String(threadState?.last_asked_step || "").trim();
+  const isShortMessage = normalizedMessage.split(/\s+/).filter(Boolean).length <= 4;
   const leadingCountMatch = normalizedMessage.match(/^(\d{1,2})(?:\b|\s)/);
+  const shortMoveInMatch = rawMessage.match(/\b(?:le\s+\d{1,2}|1er|\d{1,2}\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)|maintenant|d[eè]s que|bient[oô]t|mois prochain|prochaine semaine)\b/i);
+  const answersMoveInDate = Boolean(
+    lastAskedStep === "move_in_date" &&
+    isShortMessage &&
+    shortMoveInMatch
+  );
+  const answersHasAnimals = Boolean(
+    lastAskedStep === "has_animals" &&
+    isShortMessage &&
+    /\b(?:oui|non|pas d|aucun|pas)\b/.test(normalizedMessage)
+  );
+  const animalsInfo = answersHasAnimals ? extractAnimalsInfo(message) : { hasAnimals: null, animalType: null };
+  const hasAnimalsFromShortReply = !answersHasAnimals
+    ? null
+    : /\b(?:non|pas d|aucun|pas)\b/.test(normalizedMessage)
+      ? false
+      : /\boui\b/.test(normalizedMessage)
+        ? true
+        : animalsInfo.hasAnimals;
 
   return {
     answersOccupantsQuestion: Boolean(
       leadingCountMatch &&
       /combien a habiter|combien a habiter le logement|combien a occuper|combien doccupants|combien a etre|vous seriez combien/.test(latestAssistantReply)
     ),
-    occupantsCountFromShortReply: leadingCountMatch?.[1] || null
+    occupantsCountFromShortReply: leadingCountMatch?.[1] || null,
+    answersMoveInDate,
+    moveInDateFromShortReply: answersMoveInDate ? shortMoveInMatch?.[0]?.trim() || null : null,
+    answersHasAnimals,
+    hasAnimalsFromShortReply
   };
 }
 
@@ -2046,11 +2074,13 @@ function normalizeAiProvidedFields(providedFields = {}) {
 
 function buildDeterministicTranslatorExtraction(message, conversationEntries = [], threadState = null) {
   const listingQuestionType = detectTranslatorListingQuestionType(message);
-  const translation = buildTranslatorFallbackTranslation(message, conversationEntries);
-  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
+  const translation = buildTranslatorFallbackTranslation(message, conversationEntries, threadState);
+  const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries, threadState);
   const occupantsCount = extractTranslatorOccupantsCount(message) || inferredShortReplyContext.occupantsCountFromShortReply;
-  const shouldIgnoreMoveInDate = hasTranslatorPetsContext(message, listingQuestionType);
-  const moveInDate = shouldIgnoreMoveInDate ? null : extractMoveInDateValue(message);
+  const ignoreMoveInDate = shouldIgnoreMoveInDate(listingQuestionType);
+  const moveInDate = ignoreMoveInDate
+    ? null
+    : extractMoveInDateValue(message) || inferredShortReplyContext.moveInDateFromShortReply;
   const employmentStatus = extractEmploymentStatusValue(message);
   const employer = extractEmployerValue(message);
   const employmentDuration = extractEmploymentDurationValue(message);
@@ -2071,8 +2101,12 @@ function buildDeterministicTranslatorExtraction(message, conversationEntries = [
     providedFields.occupants_total = createTranslatorFieldUpdate(Number(occupantsCount), 0.92, "deterministic");
   }
 
-  if (animalsInfo.hasAnimals !== null) {
-    providedFields.has_animals = createTranslatorFieldUpdate(Boolean(animalsInfo.hasAnimals), 0.9, "deterministic");
+  const resolvedHasAnimals = animalsInfo.hasAnimals !== null
+    ? Boolean(animalsInfo.hasAnimals)
+    : inferredShortReplyContext.hasAnimalsFromShortReply;
+
+  if (resolvedHasAnimals !== null && resolvedHasAnimals !== undefined) {
+    providedFields.has_animals = createTranslatorFieldUpdate(Boolean(resolvedHasAnimals), 0.9, "deterministic");
   }
 
   if (animalsInfo.animalType) {
@@ -2170,17 +2204,22 @@ function resolveTranslatorDisplayedNextQuestion(threadState, extraction, listing
 }
 
 function mergeTranslatorExtraction(baseExtraction, aiExtraction = {}) {
+  const resolvedListingQuestionType = TRANSLATOR_QUESTION_TYPES.includes(String(aiExtraction?.listing_question_type || "").trim())
+    ? String(aiExtraction.listing_question_type).trim()
+    : baseExtraction.listing_question_type;
   const mergedProvidedFields = {
     ...normalizeAiProvidedFields(aiExtraction?.provided_fields),
     ...(baseExtraction?.provided_fields || {})
   };
 
+  if (shouldIgnoreMoveInDate(resolvedListingQuestionType) && !baseExtraction?.provided_fields?.move_in_date) {
+    delete mergedProvidedFields.move_in_date;
+  }
+
   return {
     translation: String(aiExtraction?.translation || "").trim() || baseExtraction.translation,
     message_type: String(aiExtraction?.message_type || "").trim() || baseExtraction.message_type,
-    listing_question_type: TRANSLATOR_QUESTION_TYPES.includes(String(aiExtraction?.listing_question_type || "").trim())
-      ? String(aiExtraction.listing_question_type).trim()
-      : baseExtraction.listing_question_type,
+    listing_question_type: resolvedListingQuestionType,
     provided_fields: mergedProvidedFields,
     answers_previous_step: Boolean(aiExtraction?.answers_previous_step) || Boolean(baseExtraction.answers_previous_step),
     confidence: Number(aiExtraction?.confidence || baseExtraction.confidence || 0.5)
