@@ -2352,15 +2352,7 @@ function getTranslatorNextStepForState(threadState, extraction, listing = null) 
     return null;
   }
 
-  if (extraction?.listing_question_type === "visit" && threadState.visit_prequalification?.required) {
-    return threadState.current_step || "move_in_date";
-  }
-
-  if (threadState.current_step) {
-    return threadState.current_step;
-  }
-
-  return null;
+  return getNextTranslatorStateStep(threadState);
 }
 
 function buildTranslatorDeterministicReply({ extraction, threadState, listing, message }) {
@@ -3350,6 +3342,18 @@ async function generateTranslatorPayload(message, options = {}) {
     listingRef: listing?.ref || ""
   });
   const nextStep = getTranslatorNextStepForState(updatedThreadState, extraction, listing);
+  const deterministicReply = buildTranslatorDeterministicReply({
+    extraction,
+    threadState: updatedThreadState,
+    listing,
+    message
+  });
+  const answerLine = resolveTranslatorListingAnswer(
+    extraction?.listing_question_type || "none",
+    listing,
+    message
+  );
+  const nextQuestion = nextStep ? buildTranslatorStepQuestion(nextStep, listing) : "";
 
   updatedThreadState.current_step = nextStep;
   updatedThreadState.last_asked_step = nextStep;
@@ -3366,14 +3370,26 @@ async function generateTranslatorPayload(message, options = {}) {
       )
     : detectTranslatorContext(message);
 
-  return {
-    translation: String(extraction.translation || "").trim() || buildTranslatorFallbackTranslation(message, combinedHistory),
-    reply: buildTranslatorDeterministicReply({
+  let reply = deterministicReply;
+
+  try {
+    const aiReply = await openaiService.generateTranslatorReply({
+      answerLine,
+      nextQuestion,
       extraction,
       threadState: updatedThreadState,
       listing,
-      message
-    }),
+      conversationEntries: combinedHistory
+    });
+
+    if (aiReply) {
+      reply = aiReply;
+    }
+  } catch {}
+
+  return {
+    translation: String(extraction.translation || "").trim() || buildTranslatorFallbackTranslation(message, combinedHistory),
+    reply,
     context
   };
 }
