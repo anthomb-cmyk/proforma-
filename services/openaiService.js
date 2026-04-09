@@ -59,17 +59,148 @@ export function truncateConversationHistory(history = [], maxMessages = 10) {
     return [];
   }
 
-  return history.slice(-maxMessages).map((entry) => ({
-    sender: String(entry?.sender || "").trim(),
-    label: String(entry?.label || "").trim(),
-    text: String(entry?.text || "").trim(),
-    sections: Array.isArray(entry?.sections)
+  return history.slice(-maxMessages).map((entry) => {
+    if (entry?.role && entry?.content) {
+      return {
+        role: String(entry.role).trim(),
+        content: String(entry.content).trim()
+      };
+    }
+
+    const sections = Array.isArray(entry?.sections)
       ? entry.sections.slice(0, 4).map((section) => ({
           title: String(section?.title || "").trim(),
           text: String(section?.text || "").trim()
         }))
-      : []
-  }));
+      : [];
+
+    const content = [
+      String(entry?.text || "").trim(),
+      ...sections.map((section) => `${section.title ? `${section.title} : ` : ""}${section.text}`.trim())
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return {
+      role: String(entry?.sender || "").trim().toLowerCase() === "assistant" ? "assistant" : "user",
+      content
+    };
+  }).filter((entry) => entry.role && entry.content);
+}
+
+function buildTranslatorKnownFieldsSummary(threadState) {
+  const knownFields = Object.entries(threadState?.qualification || {})
+    .filter(([, value]) => value?.known)
+    .map(([key, value]) => `${key}: ${String(value?.value ?? "").trim()}`)
+    .filter(Boolean);
+
+  return knownFields.length ? knownFields.join("\n") : "Aucune information connue pour le moment.";
+}
+
+function buildTranslatorListingSummary(listing) {
+  if (!listing) {
+    return "Aucun logement sélectionné";
+  }
+
+  return JSON.stringify({
+    ref: String(listing.ref || "").trim(),
+    adresse: String(listing.adresse || listing.address || "").trim(),
+    ville: String(listing.ville || listing.city || "").trim(),
+    loyer: listing.loyer ?? listing.rent ?? null,
+    disponibilite: String(listing.disponibilite || listing.availability || "").trim(),
+    inclusions: String(listing.inclusions || "").trim(),
+    animaux_acceptes: String(listing.animaux_acceptes || "").trim(),
+    stationnement: String(listing.stationnement || "").trim(),
+    electricite: String(listing.electricite || "").trim(),
+    notes: String(listing.notes || "").trim(),
+    description: String(listing.description || "").trim()
+  }, null, 2);
+}
+
+function buildTranslatorSystemPrompt({ threadState, listing }) {
+  const nextStep = String(threadState?.current_step || "").trim() || "aucun";
+
+  return [
+    "Tu es un assistant interne qui aide un employé locatif à répondre à des messages de locataires potentiels.",
+    "",
+    "TON RÔLE :",
+    "1. Comprendre le message du locataire même s'il est mal écrit (fautes, québécois, Marketplace, abréviations)",
+    "2. Le reformuler en français international clair dans \"translation\"",
+    "3. Proposer une réponse courte et naturelle dans \"reply\"",
+    "4. Extraire toute information utile dans \"extracted_fields\"",
+    "5. Identifier le prochain champ inconnu à obtenir dans \"next_step\"",
+    "",
+    "RÈGLES DE RÉPONSE :",
+    "- Maximum 3-4 phrases",
+    "- Ton direct, simple, humain — jamais formel ni robotique",
+    "- Jamais de \"Je peux vérifier\", \"N'hésitez pas\", \"Si cela vous intéresse\"",
+    "- Répondre D'ABORD à la question du locataire, ENSUITE poser UNE SEULE question",
+    "- Ne jamais poser plus d'une question à la fois",
+    "- Ne jamais redemander une information déjà connue",
+    "",
+    "RÈGLES D'EXTRACTION :",
+    "- \"le 1 mai je peux tu amener mon chat\" → move_in_date: \"1er mai\" ET has_animals: true",
+    "- \"demain il a tu de l'électricité\" → \"demain\" n'est PAS une date d'emménagement, c'est une question sur l'électricité",
+    "- \"ouais ces correct\" après un refus → le locataire confirme qu'il continue malgré tout",
+    "- \"4\" après \"combien d'occupants\" → occupants_total: 4",
+    "- Une date précise (1er mai, 15 juin) = toujours extraire comme move_in_date même si le message contient aussi autre chose",
+    "- \"demain/ce soir/cette semaine\" seul sans date précise = NE PAS extraire comme move_in_date",
+    "",
+    "RÈGLES SUR LES INFOS LOGEMENT :",
+    "- Si l'info est dans la fiche : répondre directement et clairement",
+    "- Si l'info n'est pas dans la fiche : ne pas inventer, dire qu'on va vérifier",
+    "- Ne jamais inventer une information sur le logement",
+    "",
+    "ORDRE DE QUALIFICATION (obtenir dans cet ordre, une info à la fois) :",
+    "1. move_in_date",
+    "2. occupants_total",
+    "3. has_animals",
+    "4. employment_status",
+    "5. income",
+    "6. credit",
+    "7. tal",
+    "8. full_name / phone / email",
+    "",
+    "FORMAT DE SORTIE JSON OBLIGATOIRE :",
+    "{\"translation\":\"...\",\"reply\":\"...\",\"extracted_fields\":{\"move_in_date\":null,\"occupants_total\":null,\"has_animals\":null,\"animal_type\":null,\"employment_status\":null,\"employer\":null,\"employment_duration\":null,\"income\":null,\"credit\":null,\"tal\":null,\"full_name\":null,\"phone\":null,\"email\":null},\"next_step\":null,\"visit_requested\":false,\"listing_question\":null}",
+    "",
+    "ÉTAT DU DOSSIER ACTUEL :",
+    buildTranslatorKnownFieldsSummary(threadState),
+    "",
+    `PROCHAIN CHAMP À OBTENIR : ${nextStep}`,
+    "",
+    "LOGEMENT SÉLECTIONNÉ :",
+    buildTranslatorListingSummary(listing)
+  ].join("\n");
+}
+
+function normalizeTranslatorResponsePayload(payload = {}) {
+  const extracted = payload?.extracted_fields && typeof payload.extracted_fields === "object" && !Array.isArray(payload.extracted_fields)
+    ? payload.extracted_fields
+    : {};
+
+  return {
+    translation: String(payload?.translation || "").trim(),
+    reply: String(payload?.reply || "").trim(),
+    extracted_fields: {
+      move_in_date: extracted.move_in_date ?? null,
+      occupants_total: extracted.occupants_total ?? null,
+      has_animals: extracted.has_animals ?? null,
+      animal_type: extracted.animal_type ?? null,
+      employment_status: extracted.employment_status ?? null,
+      employer: extracted.employer ?? null,
+      employment_duration: extracted.employment_duration ?? null,
+      income: extracted.income ?? null,
+      credit: extracted.credit ?? null,
+      tal: extracted.tal ?? null,
+      full_name: extracted.full_name ?? null,
+      phone: extracted.phone ?? null,
+      email: extracted.email ?? null
+    },
+    next_step: payload?.next_step ?? null,
+    visit_requested: Boolean(payload?.visit_requested),
+    listing_question: payload?.listing_question ?? null
+  };
 }
 
 export function createOpenAIService({
@@ -210,6 +341,51 @@ export function createOpenAIService({
     return response.choices?.[0]?.message?.content?.trim() || null;
   }
 
+  async function generateTranslatorResponse({
+    message,
+    conversationHistory,
+    threadState,
+    listing
+  } = {}) {
+    if (!openaiClient) {
+      return null;
+    }
+
+    const messages = [
+      {
+        role: "system",
+        content: buildTranslatorSystemPrompt({ threadState, listing })
+      },
+      ...truncateConversationHistory(conversationHistory, 40).map((entry) => ({
+        role: entry.role === "assistant" ? "assistant" : "user",
+        content: entry.content
+      })),
+      {
+        role: "user",
+        content: String(message || "").trim()
+      }
+    ];
+
+    const response = await openaiClient.chat.completions.create({
+      model: translatorModel,
+      temperature: 0.4,
+      response_format: { type: "json_object" },
+      messages
+    });
+
+    const content = response.choices?.[0]?.message?.content?.trim();
+
+    if (!content) {
+      return null;
+    }
+
+    try {
+      return normalizeTranslatorResponsePayload(JSON.parse(content));
+    } catch {
+      return null;
+    }
+  }
+
   async function streamListingReply(message, listing, { signal, onToken } = {}) {
     const cachedReply = getCachedListingReply(message, listing);
     if (cachedReply) {
@@ -267,6 +443,7 @@ export function createOpenAIService({
     translatorModel,
     truncateConversationHistory,
     generateTranslatorExtraction,
+    generateTranslatorResponse,
     generateTranslatorReply,
     streamListingReply
   };

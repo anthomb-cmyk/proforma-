@@ -40,7 +40,7 @@ export function createChatRouter({
     const translatorThreadKey = String(req.body?.translator_thread_key || "").trim();
     const conversationHistory = openaiService.truncateConversationHistory(
       Array.isArray(req.body?.conversation_history) ? req.body.conversation_history : [],
-      10
+      mode === "translator" ? 40 : 10
     );
 
     if (!mode || !message) {
@@ -113,10 +113,14 @@ export function createChatRouter({
             user_message_id: userMessageId,
             assistant_message_id: assistantMessageId,
             translator_thread_key: translatorThreadKey || "",
-            listing_ref: resolvedListingRef || "",
+            listing_ref: translatorPayload.thread_state?.listing_ref || resolvedListingRef || "",
             translation: translatorPayload.translation,
             reply: translatorPayload.reply,
-            context: translatorPayload.context
+            context: translatorPayload.context,
+            next_step: translatorPayload.next_step || null,
+            visit_requested: Boolean(translatorPayload.visit_requested),
+            listing_question: translatorPayload.listing_question || null,
+            extracted_fields: translatorPayload.extracted_fields || {}
           }
         });
         return res.end();

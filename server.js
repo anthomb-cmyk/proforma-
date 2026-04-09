@@ -15,6 +15,7 @@ import { createChatRouter } from "./routes/chat.js";
 import { createListingsRouter } from "./routes/listings.js";
 import { createOpenAIService } from "./services/openaiService.js";
 import { createListingsService } from "./services/listingsService.js";
+import { createQualificationService } from "./services/qualificationService.js";
 
 dotenv.config();
 
@@ -272,6 +273,7 @@ function createDefaultTranslatorThreadState(threadKey, employeeUserId = "", list
     last_asked_step: null,
     last_detected_listing_question: null,
     last_message_at: null,
+    conversationMessages: [],
     qualification: createTranslatorQualificationState(),
     visit_prequalification: {
       required: true,
@@ -292,6 +294,15 @@ async function getTranslatorThreadState(threadKey, options = {}) {
     ? {
         ...createDefaultTranslatorThreadState(normalizedThreadKey),
         ...existingState,
+        conversationMessages: Array.isArray(existingState?.conversationMessages)
+          ? existingState.conversationMessages
+              .map((entry) => ({
+                role: String(entry?.role || "").trim(),
+                content: String(entry?.content || "").trim()
+              }))
+              .filter((entry) => entry.role && entry.content)
+              .slice(-40)
+          : [],
         qualification: {
           ...createTranslatorQualificationState(),
           ...(existingState?.qualification || {})
@@ -313,7 +324,11 @@ async function getTranslatorThreadState(threadKey, options = {}) {
   }
 
   if (options?.listingRef) {
-    state.listing_ref = `L-${normalizeRef(options.listingRef)}`;
+    const nextListingRef = `L-${normalizeRef(options.listingRef)}`;
+    if (state.listing_ref && state.listing_ref !== nextListingRef) {
+      state.last_detected_listing_question = null;
+    }
+    state.listing_ref = nextListingRef;
   }
 
   return state;
@@ -1593,6 +1608,14 @@ async function ensureCandidatesMatchFields(candidates, persist = false) {
   return { candidates, changed };
 }
 
+const qualificationService = createQualificationService({
+  loadListingsMap,
+  loadClientsMap,
+  evaluateMatch,
+  isListingRelevantForMatching,
+  normalizeRef
+});
+
 function normalizeTranslatorText(value) {
   return String(value || "")
     .toLowerCase()
@@ -1849,8 +1872,20 @@ function getLatestTranslatorAssistantReply(conversationEntries = []) {
 
   for (let index = conversationEntries.length - 1; index >= 0; index -= 1) {
     const entry = conversationEntries[index];
-    if (String(entry?.sender || "").trim().toLowerCase() !== "assistant") {
+    const sender = String(entry?.sender || entry?.role || "").trim().toLowerCase();
+    if (sender !== "assistant") {
       continue;
+    }
+
+    if (entry?.role === "assistant" && entry?.content) {
+      try {
+        const parsed = JSON.parse(String(entry.content));
+        if (parsed?.reply) {
+          return String(parsed.reply).trim();
+        }
+      } catch {
+        return String(entry.content || "").trim();
+      }
     }
 
     const replySection = Array.isArray(entry?.sections)
@@ -1941,6 +1976,19 @@ function extractMoveInDateValue(message) {
 
   const relativeMatch = normalized.match(/\b(?:maintenant|immediat|immediatement|des maintenant|mois prochain|prochaine semaine)\b/);
   return relativeMatch?.[0] || null;
+}
+
+function isPreciseMoveInDateValue(value) {
+  const rawValue = String(value || "").trim();
+
+  if (!rawValue) {
+    return false;
+  }
+
+  return (
+    /\b\d{4}-\d{2}-\d{2}\b/.test(rawValue) ||
+    /\b(1er|\d{1,2})\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)\b/i.test(rawValue)
+  );
 }
 
 function extractEmploymentStatusValue(message) {
@@ -2077,64 +2125,13 @@ function buildDeterministicTranslatorExtraction(message, conversationEntries = [
   const translation = buildTranslatorFallbackTranslation(message, conversationEntries, threadState);
   const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries, threadState);
   const occupantsCount = extractTranslatorOccupantsCount(message) || inferredShortReplyContext.occupantsCountFromShortReply;
-  const ignoreMoveInDate = shouldIgnoreMoveInDate(listingQuestionType);
-  const moveInDate = ignoreMoveInDate
-    ? null
-    : extractMoveInDateValue(message) || inferredShortReplyContext.moveInDateFromShortReply;
-  const employmentStatus = extractEmploymentStatusValue(message);
-  const employer = extractEmployerValue(message);
-  const employmentDuration = extractEmploymentDurationValue(message);
-  const income = extractIncomeValue(message);
-  const credit = extractCreditValue(message);
-  const tal = extractTalValue(message);
   const fullName = extractFullNameValue(message);
   const phone = extractPhoneValue(message);
   const email = extractEmailValue(message);
-  const animalsInfo = extractAnimalsInfo(message);
   const providedFields = {};
-
-  if (moveInDate) {
-    providedFields.move_in_date = createTranslatorFieldUpdate(moveInDate, 0.88, "deterministic");
-  }
 
   if (occupantsCount) {
     providedFields.occupants_total = createTranslatorFieldUpdate(Number(occupantsCount), 0.92, "deterministic");
-  }
-
-  const resolvedHasAnimals = animalsInfo.hasAnimals !== null
-    ? Boolean(animalsInfo.hasAnimals)
-    : inferredShortReplyContext.hasAnimalsFromShortReply;
-
-  if (resolvedHasAnimals !== null && resolvedHasAnimals !== undefined) {
-    providedFields.has_animals = createTranslatorFieldUpdate(Boolean(resolvedHasAnimals), 0.9, "deterministic");
-  }
-
-  if (animalsInfo.animalType) {
-    providedFields.animal_type = createTranslatorFieldUpdate(animalsInfo.animalType, 0.88, "deterministic");
-  }
-
-  if (employmentStatus) {
-    providedFields.employment_status = createTranslatorFieldUpdate(employmentStatus, 0.82, "deterministic");
-  }
-
-  if (employer) {
-    providedFields.employer = createTranslatorFieldUpdate(employer, 0.78, "deterministic");
-  }
-
-  if (employmentDuration) {
-    providedFields.employment_duration = createTranslatorFieldUpdate(employmentDuration, 0.78, "deterministic");
-  }
-
-  if (income) {
-    providedFields.income = createTranslatorFieldUpdate(income, 0.78, "deterministic");
-  }
-
-  if (credit) {
-    providedFields.credit = createTranslatorFieldUpdate(credit, 0.72, "deterministic");
-  }
-
-  if (tal) {
-    providedFields.tal = createTranslatorFieldUpdate(tal, 0.72, "deterministic");
   }
 
   if (fullName) {
@@ -2212,7 +2209,10 @@ function mergeTranslatorExtraction(baseExtraction, aiExtraction = {}) {
     ...(baseExtraction?.provided_fields || {})
   };
 
-  if (shouldIgnoreMoveInDate(resolvedListingQuestionType) && !baseExtraction?.provided_fields?.move_in_date) {
+  if (
+    shouldIgnoreMoveInDate(resolvedListingQuestionType) &&
+    !isPreciseMoveInDateValue(mergedProvidedFields?.move_in_date?.value)
+  ) {
     delete mergedProvidedFields.move_in_date;
   }
 
@@ -2224,6 +2224,23 @@ function mergeTranslatorExtraction(baseExtraction, aiExtraction = {}) {
     answers_previous_step: Boolean(aiExtraction?.answers_previous_step) || Boolean(baseExtraction.answers_previous_step),
     confidence: Number(aiExtraction?.confidence || baseExtraction.confidence || 0.5)
   };
+}
+
+function normalizeTranslatorAiResponseFields(extractedFields = {}) {
+  if (!extractedFields || typeof extractedFields !== "object" || Array.isArray(extractedFields)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  Object.entries(extractedFields).forEach(([fieldKey, rawValue]) => {
+    if (!TRANSLATOR_STEP_ORDER.includes(fieldKey)) return;
+    if (rawValue === null || rawValue === undefined || rawValue === "") return;
+
+    normalized[fieldKey] = createTranslatorFieldUpdate(rawValue, 0.78, "ai");
+  });
+
+  return normalized;
 }
 
 function getNextTranslatorStateStep(threadState) {
@@ -2467,14 +2484,6 @@ function buildTranslatorDeterministicReply({ extraction, threadState, listing, m
     : "Comment souhaitez-vous poursuivre pour ce logement ?";
 }
 
-async function generateTranslatorAiExtraction(message, options = {}) {
-  return openaiService.generateTranslatorExtraction(message, {
-    ...options,
-    buildTranslatorListingContext,
-    renderTranslatorHistoryEntry
-  });
-}
-
 function trimCurrentTranslatorMessageFromHistory(history = [], currentMessage = "") {
   if (!Array.isArray(history) || !history.length) {
     return [];
@@ -2539,6 +2548,91 @@ async function loadRecentTranslatorHistoryByThread(threadKey, limit = 10) {
       };
     })
     .filter(Boolean);
+}
+
+function trimTranslatorConversationMessages(messages = [], maxEntries = 40) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages
+    .map((entry) => ({
+      role: String(entry?.role || "").trim().toLowerCase() === "assistant" ? "assistant" : "user",
+      content: String(entry?.content || "").trim()
+    }))
+    .filter((entry) => entry.content)
+    .slice(-maxEntries);
+}
+
+function buildNativeTranslatorAssistantPayload(entry = {}) {
+  const translationSection = Array.isArray(entry?.sections)
+    ? entry.sections.find((section) => /français international/i.test(String(section?.title || "")))
+    : null;
+  const replySection = Array.isArray(entry?.sections)
+    ? entry.sections.find((section) => /réponse suggérée/i.test(String(section?.title || "")))
+    : null;
+
+  return JSON.stringify({
+    translation: String(entry?.translation || translationSection?.text || "").trim(),
+    reply: String(entry?.suggestedReply || replySection?.text || entry?.text || "").trim(),
+    extracted_fields: {},
+    next_step: null,
+    visit_requested: false,
+    listing_question: null
+  });
+}
+
+function buildTranslatorConversationMessagesFromHistory(history = []) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return trimTranslatorConversationMessages(history.map((entry) => {
+    if (entry?.role && entry?.content) {
+      return {
+        role: String(entry.role).trim().toLowerCase() === "assistant" ? "assistant" : "user",
+        content: String(entry.content).trim()
+      };
+    }
+
+    const sender = String(entry?.sender || "").trim().toLowerCase();
+
+    if (sender === "assistant" || sender === "bot") {
+      return {
+        role: "assistant",
+        content: buildNativeTranslatorAssistantPayload(entry)
+      };
+    }
+
+    const content = String(entry?.rawText || entry?.text || "").trim();
+    return {
+      role: "user",
+      content
+    };
+  }));
+}
+
+function buildTranslatorConversationMessagesFromThreadState(threadState, fallbackHistory = []) {
+  const threadMessages = trimTranslatorConversationMessages(threadState?.conversationMessages || []);
+  if (threadMessages.length) {
+    return threadMessages;
+  }
+
+  return buildTranslatorConversationMessagesFromHistory(fallbackHistory);
+}
+
+function buildTranslatorAssistantConversationEntry(payload = {}) {
+  return {
+    role: "assistant",
+    content: JSON.stringify({
+      translation: String(payload.translation || "").trim(),
+      reply: String(payload.reply || "").trim(),
+      extracted_fields: payload.extracted_fields || {},
+      next_step: payload.next_step || null,
+      visit_requested: Boolean(payload.visit_requested),
+      listing_question: payload.listing_question || null
+    })
+  };
 }
 
 function buildTranslatorListingContext(listing) {
@@ -3392,36 +3486,39 @@ async function handleClientRoute(req, res, handler) {
 }
 
 async function generateTranslatorPayload(message, options = {}) {
-  const persistedThreadHistory = options?.translatorThreadKey
-    ? trimCurrentTranslatorMessageFromHistory(
-        await loadRecentTranslatorHistoryByThread(options?.translatorThreadKey, 12),
-        message
-      )
-    : [];
-  const requestConversationHistory = options?.translatorThreadKey
-    ? []
-    : trimCurrentTranslatorMessageFromHistory(
-        extractTranslatorHistoryEntries(options?.conversationHistory),
-        message
-      );
   const listing = options?.listing || null;
-  const combinedHistory = persistedThreadHistory.length
-    ? persistedThreadHistory
-    : requestConversationHistory;
   const threadState = options?.translatorThreadKey
     ? await getTranslatorThreadState(options.translatorThreadKey, {
         employeeUserId: options?.userId,
         listingRef: listing?.ref || ""
       })
     : createDefaultTranslatorThreadState("", options?.userId, listing?.ref || "");
-  const deterministicExtraction = buildDeterministicTranslatorExtraction(message, combinedHistory, threadState);
-  const aiExtraction = await generateTranslatorAiExtraction(message, {
-    listing,
-    conversationEntries: combinedHistory,
+  const requestConversationHistory = trimTranslatorConversationMessages(options?.conversationHistory || []);
+  const nativeConversationHistory = buildTranslatorConversationMessagesFromThreadState(
     threadState,
-    deterministicExtraction
+    requestConversationHistory
+  );
+  const deterministicExtraction = buildDeterministicTranslatorExtraction(message, requestConversationHistory, threadState);
+  const aiResponse = await openaiService.generateTranslatorResponse({
+    message,
+    conversationHistory: nativeConversationHistory,
+    threadState,
+    listing
   });
-  const extraction = mergeTranslatorExtraction(deterministicExtraction, aiExtraction || {});
+  const extraction = mergeTranslatorExtraction(deterministicExtraction, {
+    translation: aiResponse?.translation,
+    message_type: null,
+    listing_question_type: aiResponse?.listing_question || deterministicExtraction.listing_question_type,
+    provided_fields: normalizeTranslatorAiResponseFields(aiResponse?.extracted_fields),
+    answers_previous_step: Boolean(
+      threadState?.last_asked_step &&
+      aiResponse?.extracted_fields &&
+      aiResponse.extracted_fields[threadState.last_asked_step] !== null &&
+      aiResponse.extracted_fields[threadState.last_asked_step] !== undefined &&
+      aiResponse.extracted_fields[threadState.last_asked_step] !== ""
+    ),
+    confidence: 0.8
+  });
   const updatedThreadState = updateTranslatorThreadState(threadState, extraction, {
     employeeUserId: options?.userId,
     listingRef: listing?.ref || ""
@@ -3433,18 +3530,15 @@ async function generateTranslatorPayload(message, options = {}) {
     listing,
     message
   });
-  const answerLine = resolveTranslatorListingAnswer(
-    extraction?.listing_question_type || "none",
-    listing,
-    message
-  );
-  const nextQuestion = resolveTranslatorDisplayedNextQuestion(updatedThreadState, extraction, listing);
-
   updatedThreadState.current_step = nextStep;
   updatedThreadState.last_asked_step = nextStep;
+  updatedThreadState.conversationMessages = trimTranslatorConversationMessages([
+    ...nativeConversationHistory,
+    { role: "user", content: String(message || "").trim() }
+  ]);
 
   if (options?.translatorThreadKey) {
-    await saveTranslatorThreadState(updatedThreadState);
+    // saved after assistant message is appended below
   }
 
   const context = extraction.listing_question_type === "none"
@@ -3454,33 +3548,76 @@ async function generateTranslatorPayload(message, options = {}) {
           : detectTranslatorContext(message)
       )
     : detectTranslatorContext(message);
+  const translation = String(aiResponse?.translation || "").trim() || buildTranslatorFallbackTranslation(message, requestConversationHistory, threadState);
+  const reply = String(aiResponse?.reply || "").trim() || deterministicReply;
+  const visitRequested = Boolean(aiResponse?.visit_requested) || extraction.listing_question_type === "visit";
+  const listingQuestion = String(aiResponse?.listing_question || extraction.listing_question_type || "none").trim() || null;
 
-  let reply = deterministicReply;
+  updatedThreadState.conversationMessages = trimTranslatorConversationMessages([
+    ...updatedThreadState.conversationMessages,
+    buildTranslatorAssistantConversationEntry({
+      translation,
+      reply,
+      extracted_fields: Object.fromEntries(
+        Object.entries(extraction.provided_fields || {}).map(([fieldKey, value]) => [fieldKey, value?.value ?? null])
+      ),
+      next_step: nextStep,
+      visit_requested: visitRequested,
+      listing_question: listingQuestion
+    })
+  ]);
 
-  try {
-    const aiReply = await openaiService.generateTranslatorReply({
-      answerLine,
-      nextQuestion,
-      extraction,
-      threadState: updatedThreadState,
-      listing,
-      conversationEntries: combinedHistory
-    });
-
-    if (aiReply) {
-      reply = aiReply;
-    }
-  } catch {}
+  if (options?.translatorThreadKey) {
+    await saveTranslatorThreadState(updatedThreadState);
+  }
 
   return {
-    translation: String(extraction.translation || "").trim() || buildTranslatorFallbackTranslation(message, combinedHistory),
+    translation,
     reply,
-    context
+    context,
+    extracted_fields: Object.fromEntries(
+      Object.entries(extraction.provided_fields || {}).map(([fieldKey, value]) => [fieldKey, value?.value ?? null])
+    ),
+    next_step: nextStep,
+    visit_requested: visitRequested,
+    listing_question: listingQuestion,
+    thread_state: updatedThreadState
   };
 }
 
 async function generateListingReply(message, listing) {
   return openaiService.streamListingReply(message, listing);
+}
+
+async function buildTranslatorEvaluationPayload(threadKey, listingRef = "") {
+  const normalizedListingRef = normalizeRef(listingRef || "");
+  const listings = await loadListingsMap();
+  const listing = normalizedListingRef ? listings[normalizedListingRef] || null : null;
+  const threadState = threadKey
+    ? await getTranslatorThreadState(threadKey, { listingRef: normalizedListingRef })
+    : createDefaultTranslatorThreadState("", "", normalizedListingRef);
+
+  if (threadKey) {
+    await saveTranslatorThreadState(threadState);
+  }
+
+  const evaluation = await qualificationService.evaluateTenantEligibility(threadState, listing);
+  const matches = evaluation.status === "refused"
+    ? await qualificationService.findMatchingListings(threadState, {
+        excludeRef: normalizedListingRef,
+        limit: 3
+      })
+    : [];
+  const visit = qualificationService.getVisitRequirements(threadState, evaluation);
+  visit.requested = String(threadState?.last_detected_listing_question || "").trim() === "visit";
+
+  return {
+    listing_ref: normalizedListingRef ? `L-${normalizedListingRef}` : "",
+    thread_state: threadState,
+    evaluation,
+    matches,
+    visit
+  };
 }
 
 app.get("/api/health", (_req, res) => {
@@ -3502,6 +3639,46 @@ app.use("/api/chat", createChatRouter({
   appendChatMessage,
   createId,
   generateTranslatorPayload
+}));
+
+app.post("/api/translator/evaluate", async (req, res) => handleEmployeeRoute(req, res, async () => {
+  const threadKey = String(req.body?.threadKey || req.body?.thread_key || "").trim();
+  const listingRef = String(req.body?.listingRef || req.body?.listing_ref || "").trim();
+  const payload = await buildTranslatorEvaluationPayload(threadKey, listingRef);
+
+  return res.json({
+    ok: true,
+    eligible: payload.evaluation.eligible,
+    status: payload.evaluation.status,
+    confidence: payload.evaluation.confidence,
+    missing_fields: payload.evaluation.missing_fields,
+    blocking_reasons: payload.evaluation.blocking_reasons,
+    matches: payload.matches,
+    visit: payload.visit,
+    listing_ref: payload.listing_ref
+  });
+}));
+
+app.post("/api/translator/schedule-visit", async (req, res) => handleEmployeeRoute(req, res, async () => {
+  const threadKey = String(req.body?.threadKey || req.body?.thread_key || "").trim();
+  const listingRef = String(req.body?.listingRef || req.body?.listing_ref || "").trim();
+  const proposedDate = String(req.body?.proposedDate || req.body?.proposed_date || "").trim();
+
+  if (!proposedDate) {
+    throw createHttpError(400, "proposedDate est obligatoire.");
+  }
+
+  const payload = await buildTranslatorEvaluationPayload(threadKey, listingRef);
+
+  if (!payload.evaluation.eligible || !payload.visit.ready) {
+    throw createHttpError(400, "Le dossier n'est pas prêt pour planifier une visite.");
+  }
+
+  return res.json({
+    ok: true,
+    success: true,
+    confirmationMessage: `Visite à planifier pour ${payload.listing_ref || "ce logement"} le ${proposedDate}. Un suivi peut maintenant être envoyé au locataire.`
+  });
 }));
 
 app.post("/api/match", async (req, res) => {

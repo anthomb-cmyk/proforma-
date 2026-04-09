@@ -33,6 +33,7 @@ const chatState = {
   currentSession: null,
   activeTranslatorThreadKey: "",
   selectedListingRef: "",
+  translatorQualification: null,
   workspaceMessages: [],
   workspaceTasks: [],
   notifications: [],
@@ -73,6 +74,7 @@ const translatorContextBar = document.getElementById("translatorContextBar");
 const translatorContextValue = document.getElementById("translatorContextValue");
 const translatorListingValue = document.getElementById("translatorListingValue");
 const newTranslatorConversationBtn = document.getElementById("newTranslatorConversationBtn");
+const translatorQualificationPanel = document.getElementById("translatorQualificationPanel");
 
 const candidateForm = document.getElementById("candidateForm");
 const candidateStatus = document.getElementById("candidateStatus");
@@ -137,6 +139,10 @@ function getSerializableHistory(history = []) {
       reportable: Boolean(message.reportable),
       translation: message.translation || "",
       suggestedReply: message.suggestedReply || "",
+      extractedFields: message.extractedFields || {},
+      nextStep: message.nextStep || null,
+      visitRequested: Boolean(message.visitRequested),
+      listingQuestion: message.listingQuestion || null,
       assistantMessageId: message.assistantMessageId || "",
       reported: Boolean(message.reported),
       reportReason: message.reportReason || ""
@@ -304,16 +310,27 @@ function buildTranslatorConversationHistory() {
   return chatState.translatorHistory
     .filter((message) => message && message.variant !== "loading")
     .map((message) => ({
-      sender: message.sender || "",
-      label: message.label || "",
-      text: message.text || "",
-      sections: Array.isArray(message.sections)
-        ? message.sections.map((section) => ({
-            title: section?.title || "",
-            text: section?.text || ""
-          }))
-        : []
-    }));
+      sourceMessage: message,
+      role: message.sender === "user" ? "user" : "assistant",
+      content: message.sender === "user"
+        ? String(message.rawText || message.text || "").trim()
+        : JSON.stringify({
+            translation: String(message.translation || "").trim(),
+            reply: String(message.suggestedReply || "").trim(),
+            extracted_fields: message.extractedFields || {},
+            next_step: message.nextStep || null,
+            visit_requested: Boolean(message.visitRequested),
+            listing_question: message.listingQuestion || null
+          })
+    }))
+    .filter((entry) => {
+      if (!entry.content) return false;
+      if (entry.role === "assistant" && !entry.sourceMessage?.translation && !entry.sourceMessage?.suggestedReply) {
+        return false;
+      }
+      return true;
+    })
+    .map(({ sourceMessage, ...entry }) => entry);
 }
 
 function generateTranslatorThreadKey() {
@@ -368,14 +385,16 @@ function renderTranslatorContext() {
 
 function createNewTranslatorConversation() {
   chatState.activeTranslatorThreadKey = generateTranslatorThreadKey();
+  chatState.translatorQualification = null;
   chatState.translatorHistory = [
     {
       sender: "bot",
       label: "Traducteur",
-      text: "Collez un message et je vais proposer une reformulation en français international ainsi qu’une réponse suggérée en français canadien."
+      text: "Nouvelle conversation démarrée. Collez le premier message du locataire."
     }
   ];
   renderTranslatorContext();
+  renderTranslatorQualificationPanel();
 
   if (chatState.currentMode === "translator") {
     renderMessages();
@@ -385,6 +404,159 @@ function createNewTranslatorConversation() {
   }
 
   persistChatState();
+}
+
+function renderTranslatorQualificationPanel() {
+  if (!translatorQualificationPanel) return;
+
+  if (chatState.currentMode !== "translator" || !chatState.translatorQualification) {
+    translatorQualificationPanel.innerHTML = "";
+    translatorQualificationPanel.className = "translator-qualification-panel hidden";
+    return;
+  }
+
+  const payload = chatState.translatorQualification;
+  const status = String(payload.status || "incomplete").trim();
+  const statusConfig = {
+    eligible: {
+      icon: "🟢",
+      title: "Locataire éligible",
+      copy: "Tous les critères principaux sont remplis."
+    },
+    refused: {
+      icon: "🔴",
+      title: "Profil non conforme",
+      copy: "Ce logement ne correspond pas au profil actuel."
+    },
+    incomplete: {
+      icon: "🟡",
+      title: "Informations manquantes",
+      copy: "Il manque encore des éléments avant une décision ferme."
+    }
+  }[status] || {
+    icon: "🟡",
+    title: "Qualification en cours",
+    copy: "Le dossier continue d’évoluer."
+  };
+
+  translatorQualificationPanel.className = `translator-qualification-panel status-${status}`;
+  translatorQualificationPanel.innerHTML = `
+    <div class="translator-qualification-head">
+      <div>
+        <div class="translator-qualification-title">${statusConfig.icon} ${statusConfig.title}</div>
+        <div class="translator-qualification-copy">${statusConfig.copy}</div>
+      </div>
+      <div class="translator-qualification-chip">Confiance ${payload.confidence || "low"}</div>
+    </div>
+    <div class="translator-qualification-meta">
+      ${Array.isArray(payload.missing_fields) && payload.missing_fields.length
+        ? `<div class="translator-qualification-chip">Manquants: ${payload.missing_fields.join(", ")}</div>`
+        : `<div class="translator-qualification-chip">Aucun champ critique manquant</div>`}
+      ${payload.listing_ref ? `<div class="translator-qualification-chip">${payload.listing_ref}</div>` : ""}
+    </div>
+    ${
+      Array.isArray(payload.blocking_reasons) && payload.blocking_reasons.length
+        ? `<div class="translator-qualification-blockers">Raisons bloquantes: ${payload.blocking_reasons.join(" · ")}</div>`
+        : ""
+    }
+    ${
+      Array.isArray(payload.matches) && payload.matches.length
+        ? `<div class="translator-qualification-matches">
+            ${payload.matches.map((match) => `
+              <button type="button" class="secondary-btn translator-alt-listing-btn" data-ref="${match.ref}">
+                Changer vers ${match.ref}
+              </button>
+            `).join("")}
+          </div>`
+        : ""
+    }
+    <div class="translator-qualification-actions">
+      ${
+        payload.visit?.requested && payload.visit?.ready
+          ? `<button type="button" class="primary-btn translator-schedule-visit-btn">Planifier une visite</button>`
+          : ""
+      }
+    </div>
+  `;
+
+  translatorQualificationPanel.classList.remove("hidden");
+
+  translatorQualificationPanel.querySelectorAll(".translator-alt-listing-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (listingSelect) {
+        listingSelect.value = normalizeRefKey(button.dataset.ref || "");
+      }
+      await handleTranslatorListingChange(normalizeRefKey(button.dataset.ref || ""));
+    });
+  });
+
+  const scheduleBtn = translatorQualificationPanel.querySelector(".translator-schedule-visit-btn");
+  if (scheduleBtn) {
+    scheduleBtn.addEventListener("click", async () => {
+      const proposedDate = window.prompt("Proposez une date et heure de visite");
+      if (!proposedDate) return;
+
+      const result = await fetchEmployeeJSON("/api/translator/schedule-visit", {
+        method: "POST",
+        body: JSON.stringify({
+          threadKey: chatState.activeTranslatorThreadKey || "",
+          listingRef: getSelectedListingRef() || "",
+          proposedDate
+        })
+      });
+
+      pushMessage("bot", "Traducteur", result.confirmationMessage || "Visite à planifier.", "success");
+      if (chatInput) chatInput.focus();
+    });
+  }
+}
+
+async function refreshTranslatorQualificationPanel(options = {}) {
+  if (chatState.currentMode !== "translator" || !chatState.activeTranslatorThreadKey) {
+    chatState.translatorQualification = null;
+    renderTranslatorQualificationPanel();
+    return;
+  }
+
+  try {
+    const payload = await fetchEmployeeJSON("/api/translator/evaluate", {
+      method: "POST",
+      body: JSON.stringify({
+        threadKey: chatState.activeTranslatorThreadKey,
+        listingRef: options.listingRef || getSelectedListingRef() || ""
+      })
+    });
+
+    chatState.translatorQualification = payload;
+  } catch (error) {
+    console.error("Translator qualification error:", error);
+  }
+
+  renderTranslatorQualificationPanel();
+}
+
+async function handleTranslatorListingChange(nextListingRef) {
+  const normalizedNextRef = normalizeRefKey(nextListingRef);
+  const previousRef = normalizeRefKey(chatState.selectedListingRef);
+
+  chatState.selectedListingRef = normalizedNextRef;
+  renderTranslatorContext();
+  persistChatState();
+
+  if (chatState.currentMode === "translator" && normalizedNextRef && normalizedNextRef !== previousRef) {
+    pushMessage(
+      "bot",
+      "Traducteur",
+      `Appartement changé : ${formatDisplayRef(normalizedNextRef)}. Les informations du logement ont été mises à jour. Les infos du locataire sont conservées.`,
+      "success"
+    );
+  }
+
+  await refreshTranslatorQualificationPanel({ listingRef: normalizedNextRef });
+
+  if (chatInput) {
+    chatInput.focus();
+  }
 }
 
 function normalizeLocationText(value) {
@@ -642,6 +814,19 @@ function addMessageToDOM(message) {
       titleEl.className = "message-section-title";
       titleEl.textContent = section.title;
 
+      if (/réponse suggérée/i.test(String(section.title || ""))) {
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.className = "translator-inline-copy";
+        copyBtn.textContent = "Copier";
+        copyBtn.addEventListener("click", async () => {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(String(section.text || ""));
+          }
+        });
+        titleEl.appendChild(copyBtn);
+      }
+
       const bodyEl = document.createElement("div");
       bodyEl.className = "message-section-body";
       bodyEl.textContent = section.text;
@@ -765,6 +950,8 @@ function updateLastLoadingMessage(text, label = "Assistant") {
 function switchMode(mode) {
   chatState.currentMode = mode;
   setChatError("");
+  const listingSelectorTitle = listingSelectorCard?.querySelector(".listing-selector-title") || null;
+  const listingSelectorSubtitle = listingSelectorCard?.querySelector(".listing-selector-subtitle") || null;
 
   if (listingModeBtn) {
     listingModeBtn.classList.toggle("active", mode === "listing");
@@ -791,6 +978,12 @@ function switchMode(mode) {
     if (listingSelectorCard) {
       listingSelectorCard.style.display = "block";
     }
+    if (listingSelectorTitle) {
+      listingSelectorTitle.textContent = "Sélectionnez votre appartement";
+    }
+    if (listingSelectorSubtitle) {
+      listingSelectorSubtitle.textContent = "Choisissez d’abord un logement avant d’écrire votre question.";
+    }
   } else {
     if (!chatState.activeTranslatorThreadKey) {
       createNewTranslatorConversation();
@@ -810,13 +1003,26 @@ function switchMode(mode) {
     }
 
     if (listingSelectorCard) {
-      listingSelectorCard.style.display = "none";
+      listingSelectorCard.style.display = "block";
+    }
+    if (listingSelectorTitle) {
+      listingSelectorTitle.textContent = "Appartement du traducteur";
+    }
+    if (listingSelectorSubtitle) {
+      listingSelectorSubtitle.textContent = "Vous pouvez changer de logement sans quitter la conversation. Les infos du locataire sont conservées.";
     }
   }
 
   renderTranslatorContext();
+  renderTranslatorQualificationPanel();
   renderMessages();
   persistChatState();
+
+  if (mode === "translator" && chatState.activeTranslatorThreadKey && chatState.currentSession?.access_token) {
+    window.setTimeout(() => {
+      refreshTranslatorQualificationPanel({ listingRef: getSelectedListingRef() || "" }).catch(() => {});
+    }, 0);
+  }
 }
 
 function prevalidateListing() {
@@ -1505,6 +1711,10 @@ if (chatForm) {
       selectedRef = validation.ref;
     }
 
+    if (chatState.currentMode === "translator" && !chatState.activeTranslatorThreadKey) {
+      createNewTranslatorConversation();
+    }
+
     const userText =
       chatState.currentMode === "listing" && selectedRef
         ? `${formatDisplayRef(selectedRef)} - ${input}`
@@ -1537,6 +1747,17 @@ if (chatForm) {
       }
       }
 
+      if (chatState.currentMode === "translator") {
+        chatState.activeTranslatorThreadKey = result.translator_thread_key || chatState.activeTranslatorThreadKey || generateTranslatorThreadKey();
+        if (result.listing_ref) {
+          chatState.selectedListingRef = normalizeRefKey(result.listing_ref);
+          if (listingSelect) {
+            listingSelect.value = normalizeRefKey(result.listing_ref);
+          }
+        }
+        renderTranslatorContext();
+      }
+
       replaceLastLoading(
         chatState.currentMode === "translator" && result.translation && result.reply
           ? ""
@@ -1566,6 +1787,10 @@ if (chatForm) {
               assistantMessageId: result.assistant_message_id || "",
               translatorThreadKey: result.translator_thread_key || chatState.activeTranslatorThreadKey || "",
               listingRef: result.listing_ref || selectedRef || getSelectedListingRef() || "",
+              extractedFields: result.extracted_fields || {},
+              nextStep: result.next_step || null,
+              visitRequested: Boolean(result.visit_requested),
+              listingQuestion: result.listing_question || null,
               reportMenuOpen: false,
               reported: false
             }
@@ -1574,6 +1799,9 @@ if (chatForm) {
 
       if (chatState.currentMode === "translator" && userMessage) {
         userMessage.messageId = result.user_message_id || userMessage.messageId || "";
+        await refreshTranslatorQualificationPanel({
+          listingRef: result.listing_ref || getSelectedListingRef() || ""
+        });
       }
     } catch (error) {
       console.error("Chat error:", error);
@@ -1592,6 +1820,9 @@ if (chatForm) {
     } finally {
       chatState.abortController = null;
       setPending(false);
+      if (chatInput) {
+        chatInput.focus();
+      }
     }
   });
 }
@@ -1648,7 +1879,12 @@ if (listingSelect) {
     }
   });
 
-  listingSelect.addEventListener("change", () => {
+  listingSelect.addEventListener("change", async () => {
+    if (chatState.currentMode === "translator") {
+      await handleTranslatorListingChange(listingSelect.value);
+      return;
+    }
+
     chatState.selectedListingRef = normalizeRefKey(listingSelect.value);
     persistChatState();
     renderTranslatorContext();
@@ -1765,5 +2001,9 @@ supabaseClient.auth.onAuthStateChange((event) => {
     renderEmployeeConversationList();
     renderEmployeeMessageThread();
     renderEmployeeListingTasks();
+  }
+
+  if (chatState.currentMode === "translator" && chatState.activeTranslatorThreadKey) {
+    await refreshTranslatorQualificationPanel({ listingRef: getSelectedListingRef() || "" });
   }
 })();
