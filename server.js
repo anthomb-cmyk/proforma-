@@ -154,6 +154,11 @@ app.get("/employee-style.css", (req, res) => {
   return res.sendFile(path.join(__dirname, "style.css"));
 });
 
+app.get("/style.css", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  return res.sendFile(path.join(__dirname, "style.css"));
+});
+
 app.get("/employee.js", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   return res.sendFile(path.join(__dirname, "script.js"));
