@@ -1634,6 +1634,19 @@ function getTranslatorMessageSignals(message) {
   };
 }
 
+function hasTranslatorPetsContext(message, listingQuestionType = "none") {
+  if (listingQuestionType === "pets") {
+    return true;
+  }
+
+  const normalized = normalizeTranslatorText(message);
+
+  return (
+    /\b(?:chat|chats|chien|chiens|animal|animaux)\b/.test(normalized) ||
+    /\b(?:amener mon|amener ma|amener mes|apporter mon|apporter ma|apporter mes)\b/.test(normalized)
+  );
+}
+
 function detectTranslatorListingQuestionType(message) {
   const signals = getTranslatorMessageSignals(message);
   const normalized = signals.normalized;
@@ -1690,7 +1703,9 @@ function buildTranslatorFallbackTranslation(message, conversationEntries = []) {
   const occupantsCount = extractTranslatorOccupantsCount(message);
   const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
   const resolvedOccupantsCount = occupantsCount || inferredShortReplyContext.occupantsCountFromShortReply;
-  const moveInDate = extractMoveInDateValue(message);
+  const moveInDate = hasTranslatorPetsContext(message, detectTranslatorListingQuestionType(message))
+    ? null
+    : extractMoveInDateValue(message);
 
   if (!text) {
     return "Le locataire souhaite obtenir des informations sur le logement.";
@@ -2034,7 +2049,8 @@ function buildDeterministicTranslatorExtraction(message, conversationEntries = [
   const translation = buildTranslatorFallbackTranslation(message, conversationEntries);
   const inferredShortReplyContext = inferShortReplyContext(message, conversationEntries);
   const occupantsCount = extractTranslatorOccupantsCount(message) || inferredShortReplyContext.occupantsCountFromShortReply;
-  const moveInDate = extractMoveInDateValue(message);
+  const shouldIgnoreMoveInDate = hasTranslatorPetsContext(message, listingQuestionType);
+  const moveInDate = shouldIgnoreMoveInDate ? null : extractMoveInDateValue(message);
   const employmentStatus = extractEmploymentStatusValue(message);
   const employer = extractEmployerValue(message);
   const employmentDuration = extractEmploymentDurationValue(message);
@@ -2120,6 +2136,37 @@ function buildDeterministicTranslatorExtraction(message, conversationEntries = [
     answers_previous_step: answersPreviousStep,
     confidence: hasProvidedFields || hasListingQuestion ? 0.82 : 0.55
   };
+}
+
+function shouldDeferTranslatorPendingQuestion(threadState, extraction) {
+  const pendingStep = String(threadState?.last_asked_step || "").trim();
+
+  if (!pendingStep) {
+    return false;
+  }
+
+  if (Boolean(extraction?.answers_previous_step)) {
+    return false;
+  }
+
+  const hasListingQuestion = String(extraction?.listing_question_type || "none").trim() !== "none";
+  const answeredDifferentField = Object.keys(extraction?.provided_fields || {}).some((fieldKey) => fieldKey !== pendingStep);
+
+  return hasListingQuestion || answeredDifferentField;
+}
+
+function resolveTranslatorDisplayedNextQuestion(threadState, extraction, listing = null) {
+  const nextStep = getTranslatorNextStepForState(threadState, extraction, listing);
+
+  if (!nextStep) {
+    return "";
+  }
+
+  if (shouldDeferTranslatorPendingQuestion(threadState, extraction) && nextStep === threadState?.last_asked_step) {
+    return "";
+  }
+
+  return buildTranslatorStepQuestion(nextStep, listing);
 }
 
 function mergeTranslatorExtraction(baseExtraction, aiExtraction = {}) {
@@ -2361,8 +2408,7 @@ function buildTranslatorDeterministicReply({ extraction, threadState, listing, m
     listing,
     message
   );
-  const nextStep = getTranslatorNextStepForState(threadState, extraction, listing);
-  const nextQuestion = nextStep ? buildTranslatorStepQuestion(nextStep, listing) : "";
+  const nextQuestion = resolveTranslatorDisplayedNextQuestion(threadState, extraction, listing);
   const hasProvidedFields = Object.keys(extraction?.provided_fields || {}).length > 0;
 
   if (answerLine) {
@@ -3353,7 +3399,7 @@ async function generateTranslatorPayload(message, options = {}) {
     listing,
     message
   );
-  const nextQuestion = nextStep ? buildTranslatorStepQuestion(nextStep, listing) : "";
+  const nextQuestion = resolveTranslatorDisplayedNextQuestion(updatedThreadState, extraction, listing);
 
   updatedThreadState.current_step = nextStep;
   updatedThreadState.last_asked_step = nextStep;

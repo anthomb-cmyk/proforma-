@@ -1598,7 +1598,7 @@ if (chatForm) {
 
 if (chatInput) {
   chatInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       if (chatForm) chatForm.requestSubmit();
     }
