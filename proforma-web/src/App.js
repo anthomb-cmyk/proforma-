@@ -27,8 +27,8 @@ body,#root{font-family:var(--fb);background:var(--bg);color:var(--text);font-siz
 .snb.active{background:var(--acc)18;color:var(--acc);border:1px solid var(--acc)30}
 .snb:hover:not(.active){background:var(--bg3);color:var(--text)}
 .sb-sec{font-size:9px;color:var(--t3);letter-spacing:1.2px;text-transform:uppercase;padding:12px 16px 5px}
-.sdl{padding:8px 10px;margin:0 6px;border-radius:var(--r);cursor:pointer;border:1px solid transparent;transition:all .12s}
-.sdl:hover{background:var(--bg3)}
+.sdl{padding:8px 10px;margin:0 6px;border-radius:var(--r);cursor:pointer;border:1px solid transparent;transition:transform .2s ease,background .2s ease,border-color .2s ease}
+.sdl:hover{background:var(--bg3);transform:translateX(4px)}
 .sdl.active{background:var(--bg3);border-color:var(--br2)}
 .sdl-title{font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sdl-meta{display:flex;align-items:center;gap:5px;margin-top:3px}
@@ -58,8 +58,22 @@ body,#root{font-family:var(--fb);background:var(--bg);color:var(--text);font-siz
 .pill{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:.3px}
 .dash{padding:20px 22px;display:flex;flex-direction:column;gap:18px}
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.kpi{background:var(--bg2);border:1px solid var(--br);border-radius:var(--rlg);padding:16px 18px;position:relative;overflow:hidden}
+.kpi{background:var(--bg2);border:1px solid var(--br);border-radius:var(--rlg);padding:16px 18px;position:relative;overflow:hidden;isolation:isolate}
 .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.kpi::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  padding:1px;
+  border-radius:inherit;
+  background:linear-gradient(120deg,transparent 0%,#e8c46888 45%,#f5d87a99 55%,transparent 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;
+  mask-composite:exclude;
+  opacity:.26;
+  pointer-events:none;
+  animation:kpiPulse 3.6s ease-in-out infinite;
+}
 .kpi.gold::before{background:var(--acc)}
 .kpi.green::before{background:var(--green)}
 .kpi.red::before{background:var(--red)}
@@ -82,12 +96,12 @@ body,#root{font-family:var(--fb);background:var(--bg);color:var(--text);font-siz
 .fu-date{font-family:var(--fm);font-size:11px}
 .pipe-wrap{padding:18px 22px;overflow-x:auto;height:100%}
 .pipe-cols{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
-.pipe-col{background:var(--bg2);border:1px solid var(--br);border-radius:var(--rlg);padding:12px;width:190px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 130px);overflow-y:auto}
+.pipe-col{background:var(--bg2);border:1px solid var(--br);border-radius:var(--rlg);padding:12px;width:210px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 130px);overflow-y:auto}
 .pipe-col-hd{display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .pc-label{font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px}
 .pc-count{font-size:10px;color:var(--t3);background:var(--bg3);padding:2px 7px;border-radius:10px}
-.pc-card{background:var(--bg3);border:1px solid var(--br);border-radius:var(--r);padding:11px;cursor:pointer;transition:all .13s}
-.pc-card:hover{border-color:var(--br2);transform:translateY(-1px)}
+.pc-card{background:var(--bg3);border:1px solid var(--br);border-radius:var(--r);padding:11px;cursor:pointer;transition:all .16s}
+.pc-card:hover{border-color:var(--br2);transform:translateY(-2px);box-shadow:0 12px 24px #00000055}
 .pc-title{font-size:12px;font-weight:600;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pc-row{display:flex;justify-content:space-between;margin-top:3px}
 .pc-mkey{font-size:10px;color:var(--t3)}
@@ -170,10 +184,14 @@ textarea:focus{border-color:var(--acc)80}
 .mo-box{background:var(--bg2);border:1px solid var(--br2);border-radius:var(--rlg);padding:26px;width:440px;max-width:92vw;box-shadow:0 20px 60px #00000080}
 .mo-title{font-family:var(--fh);font-size:22px;letter-spacing:1px;margin-bottom:18px}
 .mo-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
-.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px;padding:40px}
-.empty-ico{font-size:44px;opacity:.3}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px;padding:40px;text-align:center}
+.empty-ico{font-size:48px;opacity:.55;filter:drop-shadow(0 0 14px #e8c46844);animation:emptyFloat 2.5s ease-in-out infinite}
 .empty-title{font-family:var(--fh);font-size:20px;letter-spacing:1px;color:var(--t2)}
 .empty-sub{font-size:12px;color:var(--t3);text-align:center;line-height:1.7;max-width:280px}
+.dash-enter{opacity:0;transform:translateY(10px);animation:dashIn .5s ease forwards}
+@keyframes dashIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes kpiPulse{0%,100%{opacity:.22}50%{opacity:.52}}
+@keyframes emptyFloat{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-5px) scale(1.04)}}
 .code-block{background:var(--bg3);border:1px solid var(--br2);border-radius:var(--r);padding:12px 16px;font-family:var(--fm);font-size:11px;color:var(--t2);white-space:pre;overflow-x:auto;line-height:1.8;margin:10px 0}
 `;
 
@@ -258,6 +276,9 @@ export default function AcquisitionCRM() {
   const [deals, setDeals]         = useState(stored?.deals || []);
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
   const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
+  const [gcalEvents, setGcalEvents] = useState([]);
+  const [gcalLoading, setGcalLoading] = useState(false);
+  const [gcalError, setGcalError] = useState("");
   const [view, setView]           = useState("dashboard");
   const [tab,  setTab]            = useState("crm");
   const [modal, setModal]         = useState(null);
@@ -371,8 +392,76 @@ export default function AcquisitionCRM() {
       if (d.followUpDate) evs.push({ id:`fu_${d.id}`, date:d.followUpDate, title:`🔔 ${d.title}`, type:"followup", dealId:d.id });
       (d.events||[]).forEach(e => evs.push({ ...e, dealId:d.id }));
     });
+    (gcalEvents || []).forEach(e => evs.push(e));
     return evs;
-  }, [deals]);
+  }, [deals, gcalEvents]);
+
+  const connectGoogleCalendar = useCallback(() => {
+    const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
+    if (!clientId) {
+      setGcalError("REACT_APP_GCAL_CLIENT_ID manquant.");
+      return;
+    }
+    if (!window.google?.accounts?.oauth2) {
+      setGcalError("Google OAuth non chargé. Rafraîchissez la page.");
+      return;
+    }
+    setGcalLoading(true);
+    setGcalError("");
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: "https://www.googleapis.com/auth/calendar.readonly",
+      callback: async (tokenResponse) => {
+        if (tokenResponse?.error || !tokenResponse?.access_token) {
+          setGcalOk(false);
+          setGcalLoading(false);
+          setGcalError("Authentification Google refusée ou invalide.");
+          return;
+        }
+        try {
+          const timeMin = new Date().toISOString();
+          const query = new URLSearchParams({
+            maxResults: "20",
+            orderBy: "startTime",
+            singleEvents: "true",
+            timeMin,
+          });
+          const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${query.toString()}`, {
+            headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+          });
+          if (!res.ok) throw new Error(`Google API ${res.status}`);
+          const data = await res.json();
+          const mapped = (data.items || [])
+            .map((ev) => {
+              const rawStart = ev.start?.dateTime || ev.start?.date;
+              if (!rawStart) return null;
+              const date = ev.start?.date || rawStart.split("T")[0];
+              const time = ev.start?.dateTime
+                ? new Date(rawStart).toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit", hour12: false })
+                : "";
+              return {
+                id: `google_${ev.id}`,
+                title: ev.summary || "Événement Google",
+                date,
+                time,
+                type: "google",
+                dealId: null,
+              };
+            })
+            .filter(Boolean);
+          setGcalEvents(mapped);
+          setGcalOk(true);
+        } catch {
+          setGcalOk(false);
+          setGcalEvents([]);
+          setGcalError("Impossible de charger les événements Google Calendar.");
+        } finally {
+          setGcalLoading(false);
+        }
+      },
+    });
+    tokenClient.requestAccessToken({ prompt: gcalOk ? "" : "consent" });
+  }, [gcalOk]);
 
   const addEvent = () => {
     if (!newEv.title.trim() || !newEv.date) return;
@@ -478,18 +567,18 @@ export default function AcquisitionCRM() {
             </div>
             <div className="scr"><div className="dash">
               <div className="kpi-row">
-                <div className="kpi gold"><div className="kpi-lbl">Deals total</div><div className="kpi-val">{stats.total}</div><div className="kpi-sub">{stats.active} actifs</div></div>
-                <div className="kpi blue"><div className="kpi-lbl">En closing</div><div className="kpi-val">{stats.closing}</div><div className="kpi-sub">{pipeline.financement?.length||0} en financement</div></div>
-                <div className="kpi red"><div className="kpi-lbl">Follow-ups retard</div><div className="kpi-val" style={{color:stats.overdue>0?"var(--red)":"var(--green)"}}>{stats.overdue}</div><div className="kpi-sub">{stats.overdue===0?"Tout à jour ✓":"Action requise!"}</div></div>
-                <div className="kpi green"><div className="kpi-lbl">Prospection</div><div className="kpi-val">{pipeline.prospection?.length||0}</div><div className="kpi-sub">{pipeline.analyse?.length||0} en analyse</div></div>
+                <div className="kpi gold dash-enter" style={{animationDelay:"0ms"}}><div className="kpi-lbl">Deals total</div><div className="kpi-val">{stats.total}</div><div className="kpi-sub">{stats.active} actifs</div></div>
+                <div className="kpi blue dash-enter" style={{animationDelay:"70ms"}}><div className="kpi-lbl">En closing</div><div className="kpi-val">{stats.closing}</div><div className="kpi-sub">{pipeline.financement?.length||0} en financement</div></div>
+                <div className="kpi red dash-enter" style={{animationDelay:"140ms"}}><div className="kpi-lbl">Follow-ups retard</div><div className="kpi-val" style={{color:stats.overdue>0?"var(--red)":"var(--green)"}}>{stats.overdue}</div><div className="kpi-sub">{stats.overdue===0?"Tout à jour ✓":"Action requise!"}</div></div>
+                <div className="kpi green dash-enter" style={{animationDelay:"210ms"}}><div className="kpi-lbl">Prospection</div><div className="kpi-val">{pipeline.prospection?.length||0}</div><div className="kpi-sub">{pipeline.analyse?.length||0} en analyse</div></div>
               </div>
 
               {/* Pipeline mini */}
               <div>
                 <div className="sec-hd"><div className="sec-title">PIPELINE</div><button className="btn btn-ghost btn-sm" onClick={()=>setView("pipeline")}>Vue complète →</button></div>
                 <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
-                  {STAGES.filter(s=>s.id!=="perdu").map(s => (
-                    <div key={s.id} style={{background:"var(--bg2)",border:"1px solid var(--br)",borderRadius:"var(--r)",padding:"10px 14px",minWidth:115,flexShrink:0}}>
+                  {STAGES.filter(s=>s.id!=="perdu").map((s, idx) => (
+                    <div key={s.id} className="dash-enter" style={{animationDelay:`${280 + idx * 55}ms`,background:"var(--bg2)",border:"1px solid var(--br)",borderRadius:"var(--r)",padding:"10px 14px",minWidth:115,flexShrink:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                         <div style={{width:7,height:7,borderRadius:"50%",background:s.color}}/>
                         <span style={{fontSize:10,fontWeight:600,color:"var(--t2)"}}>{s.label}</span>
@@ -503,11 +592,11 @@ export default function AcquisitionCRM() {
               {followUps.length>0 && <div>
                 <div className="sec-hd"><div className="sec-title">FOLLOW-UPS</div><button className="btn btn-ghost btn-sm" onClick={()=>setView("followups")}>Voir tout →</button></div>
                 <div className="fu-list">
-                  {followUps.slice(0,4).map(d => {
+                  {followUps.slice(0,4).map((d, idx) => {
                     const isOD=d.diff<0,isT=d.diff===0;
                     const st=STAGES.find(s=>s.id===d.stage);
                     return (
-                      <div key={d.id} className={`fu-item${isOD?" overdue":isT?" today":""}`} onClick={()=>openDeal(d.id)}>
+                      <div key={d.id} className={`fu-item dash-enter${isOD?" overdue":isT?" today":""}`} style={{animationDelay:`${520 + idx * 60}ms`}} onClick={()=>openDeal(d.id)}>
                         <div className="fu-ico" style={{background:isOD?"var(--red)18":isT?"var(--acc)18":"var(--bg3)"}}>{isOD?"⚠️":isT?"🔔":"📅"}</div>
                         <div className="fu-body"><div className="fu-title">{d.title}</div><div className="fu-sub">{d.followUpNote||"Suivi requis"}{d.contact?.name?` · ${d.contact.name}`:""}</div></div>
                         <div className="fu-right">
@@ -522,11 +611,11 @@ export default function AcquisitionCRM() {
 
               {allEvents.filter(e=>e.date>=todayStr).length>0 && <div>
                 <div className="sec-hd"><div className="sec-title">PROCHAINS ÉVÉNEMENTS</div><button className="btn btn-ghost btn-sm" onClick={()=>setView("calendar")}>Calendrier →</button></div>
-                {allEvents.filter(e=>e.date>=todayStr).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,3).map(ev => {
+                {allEvents.filter(e=>e.date>=todayStr).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,3).map((ev, idx) => {
                   const deal=deals.find(d=>d.id===ev.dealId);
                   const diff=Math.ceil((new Date(ev.date)-new Date(todayStr))/86400000);
                   return (
-                    <div key={ev.id} className="fu-item" style={{marginBottom:6}} onClick={()=>ev.dealId&&openDeal(ev.dealId)}>
+                    <div key={ev.id} className="fu-item dash-enter" style={{marginBottom:6,animationDelay:`${700 + idx * 60}ms`}} onClick={()=>ev.dealId&&openDeal(ev.dealId)}>
                       <div className="fu-ico" style={{background:"var(--blue)18"}}>📅</div>
                       <div className="fu-body"><div className="fu-title">{ev.title}</div><div className="fu-sub">{deal?.title||""}{ev.time?` · ${ev.time}`:""}</div></div>
                       <span className="fu-date" style={{color:diff===0?"var(--acc)":"var(--t2)"}}>{diff===0?"Aujourd'hui":`Dans ${diff}j`}</span>
@@ -547,7 +636,7 @@ export default function AcquisitionCRM() {
               {STAGES.map(s => {
                 const col=pipeline[s.id]||[];
                 return (
-                  <div key={s.id} className="pipe-col">
+                  <div key={s.id} className="pipe-col" style={{borderLeft:`2px solid ${s.color}`}}>
                     <div className="pipe-col-hd">
                       <div className="pc-label"><div style={{width:7,height:7,borderRadius:"50%",background:s.color}}/>{s.label}</div>
                       <span className="pc-count">{col.length}</span>
@@ -607,12 +696,16 @@ export default function AcquisitionCRM() {
             <div className="topbar">
               <div className="tb-left"><div className="tb-title">CALENDRIER</div></div>
               <div className="tb-right">
-                {!gcalOk && <button className="btn btn-ghost btn-sm" onClick={()=>setModal("gcal")}>🔗 Google Calendar</button>}
-                {gcalOk  && <span style={{fontSize:11,color:"var(--green)"}}>● Google Calendar connecté</span>}
+                <button className="btn btn-ghost btn-sm" onClick={connectGoogleCalendar} disabled={gcalLoading}>
+                  {gcalLoading ? "⏳ Connexion..." : gcalOk ? "🔄 Actualiser Google" : "🔗 Google Calendar"}
+                </button>
+                {gcalOk  && !gcalLoading && <span style={{fontSize:11,color:"var(--green)"}}>● Google Calendar connecté</span>}
                 <button className="btn btn-gold btn-sm" onClick={()=>setModal("event")}>＋ Événement</button>
               </div>
             </div>
             <div className="scr"><div className="dash">
+              {gcalLoading && <div className="dash-enter" style={{fontSize:12,color:"var(--t2)"}}>Chargement des événements Google Calendar…</div>}
+              {gcalError && <div className="dash-enter" style={{fontSize:12,color:"var(--red)"}}>{gcalError}</div>}
               <div>
                 <div className="cal-hd">
                   <button className="btn btn-ghost btn-sm" onClick={()=>setCalDate(new Date(y,mo-1,1))}>‹</button>
@@ -939,35 +1032,6 @@ export default function AcquisitionCRM() {
         </div>
       )}
 
-      {modal==="gcal" && (
-        <div className="mo" onClick={()=>setModal(null)}>
-          <div className="mo-box" onClick={e=>e.stopPropagation()} style={{maxWidth:500}}>
-            <div className="mo-title">🗓️ GOOGLE CALENDAR</div>
-            <p style={{fontSize:13,color:"var(--t2)",lineHeight:1.7,marginBottom:12}}>
-              Pour connecter Google Calendar à ton projet React, tu as besoin d'une clé OAuth 2.0 de Google Cloud Console :
-            </p>
-            <div className="code-block">{`1. console.cloud.google.com
-   → Nouveau projet: "ACQUI-CRM"
-   → Activer: Google Calendar API
-
-2. Identifiants → OAuth 2.0
-   → Type: Application Web
-   → URI autorisé: http://localhost:3000
-
-3. Dans ton .env.local:
-   REACT_APP_GCAL_CLIENT_ID=ton_client_id
-
-4. npm install @react-oauth/google`}</div>
-            <p style={{fontSize:11,color:"var(--t3)",lineHeight:1.7}}>
-              En attendant, tu peux créer des événements manuellement — ils s'affichent sur le calendrier et les follow-ups automatiquement.
-            </p>
-            <div className="mo-foot">
-              <button className="btn btn-ghost" onClick={()=>setModal(null)}>Fermer</button>
-              <button className="btn btn-gold" onClick={()=>{setGcalOk(true);setModal(null);}}>Simuler la connexion ✓</button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
