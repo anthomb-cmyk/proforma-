@@ -93,6 +93,7 @@ a{color:inherit}
 
 .grid-60-40{display:grid;grid-template-columns:3fr 2fr;gap:12px}
 .grid-50{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.map-split{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
 .sec{padding:14px}
 .sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .sec-title{font-size:14px;font-weight:700;color:var(--text)}
@@ -134,6 +135,7 @@ a{color:inherit}
 .kanban-wrap{overflow-x:auto;padding-bottom:3px}
 .kanban{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
 .k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);overflow-y:auto}
+.k-col{border-left:3px solid transparent}
 .k-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .k-name{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
 .k-count{font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px;background:var(--gold-light);color:var(--gold)}
@@ -246,6 +248,38 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .cal-event.type-followup{background:#FCE9E6;color:var(--red)}
 .cal-event.type-google{background:#EAF1FF;color:var(--blue)}
 
+/* Map */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.map-layout{position:relative}
+.map-wrap{position:relative;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
+.map-viewport{width:100%;height:calc(100vh - 140px)}
+.map-viewport.mini{height:280px}
+.map-overlay{position:absolute;z-index:500;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
+.map-overlay.legend{left:12px;top:12px;padding:10px}
+.map-overlay.filters{right:12px;top:12px;padding:8px}
+.map-overlay h4{font-size:10px;letter-spacing:.8px;color:var(--text3);text-transform:uppercase;margin-bottom:6px}
+.legend-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-bottom:4px;white-space:nowrap}
+.legend-row:last-child{margin-bottom:0}
+.map-filter{min-width:170px}
+.map-mini-foot{padding-top:10px;display:flex;justify-content:flex-end}
+.map-pill{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:700}
+.map-pin,.map-cluster-pin{
+  width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.28);
+}
+.map-cluster-pin{
+  width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;
+}
+.map-popup{min-width:200px;color:var(--text)}
+.map-popup-title{font-size:13px;font-weight:700;margin-bottom:4px}
+.map-popup-sub{font-size:11px;color:var(--text2);margin-bottom:6px}
+.map-popup-row{font-size:11px;color:var(--text2);margin-bottom:4px}
+.map-open-btn{
+  margin-top:7px;border:none;background:var(--gold);color:#fff;border-radius:7px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;
+}
+.map-open-btn:hover{filter:brightness(1.04)}
+.leaflet-popup-content-wrapper{border-radius:10px;border:1px solid var(--border);box-shadow:0 8px 16px rgba(0,0,0,0.12)}
+.leaflet-popup-content{margin:10px}
+
 /* Common */
 .pill{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:700}
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:40px 20px;min-height:300px;text-align:center}
@@ -265,7 +299,7 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 
 @media (max-width:1280px){
   .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .grid-60-40,.grid-50,.ws-grid,.cal-layout{grid-template-columns:1fr}
+  .grid-60-40,.grid-50,.ws-grid,.cal-layout,.map-split{grid-template-columns:1fr}
   .doc-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 @media (max-width:960px){
@@ -305,11 +339,13 @@ function buildCL(stageId) {
   return (CHECKLISTS[stageId] || []).map((label, i) => ({ id: `${stageId}_${i}`, label, done: false }));
 }
 
-function createDeal(title) {
+function createDeal(title, address = "") {
   const now = Date.now();
   return {
     id: `acq_${now}_${Math.random().toString(36).slice(2, 7)}`,
     title: title || "Nouveau deal",
+    address: address || "",
+    coords: null,
     stage: "prospection", priority: "medium",
     createdAt: now, updatedAt: now,
     followUpDate: "", followUpNote: "", nextAction: "",
@@ -324,6 +360,16 @@ function createDeal(title) {
 const SK = "acq_crm_v4";
 function load() { try { const r = localStorage.getItem(SK); return r ? JSON.parse(r) : null; } catch { return null; } }
 function persist(s) { try { localStorage.setItem(SK, JSON.stringify(s)); } catch {} }
+
+function normalizeDeal(d) {
+  const lat = Number(d?.coords?.lat);
+  const lng = Number(d?.coords?.lng);
+  return {
+    ...d,
+    address: d?.address || "",
+    coords: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null,
+  };
+}
 
 function fmtSz(b) { return b < 1048576 ? `${Math.round(b/1024)} KB` : `${(b/1048576).toFixed(1)} MB`; }
 function fileIco(t) {
@@ -357,7 +403,39 @@ function dayKey({ d, m, y }) {
   return `${y}-${String(m + 1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
 }
 
+function esc(str = "") {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function stageColor(stageId) {
+  return STAGES.find(s => s.id === stageId)?.color || "#6B7280";
+}
+
+function clusterDeals(items, zoom) {
+  if (zoom >= 9) return items.map(item => ({ items:[item], lat:item.coords.lat, lng:item.coords.lng }));
+  const threshold = zoom <= 6 ? 1.1 : zoom === 7 ? 0.55 : 0.3;
+  const groups = [];
+  items.forEach((item) => {
+    const found = groups.find((g) => Math.hypot(g.lat - item.coords.lat, g.lng - item.coords.lng) <= threshold);
+    if (!found) {
+      groups.push({ items:[item], lat:item.coords.lat, lng:item.coords.lng });
+      return;
+    }
+    found.items.push(item);
+    const n = found.items.length;
+    found.lat = (found.lat * (n - 1) + item.coords.lat) / n;
+    found.lng = (found.lng * (n - 1) + item.coords.lng) / n;
+  });
+  return groups;
+}
+
 function NavIcon({ id }) {
+  if (id === "map") return <span style={{fontSize:14,lineHeight:1}}>📍</span>;
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
   if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
   if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
@@ -386,7 +464,7 @@ function Topbar({ title, subtitle, overdue }) {
 
 export default function App() {
   const stored = load();
-  const [deals, setDeals]         = useState(stored?.deals || []);
+  const [deals, setDeals]         = useState((stored?.deals || []).map(normalizeDeal));
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
   const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
   const [gcalEvents, setGcalEvents] = useState([]);
@@ -396,15 +474,19 @@ export default function App() {
   const [tab, setTab]             = useState("crm");
   const [modal, setModal]         = useState(null);
   const [newTitle, setNewTitle]   = useState("");
+  const [newAddress, setNewAddress] = useState("");
   const [clStage, setClStage]     = useState("prospection");
   const [clNew, setClNew]         = useState("");
   const [viewing, setViewing]     = useState(null);
   const [dragging, setDragging]   = useState(false);
   const [calDate, setCalDate]     = useState(new Date());
+  const [mapStageFilter, setMapStageFilter] = useState("all");
   const [newEv, setNewEv]         = useState({ title:"", date:"", time:"", dealId:"" });
   const [aiLoadD, setAiLoadD]     = useState(false);
   const [aiLoadV, setAiLoadV]     = useState(false);
   const fileRef = useRef();
+  const geocodeTimersRef = useRef({});
+  const geocodeSkipRef = useRef({});
 
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
 
@@ -418,14 +500,20 @@ export default function App() {
     upd(id, d => ({ ...d, activities: [{ id: Date.now(), text, time: Date.now() }, ...(d.activities || [])] }));
   }, [upd]);
 
-  const openDeal = (id) => { setCurrentId(id); setView("workspace"); setTab("crm"); setViewing(null); };
+  const openDeal = useCallback((id) => {
+    setCurrentId(id);
+    setView("workspace");
+    setTab("crm");
+    setViewing(null);
+  }, []);
 
   const createDealFn = () => {
-    const d = createDeal(newTitle.trim() || "Nouveau deal");
+    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim());
     setDeals(p => [d, ...p]);
     setCurrentId(d.id);
     setModal(null);
     setNewTitle("");
+    setNewAddress("");
     setView("workspace");
     setTab("crm");
   };
@@ -465,6 +553,62 @@ export default function App() {
     upd(currentId, d => ({ ...d, files: (d.files || []).filter(f => f.id !== fid) }));
     if (viewing?.id === fid) setViewing(null);
   };
+
+  const geocodeAddress = useCallback(async (address) => {
+    const query = encodeURIComponent(address);
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&countrycodes=ca&limit=1`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || !data[0]?.lat || !data[0]?.lon) return null;
+    const lat = Number(data[0].lat);
+    const lng = Number(data[0].lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  }, []);
+
+  useEffect(() => {
+    deals.forEach((deal) => {
+      const address = (deal.address || "").trim();
+      if (!address || deal.coords) return;
+      if (geocodeSkipRef.current[deal.id] === address) return;
+      if (geocodeTimersRef.current[deal.id]) return;
+
+      geocodeTimersRef.current[deal.id] = setTimeout(async () => {
+        delete geocodeTimersRef.current[deal.id];
+        try {
+          const coords = await geocodeAddress(address);
+          if (!coords) {
+            geocodeSkipRef.current[deal.id] = address;
+            return;
+          }
+          setDeals((prev) => prev.map((d) => {
+            if (d.id !== deal.id) return d;
+            if ((d.address || "").trim() !== address) return d;
+            return { ...d, coords, updatedAt: Date.now() };
+          }));
+        } catch {
+          geocodeSkipRef.current[deal.id] = address;
+        }
+      }, 1000);
+    });
+
+    Object.keys(geocodeTimersRef.current).forEach((id) => {
+      const deal = deals.find((d) => d.id === id);
+      const shouldKeep = !!deal && !!(deal.address || "").trim() && !deal.coords;
+      if (!shouldKeep) {
+        clearTimeout(geocodeTimersRef.current[id]);
+        delete geocodeTimersRef.current[id];
+      }
+    });
+  }, [deals, geocodeAddress]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(geocodeTimersRef.current).forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
 
   const aiSummarize = async (type) => {
     if (!current) return;
@@ -622,6 +766,12 @@ export default function App() {
     return scored;
   }, [deals]);
 
+  const geocodedDeals = useMemo(() => deals.filter((d) => d.coords?.lat && d.coords?.lng), [deals]);
+  const filteredMapDeals = useMemo(() => {
+    if (mapStageFilter === "all") return geocodedDeals;
+    return geocodedDeals.filter((d) => d.stage === mapStageFilter);
+  }, [geocodedDeals, mapStageFilter]);
+
   const todayStr = new Date().toISOString().split("T")[0];
   const y = calDate.getFullYear();
   const mo = calDate.getMonth();
@@ -649,6 +799,7 @@ export default function App() {
             {[
               { id:"dashboard", label:"Dashboard" },
               { id:"pipeline", label:"Pipeline" },
+              { id:"map", label:"Carte" },
               { id:"followups", label:"Follow-ups" },
               { id:"calendar", label:"Calendrier" },
             ].map(item => (
@@ -672,6 +823,7 @@ export default function App() {
                     <div className="deal-title">{d.title}</div>
                     <div className="deal-meta">
                       <span className="stage-pill-mini" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
+                      <span style={{fontSize:10,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.contact?.name || "Sans contact"}</span>
                     </div>
                   </div>
                 </div>
@@ -717,18 +869,30 @@ export default function App() {
                 <div className="grid-60-40">
                   <div className="card sec">
                     <div className="sec-head"><div className="sec-title">Pipeline des Acquisitions</div><button className="btn btn-sm" onClick={() => setView("pipeline")}>Vue complète</button></div>
-                    {STAGES.filter(s=>s.id!=="perdu").map(s => {
-                      const count = pipeline[s.id]?.length || 0;
-                      const pct = deals.length ? Math.round((count / deals.length) * 100) : 0;
-                      const value = (count * 1.35).toFixed(1);
-                      return (
-                        <div key={s.id} className="pipe-row">
-                          <div className="pipe-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
-                          <div className="pipe-bar-wrap"><div className="pipe-bar" style={{width:`${Math.max(pct,4)}%`}}/></div>
-                          <div className="pipe-m">{count} | ${value}M</div>
+                    <div className="map-split">
+                      <div>
+                        {STAGES.filter(s=>s.id!=="perdu").map(s => {
+                          const count = pipeline[s.id]?.length || 0;
+                          const pct = deals.length ? Math.round((count / deals.length) * 100) : 0;
+                          const value = (count * 1.35).toFixed(1);
+                          return (
+                            <div key={s.id} className="pipe-row">
+                              <div className="pipe-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
+                              <div className="pipe-bar-wrap"><div className="pipe-bar" style={{width:`${Math.max(pct,4)}%`}}/></div>
+                              <div className="pipe-m">{count} | ${value}M</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div>
+                        <div className="map-wrap">
+                          <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
                         </div>
-                      );
-                    })}
+                        <div className="map-mini-foot">
+                          <button className="btn btn-sm" onClick={() => setView("map")}>Voir la carte complète</button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="card sec">
@@ -802,7 +966,7 @@ export default function App() {
                     {STAGES.map(s => {
                       const col = pipeline[s.id] || [];
                       return (
-                        <div key={s.id} className="k-col">
+                        <div key={s.id} className="k-col" style={{borderLeftColor:s.color}}>
                           <div className="k-hd">
                             <div className="k-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
                             <span className="k-count">{col.length}</span>
@@ -835,6 +999,42 @@ export default function App() {
                       );
                     })}
                   </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {view === "map" && (
+            <>
+              <Topbar title="Carte" subtitle="Vue géographique des deals au Québec" overdue={stats.overdue} />
+              <div className="content">
+                <div className="map-layout">
+                  <div className="map-wrap">
+                    <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
+                    <div className="map-overlay legend">
+                      <h4>Étapes</h4>
+                      {STAGES.map((stage) => (
+                        <div key={stage.id} className="legend-row">
+                          <span className="dot" style={{background:stage.color}} />
+                          <span>{stage.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="map-overlay filters">
+                      <div className="map-filter">
+                        <div style={{fontSize:10,letterSpacing:".7px",textTransform:"uppercase",color:"var(--text3)",fontWeight:700,marginBottom:5}}>Filtrer</div>
+                        <select value={mapStageFilter} onChange={(e) => setMapStageFilter(e.target.value)}>
+                          <option value="all">Toutes les étapes</option>
+                          {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="status-note">
+                  {filteredMapDeals.length > 0
+                    ? `${filteredMapDeals.length} deal(s) affiché(s) sur la carte.`
+                    : "Aucun deal géocodé pour ce filtre. Ajoutez une adresse dans CRM & Suivi pour afficher un pin."}
                 </div>
               </div>
             </>
@@ -951,12 +1151,12 @@ export default function App() {
               </>
             ) : (
               <>
-                <Topbar title="Workspace" subtitle={`${currentStageLabel} • ${current.contact?.company || "Adresse à compléter"}`} overdue={stats.overdue} />
+                <Topbar title="Workspace" subtitle={`${currentStageLabel} • ${current.address || "Adresse à compléter"}`} overdue={stats.overdue} />
                 <div className="content">
                   <div className="ws-head">
                     <div style={{minWidth:0,flex:1}}>
                       <input className="ws-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} />
-                      <div className="ws-addr">{current.contact?.company || "Adresse / secteur à renseigner"}</div>
+                      <div className="ws-addr">{current.address || "Adresse / secteur à renseigner"}</div>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span className="stage-crumb">Mis à jour le {new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
@@ -1015,6 +1215,11 @@ export default function App() {
                           <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
                           <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
                           <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
+                          <div className="f-row"><div className="f-lbl">Adresse</div><input value={current.address || ""} onChange={e => {
+                            const nextAddress = e.target.value;
+                            delete geocodeSkipRef.current[current.id];
+                            upd(current.id,d => ({ ...d, address:nextAddress, coords:null }));
+                          }} placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu" /></div>
                         </div>
                       </div>
 
@@ -1181,8 +1386,12 @@ export default function App() {
               <div className="f-lbl">Nom / Adresse de la propriété</div>
               <input autoFocus value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu" onKeyDown={e => e.key === "Enter" && createDealFn()} />
             </div>
+            <div className="f-row">
+              <div className="f-lbl">Adresse (pour la carte)</div>
+              <input value={newAddress} onChange={e => setNewAddress(e.target.value)} placeholder="Ex: Québec, QC" />
+            </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => setModal(null)}>Annuler</button>
+              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); }}>Annuler</button>
               <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
             </div>
           </div>
@@ -1211,6 +1420,147 @@ export default function App() {
         </div>
       )}
     </>
+  );
+}
+
+function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh - 140px)" }) {
+  const mapElRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerLayerRef = useRef(null);
+  const fittedRef = useRef(false);
+  const [zoom, setZoom] = useState(7);
+
+  useEffect(() => {
+    const L = window.L;
+    if (!L || !mapElRef.current || mapRef.current) return;
+
+    const map = L.map(mapElRef.current, {
+      zoomControl: interactive,
+      scrollWheelZoom: interactive,
+      dragging: interactive,
+      doubleClickZoom: interactive,
+      boxZoom: interactive,
+      keyboard: interactive,
+      touchZoom: interactive,
+      attributionControl: true,
+    });
+    map.setView([46.8139, -71.2080], 7);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(map);
+
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    setZoom(map.getZoom());
+
+    setTimeout(() => map.invalidateSize(), 0);
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerLayerRef.current = null;
+    };
+  }, [interactive]);
+
+  useEffect(() => {
+    if (!interactive || !mapRef.current) return;
+    const map = mapRef.current;
+    const onZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", onZoom);
+    return () => map.off("zoomend", onZoom);
+  }, [interactive]);
+
+  useEffect(() => {
+    const L = window.L;
+    const map = mapRef.current;
+    const layer = markerLayerRef.current;
+    if (!L || !map || !layer) return;
+
+    layer.clearLayers();
+    const safeDeals = (deals || []).filter((deal) => Number.isFinite(Number(deal?.coords?.lat)) && Number.isFinite(Number(deal?.coords?.lng)));
+    const clusters = clusterDeals(safeDeals, interactive ? zoom : 7);
+
+    clusters.forEach((group) => {
+      if (group.items.length === 1) {
+        const deal = group.items[0];
+        const color = stageColor(deal.stage);
+        const priority = PRIORITY[deal.priority || "medium"] || PRIORITY.medium;
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="map-pin" style="background:${color}"></div>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+          popupAnchor: [0, -8],
+        });
+        const marker = L.marker([group.lat, group.lng], { icon }).addTo(layer);
+        marker.bindPopup(`
+          <div class="map-popup">
+            <div class="map-popup-title">${esc(deal.title)}</div>
+            <div class="map-popup-sub">${esc(STAGES.find((s) => s.id === deal.stage)?.label || "Prospection")}</div>
+            <div class="map-popup-row">Contact: ${esc(deal.contact?.name || "N/A")}</div>
+            <div class="map-popup-row">Priorité: <span class="map-pill" style="background:${priority.color}22;color:${priority.color}">${esc(priority.label)}</span></div>
+            <div class="map-popup-row">Follow-up: ${esc(deal.followUpDate || "Non défini")}</div>
+            <button class="map-open-btn" data-open-deal="${esc(deal.id)}">Ouvrir le deal</button>
+          </div>
+        `);
+      } else {
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="map-cluster-pin" style="background:${"#C9A84C"}">${group.items.length}</div>`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        });
+        const marker = L.marker([group.lat, group.lng], { icon }).addTo(layer);
+        const rows = group.items.slice(0, 8).map((deal) => (
+          `<div class="map-popup-row">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${stageColor(deal.stage)};margin-right:6px;"></span>
+            ${esc(deal.title)}
+            <button class="map-open-btn" data-open-deal="${esc(deal.id)}" style="padding:3px 7px;font-size:10px;margin-top:4px;margin-left:8px;">Ouvrir</button>
+          </div>`
+        )).join("");
+        marker.bindPopup(`
+          <div class="map-popup">
+            <div class="map-popup-title">${group.items.length} deals proches</div>
+            ${rows}
+          </div>
+        `);
+      }
+    });
+
+    if (safeDeals.length > 0) {
+      const bounds = L.latLngBounds(safeDeals.map((deal) => [Number(deal.coords.lat), Number(deal.coords.lng)]));
+      if (!interactive || !fittedRef.current) {
+        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 11 });
+        fittedRef.current = true;
+      }
+    } else if (!interactive) {
+      map.setView([46.8139, -71.2080], 7);
+    }
+
+    setTimeout(() => map.invalidateSize(), 0);
+  }, [deals, interactive, zoom]);
+
+  const onPopupAction = useCallback((event) => {
+    const target = event.target?.closest?.("[data-open-deal]");
+    if (!target) return;
+    const dealId = target.getAttribute("data-open-deal");
+    if (!dealId) return;
+    event.preventDefault();
+    onOpenDeal(dealId);
+  }, [onOpenDeal]);
+
+  const mapHeight = typeof height === "number" ? `${height}px` : height;
+
+  if (!window.L) {
+    return <div className="status-note">Leaflet n&apos;est pas chargé.</div>;
+  }
+
+  return (
+    <div onClick={onPopupAction}>
+      <div ref={mapElRef} className={`map-viewport${interactive ? "" : " mini"}`} style={{height: mapHeight}} />
+    </div>
   );
 }
 
