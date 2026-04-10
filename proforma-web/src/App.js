@@ -397,7 +397,7 @@ export default function AcquisitionCRM() {
   }, [deals, gcalEvents]);
 
   const connectGoogleCalendar = useCallback(() => {
-    const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
+    const clientId = "98847199802-fhl6ojdub1p3c38diqmlid95oqmfsi2o.apps.googleusercontent.com";
     if (!clientId) {
       setGcalError("REACT_APP_GCAL_CLIENT_ID manquant.");
       return;
