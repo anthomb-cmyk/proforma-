@@ -1,261 +1,276 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Bebas+Neue&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#FAFAF9;
-  --surface:#FFFFFF;
-  --surface-2:#F9FAFB;
-  --line:#E5E7EB;
-  --line-2:#D1D5DB;
-  --text:#111827;
-  --text-2:#6B7280;
-  --muted:#9CA3AF;
-  --accent:#4F46E5;
-  --accent-2:#EEF2FF;
-  --green:#16A34A;
-  --red:#DC2626;
+  --bg:#F5F3EE;
+  --sidebar:#FFFFFF;
+  --card:#FFFFFF;
+  --gold:#C9A84C;
+  --gold-light:#F5EDD6;
+  --text:#1A1A1A;
+  --text2:#6B6B6B;
+  --text3:#A0A0A0;
+  --border:#E8E3D8;
+  --green:#2D8C4E;
+  --red:#C0392B;
   --blue:#2563EB;
-  --amber:#D97706;
   --radius:12px;
-  --radius-sm:10px;
-  --shadow:0 1px 3px rgba(0,0,0,0.08);
+  --radius-sm:8px;
+  --shadow:0 1px 4px rgba(0,0,0,0.06);
 }
 html,body,#root{height:100%}
-body{
-  font-family:'Plus Jakarta Sans',sans-serif;
-  background:var(--bg);
-  color:var(--text);
-  overflow:hidden;
-}
+body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
 button,input,select,textarea{font-family:inherit}
+a{color:inherit}
 
-.app-shell{display:grid;grid-template-columns:280px 1fr;height:100vh}
+.app-shell{display:grid;grid-template-columns:260px 1fr;height:100vh;overflow:hidden}
 
-.sidebar{
-  background:var(--surface);
-  border-right:1px solid var(--line);
-  display:flex;
-  flex-direction:column;
-  min-height:0;
-}
-.sidebar-head{padding:20px 18px 14px;border-bottom:1px solid var(--line)}
-.logo{font-size:20px;font-weight:700;letter-spacing:.2px;color:var(--accent)}
-.logo small{color:var(--muted);font-weight:600;font-size:11px;display:block;margin-top:2px;letter-spacing:.5px;text-transform:uppercase}
+/* Sidebar */
+.sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.sb-head{padding:20px 16px 14px;border-bottom:1px solid var(--border)}
+.sb-logo{font-size:22px;font-weight:700;letter-spacing:.6px;color:var(--gold);line-height:1}
+.sb-logo-sub{font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text2);margin-top:4px}
+.sb-tag{font-size:11px;color:var(--text3);margin-top:4px}
 
-.nav{padding:10px}
-.nav-btn{
-  width:100%;
-  border:none;
-  background:transparent;
-  color:var(--text-2);
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:10px 12px;
-  border-radius:10px;
-  font-size:14px;
-  font-weight:600;
-  cursor:pointer;
-  transition:all .18s ease;
-}
-.nav-btn:hover{background:#F3F4F6;color:var(--text)}
-.nav-btn.active{background:var(--accent-2);color:var(--accent)}
+.sb-nav{padding:10px 8px;border-bottom:1px solid var(--border)}
+.nav-item{width:100%;border:none;background:transparent;display:flex;align-items:center;gap:9px;padding:10px 11px;border-radius:10px;color:var(--text2);font-size:13px;font-weight:600;cursor:pointer;position:relative;transition:all .15s}
+.nav-item:hover{background:#FAF8F4;color:var(--text)}
+.nav-item.active{background:var(--gold-light);color:var(--gold)}
+.nav-item.active::before{content:'';position:absolute;left:0;top:7px;bottom:7px;width:3px;border-radius:6px;background:var(--gold)}
 
-.sidebar-sec{padding:10px 18px 8px;font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.7px;text-transform:uppercase}
-.deal-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 10px 12px}
-.deal-item{
-  border:1px solid transparent;
-  background:transparent;
-  border-radius:10px;
-  padding:10px;
-  margin-bottom:8px;
-  cursor:pointer;
-  transition:all .18s ease;
-}
-.deal-item:hover{background:#F9FAFB;border-color:var(--line);transform:translateX(3px)}
-.deal-item.active{background:#EEF2FF;border-color:#C7D2FE}
-.deal-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.deal-meta{margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.meta-text{font-size:11px;color:var(--text-2)}
-.meta-contact{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.sb-sec{padding:10px 16px 8px;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--text3)}
+.deal-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px}
+.deal-row{border:1px solid transparent;border-radius:10px;padding:9px;display:flex;gap:9px;cursor:pointer;transition:all .15s;margin-bottom:8px;background:transparent}
+.deal-row:hover{background:#FAF8F4;border-color:var(--border)}
+.deal-row.active{background:var(--gold-light);border-color:#E9D9AA}
+.deal-avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0}
+.deal-main{min-width:0;flex:1}
+.deal-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.deal-meta{display:flex;align-items:center;gap:6px;margin-top:4px}
+.stage-pill-mini{font-size:9px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 
-.new-deal-btn{
-  margin:12px;
-  border:none;
-  border-radius:10px;
-  background:var(--accent);
-  color:#fff;
-  font-size:14px;
-  font-weight:700;
-  padding:11px 12px;
-  cursor:pointer;
-  box-shadow:var(--shadow);
-}
-.new-deal-btn:hover{filter:brightness(1.05)}
+.new-btn{margin:10px 12px 12px;border:none;background:var(--gold);color:#fff;border-radius:10px;padding:11px 12px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:var(--shadow)}
+.new-btn:hover{filter:brightness(1.04)}
 
-.main{display:flex;flex-direction:column;min-width:0}
-.page-head{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  padding:16px 24px;
-  border-bottom:1px solid var(--line);
-  background:var(--surface);
-}
-.page-title{font-size:22px;font-weight:700;letter-spacing:.2px}
-.page-actions{display:flex;align-items:center;gap:8px}
+.sb-profile{border-top:1px solid var(--border);padding:12px;display:flex;gap:10px;align-items:center}
+.p-avatar{width:36px;height:36px;border-radius:50%;background:var(--gold-light);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.p-name{font-size:13px;font-weight:700;color:var(--text)}
+.p-role{font-size:11px;color:var(--text3)}
 
-.btn{border:1px solid var(--line);background:var(--surface);color:var(--text-2);padding:8px 12px;border-radius:10px;font-weight:600;font-size:13px;cursor:pointer}
-.btn:hover{background:#F9FAFB}
-.btn-primary{border-color:transparent;background:var(--accent);color:#fff}
-.btn-primary:hover{filter:brightness(1.05)}
-.btn-danger{border-color:#FECACA;background:#FEF2F2;color:#B91C1C}
-.btn-danger:hover{background:#FEE2E2}
-.btn:disabled{opacity:.6;cursor:not-allowed}
+/* Main */
+.main{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.topbar{background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 22px;flex-shrink:0}
+.tb-title{font-size:24px;font-weight:700;letter-spacing:.2px;color:var(--text)}
+.tb-sub{margin-top:3px;font-size:12px;color:var(--text3)}
+.tb-right{display:flex;align-items:center;gap:10px}
+.tb-search{width:220px;border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none}
+.tb-search:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
+.bell{position:relative;width:34px;height:34px;border-radius:10px;border:1px solid var(--border);background:#fff;display:flex;align-items:center;justify-content:center;color:var(--text2)}
+.bell-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;border-radius:999px;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.tb-user{font-size:12px;font-weight:600;color:var(--text2)}
 
-.content{padding:24px;overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:16px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.content{padding:22px;overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 
-.kpi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.kpi-card{padding:16px;border-top:3px solid var(--accent)}
-.kpi-label{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:700}
-.kpi-value{font-size:36px;line-height:1;font-family:'Bebas Neue',sans-serif;letter-spacing:1px;color:var(--text);margin-top:8px}
-.kpi-sub{font-size:12px;color:var(--text-2);margin-top:6px}
+.btn{border:1px solid var(--border);background:#fff;color:var(--text2);padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer}
+.btn:hover{background:#FAF8F4}
+.btn-gold{border-color:transparent;background:var(--gold);color:#fff}
+.btn-gold:hover{filter:brightness(1.05)}
+.btn-danger{border:1px solid #F2C7BF;background:#FDF0ED;color:#A93425}
+.btn-danger:hover{background:#FBE4E0}
+.btn-sm{padding:6px 10px;font-size:11px}
 
-.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.section-title{font-size:14px;font-weight:700;color:var(--text)}
+/* Dashboard */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.kpi{padding:14px;display:flex;gap:10px;align-items:center}
+.kpi-ico{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.kpi-body{min-width:0;flex:1}
+.kpi-val{font-size:32px;line-height:1;font-weight:700;color:var(--text)}
+.kpi-lbl{font-size:12px;font-weight:600;color:var(--text2);margin-top:2px}
+.kpi-sub{font-size:11px;color:var(--green);margin-top:3px}
 
-.list{display:flex;flex-direction:column;gap:8px}
-.row-item{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;gap:10px;align-items:center;cursor:pointer;transition:all .15s}
-.row-item:hover{border-color:var(--line-2);box-shadow:var(--shadow)}
-.row-ico{width:34px;height:34px;border-radius:10px;background:#EEF2FF;color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.row-main{min-width:0;flex:1}
-.row-title{font-size:13px;font-weight:700}
-.row-sub{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
-.row-right{display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0}
-.row-date{font-size:11px;color:var(--text-2);font-weight:600}
+.grid-60-40{display:grid;grid-template-columns:3fr 2fr;gap:12px}
+.grid-50{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.sec{padding:14px}
+.sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sec-title{font-size:14px;font-weight:700;color:var(--text)}
 
-.pipeline-wrap{overflow-x:auto}
-.pipeline-board{display:flex;gap:12px;min-width:max-content;align-items:flex-start}
-.pipeline-col{width:220px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:10px;max-height:calc(100vh - 180px);overflow-y:auto}
-.pipeline-col-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.pipeline-col-label{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--text)}
-.count-badge{font-size:11px;font-weight:700;color:var(--text-2);padding:2px 8px;border-radius:999px;background:#F3F4F6}
-.pipeline-card{padding:10px;border:1px solid var(--line);background:var(--surface);border-radius:10px;box-shadow:var(--shadow);cursor:pointer;transition:all .15s;margin-bottom:8px}
-.pipeline-card:hover{transform:translateY(-1px);border-color:var(--line-2);box-shadow:0 4px 12px rgba(0,0,0,.08)}
-.pipeline-title{font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pipeline-field{display:flex;justify-content:space-between;gap:8px;margin-top:4px}
-.pipeline-field span:first-child{font-size:11px;color:var(--muted)}
-.pipeline-field span:last-child{font-size:11px;color:var(--text-2);font-weight:600}
-.pipeline-foot{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
-.pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px}
-.empty-col{font-size:11px;color:var(--muted);font-style:italic;padding:12px 0;text-align:center}
+.pipe-row{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--border)}
+.pipe-row:last-child{border-bottom:none}
+.pipe-name{width:130px;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2)}
+.pipe-bar-wrap{flex:1;height:8px;background:#F7F4ED;border-radius:999px;overflow:hidden}
+.pipe-bar{height:100%;background:linear-gradient(90deg,var(--gold),#DDBF6E)}
+.pipe-m{font-size:11px;color:var(--text2);font-weight:600;min-width:90px;text-align:right}
 
-.workspace-title{font-size:24px;font-weight:700;border:none;background:transparent;outline:none;width:100%;padding:0}
-.workspace-title:focus{border-bottom:1px solid #C7D2FE}
+.activity-list{display:flex;flex-direction:column;gap:8px}
+.act-row{display:flex;gap:9px;align-items:flex-start;padding:8px;border:1px solid var(--border);border-radius:10px;background:#fff}
+.act-av{width:26px;height:26px;border-radius:50%;background:var(--gold-light);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.act-main{min-width:0;flex:1}
+.act-text{font-size:12px;color:var(--text2);line-height:1.45}
+.act-time{font-size:10px;color:var(--text3);margin-top:3px}
 
-.stage-progress{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:var(--shadow)}
-.stage-track{display:flex;gap:6px;overflow-x:auto}
-.stage-chip{border:1px solid var(--line);background:var(--surface-2);color:var(--text-2);padding:7px 12px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
-.stage-chip.active{background:var(--accent-2);border-color:#C7D2FE;color:var(--accent)}
+.task-list{display:flex;flex-direction:column;gap:8px}
+.task{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer}
+.task:hover{border-color:#DECFA7}
+.task-main{min-width:0;flex:1}
+.task-title{font-size:12px;font-weight:700;color:var(--text)}
+.task-sub{font-size:11px;color:var(--text2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.date-badge{font-size:10px;padding:3px 8px;border-radius:999px;font-weight:700}
 
-.tabbar{display:flex;gap:18px;border-bottom:1px solid var(--line);background:var(--surface);padding:0 8px}
-.tab-btn{border:none;background:transparent;padding:12px 2px;color:var(--text-2);font-size:13px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent}
-.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+.opp-list{display:flex;flex-direction:column;gap:8px}
+.opp{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer}
+.opp:hover{border-color:#DECFA7}
+.opp-l{min-width:0;flex:1}
+.opp-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.opp-sub{font-size:11px;color:var(--text2);margin-top:2px}
+.badge-hot,.badge-warm,.badge-cold{font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px}
+.badge-hot{background:#FCE9E6;color:var(--red)}
+.badge-warm{background:#FFF3D8;color:#B7791F}
+.badge-cold{background:#EAF1FF;color:var(--blue)}
 
-.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.form-card{padding:16px}
-.form-title{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:12px}
-.field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
-.field:last-child{margin-bottom:0}
-.label{font-size:12px;color:var(--text-2);font-weight:600}
-input,select,textarea{width:100%;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:10px;padding:9px 11px;font-size:13px;outline:none}
-input:focus,select:focus,textarea:focus{border-color:#A5B4FC;box-shadow:0 0 0 3px #EEF2FF}
-textarea{resize:vertical;min-height:130px;line-height:1.6}
+/* Pipeline */
+.kanban-wrap{overflow-x:auto;padding-bottom:3px}
+.kanban{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
+.k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);overflow-y:auto}
+.k-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.k-name{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
+.k-count{font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px;background:var(--gold-light);color:var(--gold)}
+.k-card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;box-shadow:var(--shadow);margin-bottom:8px;cursor:pointer;transition:all .15s}
+.k-card:hover{transform:translateY(-1px);box-shadow:0 8px 16px rgba(0,0,0,.09)}
+.k-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-contact{margin-top:6px;display:flex;align-items:center;gap:7px}
+.k-c-av{width:22px;height:22px;border-radius:50%;background:#F4EFE2;color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
+.k-c-name{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-price{font-size:12px;font-weight:700;color:var(--gold);margin-top:7px}
+.k-row{display:flex;justify-content:space-between;margin-top:4px}
+.k-mk{font-size:10px;color:var(--text3)}
+.k-mv{font-size:10px;color:var(--text2);font-weight:600}
+.k-foot{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.pr-hot,.pr-warm,.pr-cold{font-size:9px;font-weight:700;padding:2px 7px;border-radius:999px}
+.pr-hot{background:#FCE9E6;color:var(--red)}
+.pr-warm{background:#FFF3D8;color:#B7791F}
+.pr-cold{background:#EAF1FF;color:var(--blue)}
+.k-progress{margin-top:7px;height:4px;background:#F2ECE0;border-radius:999px;overflow:hidden}
+.k-bar{height:100%;background:var(--gold)}
+.k-empty{font-size:11px;color:var(--text3);text-align:center;padding:12px 0;font-style:italic}
 
-.priority-row{display:flex;gap:6px}
-.priority-btn{flex:1;border:1px solid var(--line);background:var(--surface-2);color:var(--text-2);padding:8px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer}
+/* Workspace */
+.ws-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ws-title{border:none;background:transparent;font-size:24px;font-weight:700;color:var(--text);width:100%;outline:none;padding:0}
+.ws-title:focus{border-bottom:1px solid #DABF7F}
+.ws-addr{font-size:12px;color:var(--text3);margin-top:4px}
+.stage-crumb{font-size:11px;color:var(--text3)}
 
-.ai-btn{border:none;border-radius:999px;background:var(--accent-2);color:var(--accent);padding:6px 11px;font-size:11px;font-weight:700;cursor:pointer}
-.ai-btn.loading{opacity:.65;pointer-events:none}
-.ai-box{margin-top:10px;padding:12px;border:1px solid #C7D2FE;background:var(--accent-2);border-radius:10px;font-size:13px;color:#3730A3;line-height:1.6}
-.ai-label{font-size:10px;text-transform:uppercase;letter-spacing:.7px;font-weight:700;margin-bottom:6px}
+.stage-wrap{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px 12px;box-shadow:var(--shadow)}
+.stage-track{display:flex;gap:8px;overflow-x:auto}
+.stage-btn{border:1px solid var(--border);background:#fff;border-radius:999px;padding:7px 11px;font-size:11px;color:var(--text2);font-weight:700;cursor:pointer;white-space:nowrap}
+.stage-btn.active{background:var(--gold-light);color:var(--gold);border-color:#E1CC94}
 
-.doc-drop{border:1.5px dashed #C7D2FE;background:#F8FAFF;border-radius:12px;padding:30px;text-align:center;cursor:pointer;transition:all .15s}
-.doc-drop:hover,.doc-drop.drag{background:#EEF2FF;border-color:#A5B4FC}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--border);padding:0 4px;background:transparent}
+.tab{border:none;background:transparent;color:var(--text2);font-size:13px;font-weight:700;padding:11px 2px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+
+.ws-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.f-card{padding:15px}
+.f-title{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);font-weight:700;margin-bottom:11px}
+.f-row{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
+.f-row:last-child{margin-bottom:0}
+.f-lbl{font-size:11px;color:var(--text2);font-weight:600}
+input,select,textarea{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:8px 10px;font-size:13px;width:100%;outline:none}
+input:focus,select:focus,textarea:focus{border-color:#DABF7F;box-shadow:0 0 0 3px #F5EDD6}
+textarea{resize:vertical;line-height:1.55;min-height:150px}
+
+.contact-top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.contact-avatar{width:42px;height:42px;border-radius:50%;background:var(--gold-light);color:var(--gold);display:flex;align-items:center;justify-content:center;font-weight:700}
+
+.pri-row{display:flex;gap:6px}
+.pri-btn{flex:1;border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer}
+
+.ai-btn{display:inline-flex;align-items:center;gap:5px;border:none;background:var(--gold-light);color:var(--gold);border-radius:999px;padding:5px 10px;font-size:10px;font-weight:700;cursor:pointer}
+.ai-btn.loading{opacity:.6;pointer-events:none}
+.ai-box{margin-top:10px;background:var(--gold-light);border:1px solid #E8D7AD;border-radius:10px;padding:12px;font-size:12px;color:#7D641E;line-height:1.6}
+.ai-box-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+
+.doc-drop{border:1.5px dashed #D9C07A;border-radius:12px;background:#FCF8EE;padding:30px;text-align:center;cursor:pointer;transition:all .15s}
+.doc-drop:hover,.doc-drop.drag{background:#F8F0DD}
 .doc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
-.doc-card{position:relative;padding:12px;border:1px solid var(--line);background:var(--surface);border-radius:10px;box-shadow:var(--shadow);cursor:pointer}
-.doc-card:hover{border-color:var(--line-2)}
+.doc{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px;box-shadow:var(--shadow);position:relative;cursor:pointer}
 .doc-icon{font-size:28px;text-align:center;margin-bottom:8px}
-.doc-name{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.doc-meta{font-size:11px;color:var(--muted);margin-top:3px}
-.doc-del{position:absolute;right:6px;top:6px;border:1px solid #FECACA;background:#FEF2F2;color:#B91C1C;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer}
-
-.pdf-viewer{margin-bottom:12px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
-.pdf-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
-.pdf-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-meta{font-size:10px;color:var(--text3);margin-top:3px}
+.doc-del{position:absolute;top:6px;right:6px;border:1px solid #F2C7BF;background:#FDF0ED;color:#A93425;border-radius:5px;padding:2px 6px;font-size:9px;cursor:pointer;opacity:0;transition:opacity .12s}
+.doc:hover .doc-del{opacity:1}
+.pdf-wrap{background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:12px}
+.pdf-top{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border)}
+.pdf-name{font-size:12px;font-weight:700;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pdf-frame{width:100%;height:520px;border:none;background:#fff}
 
-.stage-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-.stage-pill{border:1px solid var(--line);background:var(--surface-2);color:var(--text-2);padding:6px 11px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer}
-.stage-pill.active{background:var(--accent-2);color:var(--accent);border-color:#C7D2FE}
-.progress{height:6px;background:#EEF2FF;border-radius:999px;overflow:hidden;margin-bottom:10px}
-.progress-bar{height:100%;background:var(--accent);transition:width .2s}
-.check-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer}
-.check-item:last-child{border-bottom:none}
-.check-box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--line-2);display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.check-box.done{background:var(--accent);border-color:var(--accent);color:#fff}
-.check-label{font-size:13px}
-.check-label.done{text-decoration:line-through;color:var(--muted)}
+.cl-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.cl-pill{border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:999px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.cl-pill.active{background:var(--gold-light);border-color:#E1CC94;color:var(--gold)}
+.cl-progress{height:5px;background:#F0E8D8;border-radius:999px;overflow:hidden;margin-bottom:10px}
+.cl-bar{height:100%;background:var(--gold);transition:width .2s}
+.cl-item{display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer}
+.cl-item:last-child{border-bottom:none}
+.cl-box{width:16px;height:16px;border-radius:4px;border:1.5px solid #CAB98A;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.cl-box.done{background:var(--gold);color:#fff;border-color:var(--gold)}
+.cl-lbl{font-size:13px;color:var(--text)}
+.cl-lbl.done{text-decoration:line-through;color:var(--text3)}
 
-.activity-item{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
-.activity-item:last-child{border-bottom:none}
-.activity-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);margin-top:5px;flex-shrink:0}
-.activity-text{font-size:13px;color:var(--text-2);flex:1}
-.activity-time{font-size:11px;color:var(--muted);white-space:nowrap}
-.quick-actions{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.quick-btn{border:1px solid var(--line);background:var(--surface-2);color:var(--text-2);padding:6px 10px;border-radius:999px;font-size:11px;font-weight:700;cursor:pointer}
+.timeline{display:flex;flex-direction:column}
+.t-item{display:flex;gap:9px;padding:10px 0;border-bottom:1px solid var(--border)}
+.t-item:last-child{border-bottom:none}
+.t-dot{width:8px;height:8px;border-radius:50%;background:var(--gold);margin-top:5px;flex-shrink:0}
+.t-text{font-size:12px;color:var(--text2);flex:1}
+.t-time{font-size:10px;color:var(--text3);white-space:nowrap}
+.qa-wrap{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.qa-btn{border:1px solid var(--border);background:#fff;border-radius:999px;padding:5px 9px;font-size:10px;font-weight:700;color:var(--text2);cursor:pointer}
 
-.calendar-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-.calendar-month{font-size:22px;font-weight:700}
-.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
-.day-label{font-size:11px;color:var(--muted);text-align:center;padding:4px 0;font-weight:700}
-.day-cell{min-height:86px;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px;cursor:pointer}
-.day-cell:hover{border-color:var(--line-2)}
-.day-cell.today{border-color:#A5B4FC;background:#F8FAFF}
-.day-cell.other{opacity:.45}
-.day-num{font-size:12px;color:var(--text-2);font-weight:700;margin-bottom:5px}
-.day-event{font-size:10px;padding:2px 6px;border-radius:6px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
-.day-event.type-deal{background:#EEF2FF;color:var(--accent)}
-.day-event.type-followup{background:#FEF2F2;color:#B91C1C}
-.day-event.type-google{background:#EFF6FF;color:#1D4ED8}
+/* Calendar */
+.cal-layout{display:grid;grid-template-columns:1fr 320px;gap:12px}
+.cal-main{padding:14px}
+.cal-side{padding:14px}
+.cal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.cal-month{font-size:22px;font-weight:700;color:var(--text)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.cal-dlbl{font-size:10px;color:var(--text3);text-align:center;padding:4px 0;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.cal-day{min-height:76px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:7px;cursor:pointer;transition:border-color .15s}
+.cal-day:hover{border-color:#DABF7F}
+.cal-day.today{border-color:#D4B767;background:#FFFBF1}
+.cal-day.other{opacity:.45}
+.cal-num{font-size:11px;color:var(--text2);font-weight:700;margin-bottom:4px}
+.cal-event{font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-event.type-deal{background:#F5EDD6;color:#8B6C24}
+.cal-event.type-followup{background:#FCE9E6;color:var(--red)}
+.cal-event.type-google{background:#EAF1FF;color:var(--blue)}
 
-.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:56px 24px;min-height:300px}
-.empty-icon{font-size:52px;animation:floaty 2.3s ease-in-out infinite;filter:drop-shadow(0 3px 8px rgba(79,70,229,.15))}
-.empty-title{margin-top:10px;font-size:22px;font-weight:700;color:var(--text)}
-.empty-sub{margin-top:6px;font-size:13px;color:var(--text-2);max-width:360px;line-height:1.6}
+/* Common */
+.pill{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:700}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:40px 20px;min-height:300px;text-align:center}
+.empty-ico{font-size:44px;filter:drop-shadow(0 4px 10px #E5D4A5);animation:floaty 2.5s ease-in-out infinite}
+.empty-title{font-size:20px;font-weight:700;color:var(--text)}
+.empty-sub{font-size:12px;color:var(--text2);line-height:1.6;max-width:330px}
 
-.modal{position:fixed;inset:0;background:rgba(250,250,249,.78);display:flex;align-items:center;justify-content:center;z-index:60}
-.modal-box{width:460px;max-width:92vw;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 40px rgba(0,0,0,.15);padding:22px}
-.modal-title{font-size:22px;font-weight:700;margin-bottom:14px}
-.modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.mo{position:fixed;inset:0;background:rgba(245,243,238,.78);display:flex;align-items:center;justify-content:center;z-index:60}
+.mo-box{width:460px;max-width:92vw;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 18px 36px rgba(0,0,0,.12);padding:22px}
+.mo-title{font-size:22px;font-weight:700;color:var(--text);margin-bottom:14px}
+.mo-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:15px}
 
-.status-note{font-size:12px;color:var(--text-2);padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
-.status-note.error{color:#B91C1C;background:#FEF2F2;border-color:#FECACA}
+.status-note{font-size:12px;color:var(--text2);padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff}
+.status-note.error{color:#A93425;background:#FDF0ED;border-color:#F2C7BF}
 
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 
-@media (max-width:1200px){
+@media (max-width:1280px){
+  .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid-60-40,.grid-50,.ws-grid,.cal-layout{grid-template-columns:1fr}
   .doc-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
-@media (max-width:980px){
+@media (max-width:960px){
   .app-shell{grid-template-columns:1fr}
   .sidebar{display:none}
-  .kpi-grid,.grid-2{grid-template-columns:1fr}
   .doc-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 `;
@@ -281,9 +296,9 @@ const CHECKLISTS = {
 };
 
 const PRIORITY = {
-  high:   { label: "Haute",   color: "#DC2626" },
-  medium: { label: "Moyenne", color: "#D97706" },
-  low:    { label: "Basse",   color: "#6B7280" },
+  high:   { label: "Haute",   color: "#C0392B", tag: "CHAUD", cls: "pr-hot", score: 3 },
+  medium: { label: "Moyenne", color: "#B7791F", tag: "TIÈDE", cls: "pr-warm", score: 2 },
+  low:    { label: "Basse",   color: "#2563EB", tag: "FROID", cls: "pr-cold", score: 1 },
 };
 
 function buildCL(stageId) {
@@ -318,6 +333,12 @@ function fileIco(t) {
   if (t?.includes("sheet") || t?.includes("excel")) return "📊";
   return "📎";
 }
+function initials(name, fallback = "DL") {
+  const n = (name || "").trim();
+  if (!n) return fallback;
+  const parts = n.split(/\s+/).slice(0, 2);
+  return parts.map(p => p[0]?.toUpperCase() || "").join("") || fallback;
+}
 
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const DAYS   = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"];
@@ -333,29 +354,56 @@ function calDays(y, m) {
   return days;
 }
 function dayKey({ d, m, y }) {
-  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return `${y}-${String(m + 1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+}
+
+function NavIcon({ id }) {
+  const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
+  if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
+  if (id === "followups") return <svg {...common}><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>;
+  return <svg {...common}><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/></svg>;
+}
+
+function Topbar({ title, subtitle, overdue }) {
+  return (
+    <div className="topbar">
+      <div>
+        <div className="tb-title">{title}</div>
+        {subtitle ? <div className="tb-sub">{subtitle}</div> : null}
+      </div>
+      <div className="tb-right">
+        <input className="tb-search" placeholder="Rechercher un deal, contact..." />
+        <div className="bell" title="Notifications">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
+          {overdue > 0 && <span className="bell-badge">{overdue}</span>}
+        </div>
+        <span className="tb-user">Anthony Makeen</span>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
   const stored = load();
-  const [deals, setDeals] = useState(stored?.deals || []);
+  const [deals, setDeals]         = useState(stored?.deals || []);
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
-  const [gcalOk, setGcalOk] = useState(stored?.gcalOk || false);
+  const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
   const [gcalEvents, setGcalEvents] = useState([]);
   const [gcalLoading, setGcalLoading] = useState(false);
   const [gcalError, setGcalError] = useState("");
-  const [view, setView] = useState("dashboard");
-  const [tab, setTab] = useState("crm");
-  const [modal, setModal] = useState(null);
-  const [newTitle, setNewTitle] = useState("");
-  const [clStage, setClStage] = useState("prospection");
-  const [clNew, setClNew] = useState("");
-  const [viewing, setViewing] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const [calDate, setCalDate] = useState(new Date());
-  const [newEv, setNewEv] = useState({ title:"", date:"", time:"", dealId:"" });
-  const [aiLoadD, setAiLoadD] = useState(false);
-  const [aiLoadV, setAiLoadV] = useState(false);
+  const [view, setView]           = useState("dashboard");
+  const [tab, setTab]             = useState("crm");
+  const [modal, setModal]         = useState(null);
+  const [newTitle, setNewTitle]   = useState("");
+  const [clStage, setClStage]     = useState("prospection");
+  const [clNew, setClNew]         = useState("");
+  const [viewing, setViewing]     = useState(null);
+  const [dragging, setDragging]   = useState(false);
+  const [calDate, setCalDate]     = useState(new Date());
+  const [newEv, setNewEv]         = useState({ title:"", date:"", time:"", dealId:"" });
+  const [aiLoadD, setAiLoadD]     = useState(false);
+  const [aiLoadV, setAiLoadV]     = useState(false);
   const fileRef = useRef();
 
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
@@ -370,12 +418,7 @@ export default function App() {
     upd(id, d => ({ ...d, activities: [{ id: Date.now(), text, time: Date.now() }, ...(d.activities || [])] }));
   }, [upd]);
 
-  const openDeal = (id) => {
-    setCurrentId(id);
-    setView("workspace");
-    setTab("crm");
-    setViewing(null);
-  };
+  const openDeal = (id) => { setCurrentId(id); setView("workspace"); setTab("crm"); setViewing(null); };
 
   const createDealFn = () => {
     const d = createDeal(newTitle.trim() || "Nouveau deal");
@@ -395,21 +438,14 @@ export default function App() {
 
   const setStage = (sid) => {
     if (!currentId) return;
-    upd(currentId, d => ({
-      ...d,
-      stage: sid,
-      checklists: { ...d.checklists, [sid]: d.checklists?.[sid] || buildCL(sid) }
-    }));
+    upd(currentId, d => ({ ...d, stage: sid, checklists: { ...d.checklists, [sid]: d.checklists?.[sid] || buildCL(sid) } }));
     addAct(currentId, `Étape → ${STAGES.find(s => s.id === sid)?.label}`);
     setClStage(sid);
   };
 
   const toggleCL = (sid, iid) => {
     if (!currentId) return;
-    upd(currentId, d => ({
-      ...d,
-      checklists: { ...d.checklists, [sid]: (d.checklists?.[sid] || []).map(i => i.id === iid ? { ...i, done: !i.done } : i) }
-    }));
+    upd(currentId, d => ({ ...d, checklists: { ...d.checklists, [sid]: (d.checklists?.[sid] || []).map(i => i.id === iid ? { ...i, done: !i.done } : i) } }));
   };
 
   const handleFiles = useCallback(async (list) => {
@@ -417,14 +453,7 @@ export default function App() {
     const arr = Array.from(list);
     const done = await Promise.all(arr.map(f => new Promise(res => {
       const r = new FileReader();
-      r.onload = e => res({
-        id:`f_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-        name:f.name,
-        type:f.type,
-        size:f.size,
-        dataUrl:e.target.result,
-        uploadedAt:Date.now()
-      });
+      r.onload = e => res({ id:`f_${Date.now()}_${Math.random().toString(36).slice(2,6)}`, name:f.name, type:f.type, size:f.size, dataUrl:e.target.result, uploadedAt:Date.now() });
       r.readAsDataURL(f);
     })));
     upd(currentId, d => ({ ...d, files: [...(d.files || []), ...done] }));
@@ -458,24 +487,19 @@ export default function App() {
       });
       const data = await res.json();
       const summary = data.content?.map(b => b.text || "").join("") || "Erreur API.";
-      upd(current.id, d => ({ ...d, [type === "deal" ? "aiDeal" : "aiVendeur"]: summary }));
+      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: summary }));
     } catch {
-      upd(current.id, d => ({ ...d, [type === "deal" ? "aiDeal" : "aiVendeur"]: "Erreur de connexion à l'API Claude." }));
+      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: "Erreur de connexion à l'API Claude." }));
     } finally {
       type === "deal" ? setAiLoadD(false) : setAiLoadV(false);
     }
   };
 
   const connectGoogleCalendar = useCallback(() => {
-    const clientId = "98847199802-fhl6ojdub1p3c38diqmlid95oqmfsi2o.apps.googleusercontent.com";
-    if (!clientId) {
-      setGcalError("REACT_APP_GCAL_CLIENT_ID manquant.");
-      return;
-    }
-    if (!window.google?.accounts?.oauth2) {
-      setGcalError("Google OAuth non chargé. Rafraîchissez la page.");
-      return;
-    }
+    const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
+    if (!clientId) { setGcalError("REACT_APP_GCAL_CLIENT_ID manquant."); return; }
+    if (!window.google?.accounts?.oauth2) { setGcalError("Google OAuth non chargé. Rafraîchissez la page."); return; }
+
     setGcalLoading(true);
     setGcalError("");
 
@@ -491,28 +515,25 @@ export default function App() {
         }
         try {
           const timeMin = new Date().toISOString();
-          const query = new URLSearchParams({
-            maxResults: "20",
-            orderBy: "startTime",
-            singleEvents: "true",
-            timeMin,
-          });
+          const query = new URLSearchParams({ maxResults: "20", orderBy: "startTime", singleEvents: "true", timeMin });
           const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${query.toString()}`, {
             headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
           });
           if (!res.ok) throw new Error(`Google API ${res.status}`);
           const data = await res.json();
+
           const mapped = (data.items || []).map((event) => {
             if (!event.start?.dateTime && !event.start?.date) return null;
             return {
               id: event.id,
               title: event.summary || "(Sans titre)",
               date: event.start.dateTime ? event.start.dateTime.split("T")[0] : event.start.date,
-              time: event.start.dateTime ? event.start.dateTime.split("T")[1].slice(0, 5) : "",
+              time: event.start.dateTime ? event.start.dateTime.split("T")[1].slice(0,5) : "",
               type: "google",
               dealId: null,
             };
           }).filter(Boolean);
+
           setGcalEvents(mapped);
           setGcalOk(true);
         } catch {
@@ -542,191 +563,270 @@ export default function App() {
     if (!newEv.title.trim() || !newEv.date) return;
     const did = newEv.dealId || currentId;
     if (!did) { alert("Associez l'événement à un deal."); return; }
-    const normalizedDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(newEv.date)
+
+    const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(newEv.date)
       ? newEv.date
       : new Date(newEv.date).toISOString().split("T")[0];
+
     const ev = { id:`ev_${Date.now()}`, title:newEv.title, date:normalizedDate, time:newEv.time, type:"deal" };
     setDeals(prev => prev.map(d => d.id === did ? { ...d, events: [...(d.events || []), ev], updatedAt: Date.now() } : d));
     addAct(did, `📅 Événement: ${newEv.title} le ${normalizedDate}`);
+
     if (normalizedDate) {
       const [yy, mm] = normalizedDate.split("-").map(Number);
       if (yy && mm) setCalDate(new Date(yy, mm - 1, 1));
     }
+
     setNewEv({ title:"", date:"", time:"", dealId:"" });
     setModal(null);
   };
 
   const stats = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
+    const weekAgo = Date.now() - 7 * 86400000;
     return {
       total: deals.length,
       active: deals.filter(d => d.stage !== "perdu").length,
       overdue: deals.filter(d => d.followUpDate && new Date(d.followUpDate) < today).length,
       closing: deals.filter(d => d.stage === "closing").length,
+      weekAdds: deals.filter(d => d.createdAt >= weekAgo).length,
+      prospection: deals.filter(d => d.stage === "prospection").length,
     };
   }, [deals]);
 
   const followUps = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     return deals.filter(d => d.followUpDate)
-      .map(d => ({ ...d, diff: Math.ceil((new Date(d.followUpDate) - today) / 86400000) }))
+      .map(d => ({ ...d, diff: Math.ceil((new Date(d.followUpDate)-today)/86400000) }))
       .sort((a,b) => a.diff - b.diff);
   }, [deals]);
 
   const pipeline = useMemo(() => {
-    const map = {}; STAGES.forEach(s => { map[s.id] = []; });
-    deals.forEach(d => {
-      const key = d.stage || "prospection";
-      (map[key] || map.prospection).push(d);
-    });
-    return map;
+    const m = {}; STAGES.forEach(s => { m[s.id] = []; });
+    deals.forEach(d => { const k = d.stage || "prospection"; (m[k] || m.prospection).push(d); });
+    return m;
+  }, [deals]);
+
+  const activityFeed = useMemo(() => {
+    return deals.flatMap(d => (d.activities || []).map(a => ({ ...a, dealTitle: d.title })))
+      .sort((a,b) => b.time - a.time)
+      .slice(0, 8);
+  }, [deals]);
+
+  const topOpps = useMemo(() => {
+    const scored = deals
+      .filter(d => d.stage !== "perdu")
+      .map(d => ({ ...d, score: (PRIORITY[d.priority || "medium"]?.score || 1) + (d.stage === "closing" ? 1.5 : d.stage === "financement" ? 1 : 0.5) }))
+      .sort((a,b) => b.score - a.score)
+      .slice(0, 3);
+    return scored;
   }, [deals]);
 
   const todayStr = new Date().toISOString().split("T")[0];
   const y = calDate.getFullYear();
-  const m = calDate.getMonth();
-  const days = calDays(y, m);
+  const mo = calDate.getMonth();
+  const days = calDays(y, mo);
 
   const activeCL = current?.checklists?.[clStage] || [];
-  const donePct = activeCL.length ? Math.round(activeCL.filter(i => i.done).length / activeCL.length * 100) : 0;
+  const donePct = activeCL.length ? Math.round(activeCL.filter(i=>i.done).length/activeCL.length*100) : 0;
   const stageCL = current?.checklists?.[current?.stage] || [];
-  const stagePct = stageCL.length ? Math.round(stageCL.filter(i => i.done).length / stageCL.length * 100) : 0;
+  const stagePct = stageCL.length ? Math.round(stageCL.filter(i=>i.done).length/stageCL.length*100) : 0;
+
+  const currentStageLabel = STAGES.find(s => s.id === current?.stage)?.label || "—";
 
   return (
     <>
       <style>{CSS}</style>
       <div className="app-shell">
         <aside className="sidebar">
-          <div className="sidebar-head">
-            <div className="logo">ACQUI.CRM<small>Business d'acquisition</small></div>
+          <div className="sb-head">
+            <div className="sb-logo">SOCLE</div>
+            <div className="sb-logo-sub">ACQUISITIONS</div>
+            <div className="sb-tag">Investissement Immobilier</div>
           </div>
 
-          <div className="nav">
+          <div className="sb-nav">
             {[
-              { id:"dashboard", label:"Dashboard", icon:"📊" },
-              { id:"pipeline", label:"Pipeline", icon:"🧩" },
-              { id:"followups", label:"Follow-ups", icon:"⏰", badge: stats.overdue },
-              { id:"calendar", label:"Calendrier", icon:"🗓️" },
+              { id:"dashboard", label:"Dashboard" },
+              { id:"pipeline", label:"Pipeline" },
+              { id:"followups", label:"Follow-ups" },
+              { id:"calendar", label:"Calendrier" },
             ].map(item => (
-              <button key={item.id} className={`nav-btn${view===item.id?" active":""}`} onClick={() => setView(item.id)}>
-                <span>{item.icon}</span>
+              <button key={item.id} className={`nav-item${view===item.id?" active":""}`} onClick={() => setView(item.id)}>
+                <NavIcon id={item.id} />
                 <span style={{flex:1,textAlign:"left"}}>{item.label}</span>
-                {item.badge > 0 && <span className="count-badge" style={{background:"#FEE2E2",color:"#B91C1C"}}>{item.badge}</span>}
+                {item.id === "followups" && stats.overdue > 0 && <span className="k-count" style={{background:"#FCE9E6",color:"#C0392B"}}>{stats.overdue}</span>}
               </button>
             ))}
           </div>
 
-          <div className="sidebar-sec">Deals récents</div>
+          <div className="sb-sec">Deals récents</div>
           <div className="deal-scroll">
-            {deals.length === 0 && <div className="status-note">Aucun deal encore.</div>}
+            {deals.length===0 && <div className="status-note">Aucun deal encore.</div>}
             {deals.slice(0, 30).map(d => {
               const st = STAGES.find(s => s.id === d.stage) || STAGES[0];
               return (
-                <div key={d.id} className={`deal-item${d.id===currentId && view==="workspace"?" active":""}`} onClick={() => openDeal(d.id)}>
-                  <div className="deal-title">{d.title}</div>
-                  <div className="deal-meta">
-                    <div className="dot" style={{background:st.color}} />
-                    <span className="meta-text">{st.label}</span>
+                <div key={d.id} className={`deal-row${d.id===currentId && view==="workspace"?" active":""}`} onClick={() => openDeal(d.id)}>
+                  <div className="deal-avatar" style={{background:st.color}}>{initials(d.title, "DL")}</div>
+                  <div className="deal-main">
+                    <div className="deal-title">{d.title}</div>
+                    <div className="deal-meta">
+                      <span className="stage-pill-mini" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
+                    </div>
                   </div>
-                  <div className="meta-contact">{d.contact?.name || "Aucun contact"}</div>
                 </div>
               );
             })}
           </div>
 
-          <button className="new-deal-btn" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+          <button className="new-btn" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+
+          <div className="sb-profile">
+            <div className="p-avatar">AM</div>
+            <div>
+              <div className="p-name">Anthony Makeen</div>
+              <div className="p-role">Président</div>
+            </div>
+          </div>
         </aside>
 
         <main className="main">
           {view === "dashboard" && (
             <>
-              <div className="page-head">
-                <div className="page-title">Dashboard</div>
-                <div className="page-actions">
-                  <button className="btn btn-primary" onClick={() => setModal("new")}>＋ Nouveau deal</button>
-                </div>
-              </div>
-
+              <Topbar title="Dashboard" overdue={stats.overdue} />
               <div className="content">
                 <div className="kpi-grid">
-                  <div className="card kpi-card" style={{borderTopColor:"#4F46E5"}}><div className="kpi-label">Deals total</div><div className="kpi-value">{stats.total}</div><div className="kpi-sub">{stats.active} actifs</div></div>
-                  <div className="card kpi-card" style={{borderTopColor:"#2563EB"}}><div className="kpi-label">En closing</div><div className="kpi-value">{stats.closing}</div><div className="kpi-sub">{pipeline.financement?.length || 0} en financement</div></div>
-                  <div className="card kpi-card" style={{borderTopColor:"#DC2626"}}><div className="kpi-label">Follow-ups retard</div><div className="kpi-value">{stats.overdue}</div><div className="kpi-sub">{stats.overdue===0?"Tout à jour ✓":"Action requise"}</div></div>
-                  <div className="card kpi-card" style={{borderTopColor:"#16A34A"}}><div className="kpi-label">Prospection</div><div className="kpi-value">{pipeline.prospection?.length || 0}</div><div className="kpi-sub">{pipeline.analyse?.length || 0} en analyse</div></div>
+                  <div className="card kpi">
+                    <div className="kpi-ico" style={{background:"#F5EDD6",color:"#8D742D"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.total}</div><div className="kpi-lbl">Deals Total</div><div className="kpi-sub">+{stats.weekAdds} cette semaine</div></div>
+                  </div>
+                  <div className="card kpi">
+                    <div className="kpi-ico" style={{background:"#EAF1FF",color:"#2563EB"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 12l3 3 5-5"/><path d="M3 12a9 9 0 1 1 18 0 9 9 0 0 1-18 0z"/></svg></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.closing}</div><div className="kpi-lbl">En Closing</div><div className="kpi-sub">Progression solide</div></div>
+                  </div>
+                  <div className="card kpi">
+                    <div className="kpi-ico" style={{background:"#FCE9E6",color:"#C0392B"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.overdue}</div><div className="kpi-lbl">Follow-ups Retard</div><div className="kpi-sub" style={{color:stats.overdue>0?"var(--red)":"var(--green)"}}>{stats.overdue>0?"Action requise":"Sous contrôle"}</div></div>
+                  </div>
+                  <div className="card kpi">
+                    <div className="kpi-ico" style={{background:"#EEF9F2",color:"#2D8C4E"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.prospection}</div><div className="kpi-lbl">En Prospection</div><div className="kpi-sub">Flux actif</div></div>
+                  </div>
                 </div>
 
-                <div className="card" style={{padding:14}}>
-                  <div className="section-head"><div className="section-title">Pipeline</div><button className="btn" onClick={() => setView("pipeline")}>Vue complète →</button></div>
-                  <div className="pipeline-wrap">
-                    <div className="pipeline-board">
-                      {STAGES.filter(s => s.id !== "perdu").map(s => (
-                        <div key={s.id} className="pipeline-col" style={{width:160}}>
-                          <div className="pipeline-col-head"><div className="pipeline-col-label"><div className="dot" style={{background:s.color}} />{s.label}</div><span className="count-badge">{pipeline[s.id]?.length || 0}</span></div>
+                <div className="grid-60-40">
+                  <div className="card sec">
+                    <div className="sec-head"><div className="sec-title">Pipeline des Acquisitions</div><button className="btn btn-sm" onClick={() => setView("pipeline")}>Vue complète</button></div>
+                    {STAGES.filter(s=>s.id!=="perdu").map(s => {
+                      const count = pipeline[s.id]?.length || 0;
+                      const pct = deals.length ? Math.round((count / deals.length) * 100) : 0;
+                      const value = (count * 1.35).toFixed(1);
+                      return (
+                        <div key={s.id} className="pipe-row">
+                          <div className="pipe-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
+                          <div className="pipe-bar-wrap"><div className="pipe-bar" style={{width:`${Math.max(pct,4)}%`}}/></div>
+                          <div className="pipe-m">{count} | ${value}M</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="card sec">
+                    <div className="sec-head"><div className="sec-title">Activité Récente</div></div>
+                    <div className="activity-list">
+                      {activityFeed.length===0 ? <div className="status-note">Aucune activité encore.</div> : activityFeed.map(a => (
+                        <div key={a.id} className="act-row">
+                          <div className="act-av">AM</div>
+                          <div className="act-main">
+                            <div className="act-text"><strong>{a.dealTitle}</strong> · {a.text}</div>
+                            <div className="act-time">{new Date(a.time).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                 </div>
 
-                {followUps.length > 0 && (
-                  <div className="card" style={{padding:14}}>
-                    <div className="section-head"><div className="section-title">Follow-ups</div><button className="btn" onClick={() => setView("followups")}>Voir tout →</button></div>
-                    <div className="list">
-                      {followUps.slice(0,4).map(d => {
-                        const st = STAGES.find(s => s.id === d.stage) || STAGES[0];
+                <div className="grid-50">
+                  <div className="card sec">
+                    <div className="sec-head"><div className="sec-title">Tâches à Compléter</div><button className="btn btn-sm" onClick={() => setView("followups")}>Voir tout</button></div>
+                    <div className="task-list">
+                      {followUps.slice(0,6).map(d => {
                         const isOD = d.diff < 0;
                         const isToday = d.diff === 0;
                         return (
-                          <div key={d.id} className="row-item" onClick={() => openDeal(d.id)}>
-                            <div className="row-ico">{isOD?"⚠️":isToday?"🔔":"📅"}</div>
-                            <div className="row-main"><div className="row-title">{d.title}</div><div className="row-sub">{d.followUpNote || "Suivi requis"}</div></div>
-                            <div className="row-right">
-                              <span className="pill" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
-                              <span className="row-date" style={{color:isOD?"#B91C1C":isToday?"#4F46E5":"#6B7280"}}>{isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}</span>
+                          <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
+                            <div className="task-main">
+                              <div className="task-title">{d.title}</div>
+                              <div className="task-sub">{d.followUpNote || "Suivi à compléter"}</div>
                             </div>
+                            <span className="date-badge" style={{background:isOD?"#FCE9E6":isToday?"#F5EDD6":"#F4F1E8",color:isOD?"#C0392B":isToday?"#9B7A2A":"#6B6B6B"}}>
+                              {isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}
+                            </span>
                           </div>
                         );
                       })}
+                      {followUps.length===0 && <div className="status-note">Aucun follow-up planifié.</div>}
                     </div>
                   </div>
-                )}
+
+                  <div className="card sec">
+                    <div className="sec-head"><div className="sec-title">Top Opportunités</div></div>
+                    <div className="opp-list">
+                      {topOpps.map(d => {
+                        const pr = PRIORITY[d.priority || "medium"];
+                        return (
+                          <div key={d.id} className="opp" onClick={() => openDeal(d.id)}>
+                            <div className="opp-l">
+                              <div className="opp-title">{d.title}</div>
+                              <div className="opp-sub">{STAGES.find(s=>s.id===d.stage)?.label || "Prospection"}</div>
+                            </div>
+                            <span className={pr.cls}>{pr.tag}</span>
+                          </div>
+                        );
+                      })}
+                      {topOpps.length===0 && <div className="status-note">Ajoutez des deals pour voir les opportunités.</div>}
+                    </div>
+                  </div>
+                </div>
               </div>
             </>
           )}
 
           {view === "pipeline" && (
             <>
-              <div className="page-head">
-                <div className="page-title">Pipeline</div>
-                <div className="page-actions"><button className="btn btn-primary" onClick={() => setModal("new")}>＋ Nouveau deal</button></div>
-              </div>
+              <Topbar title="Pipeline" overdue={stats.overdue} />
               <div className="content">
-                <div className="pipeline-wrap">
-                  <div className="pipeline-board">
+                <div className="kanban-wrap">
+                  <div className="kanban">
                     {STAGES.map(s => {
                       const col = pipeline[s.id] || [];
                       return (
-                        <div key={s.id} className="pipeline-col" style={{borderTop:`3px solid ${s.color}`}}>
-                          <div className="pipeline-col-head">
-                            <div className="pipeline-col-label"><div className="dot" style={{background:s.color}} />{s.label}</div>
-                            <span className="count-badge">{col.length}</span>
+                        <div key={s.id} className="k-col">
+                          <div className="k-hd">
+                            <div className="k-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
+                            <span className="k-count">{col.length}</span>
                           </div>
-                          {col.length === 0 && <div className="empty-col">Vide</div>}
+                          {col.length===0 && <div className="k-empty">Aucun deal</div>}
                           {col.map(d => {
                             const today = new Date(); today.setHours(0,0,0,0);
-                            const diff = d.followUpDate ? Math.ceil((new Date(d.followUpDate) - today) / 86400000) : null;
+                            const diff = d.followUpDate ? Math.ceil((new Date(d.followUpDate)-today)/86400000) : null;
                             const isOD = d.followUpDate && new Date(d.followUpDate) < today;
                             const cl = d.checklists?.[d.stage] || [];
-                            const clPct = cl.length ? Math.round(cl.filter(i => i.done).length / cl.length * 100) : null;
+                            const clPct = cl.length ? Math.round(cl.filter(i=>i.done).length/cl.length*100) : 0;
+                            const pr = PRIORITY[d.priority || "medium"];
                             return (
-                              <div key={d.id} className="pipeline-card" onClick={() => openDeal(d.id)}>
-                                <div className="pipeline-title">{d.title}</div>
-                                <div className="pipeline-field"><span>Contact</span><span>{d.contact?.name || "—"}</span></div>
-                                {d.followUpDate && <div className="pipeline-field"><span>Suivi</span><span style={{color:isOD?"#B91C1C":"#6B7280"}}>{isOD?`⚠ ${Math.abs(diff)}j` : d.followUpDate}</span></div>}
-                                <div className="pipeline-foot">
-                                  <span className="pill" style={{background:PRIORITY[d.priority||"medium"].color+"22",color:PRIORITY[d.priority||"medium"].color}}>{PRIORITY[d.priority||"medium"].label}</span>
-                                  {clPct !== null && <span className="pill" style={{background:"#F3F4F6",color:"#6B7280"}}>✓ {clPct}%</span>}
-                                  {(d.files || []).length > 0 && <span className="pill" style={{background:"#F3F4F6",color:"#6B7280"}}>📎 {d.files.length}</span>}
+                              <div key={d.id} className="k-card" onClick={() => openDeal(d.id)}>
+                                <div className="k-title">{d.title}</div>
+                                <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || "Contact à définir"}</span></div>
+                                <div className="k-price">Prix: À valider</div>
+                                {d.followUpDate && <div className="k-row"><span className="k-mk">Suivi</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
+                                <div className="k-row"><span className="k-mk">Documents</span><span className="k-mv">{(d.files||[]).length}</span></div>
+                                <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
+                                <div className="k-foot">
+                                  <span className={pr.cls}>{pr.tag}</span>
+                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>Checklist {clPct}%</span>
+                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>📎 {(d.files||[]).length}</span>
                                 </div>
                               </div>
                             );
@@ -742,86 +842,31 @@ export default function App() {
 
           {view === "followups" && (
             <>
-              <div className="page-head"><div className="page-title">Follow-ups</div></div>
+              <Topbar title="Follow-ups" overdue={stats.overdue} />
               <div className="content">
-                {followUps.length === 0 ? (
-                  <div className="empty card">
-                    <div className="empty-icon">📅</div>
+                {followUps.length===0 ? (
+                  <div className="card empty">
+                    <div className="empty-ico">📅</div>
                     <div className="empty-title">Aucun Follow-up</div>
                     <div className="empty-sub">Ajoutez une date de suivi dans l'onglet CRM d'un deal.</div>
                   </div>
                 ) : (
-                  <div className="list">
-                    {followUps.map(d => {
-                      const st = STAGES.find(s => s.id === d.stage) || STAGES[0];
-                      const isOD = d.diff < 0;
-                      const isToday = d.diff === 0;
-                      return (
-                        <div key={d.id} className="row-item" onClick={() => openDeal(d.id)}>
-                          <div className="row-ico">{isOD?"⚠️":isToday?"🔔":"📅"}</div>
-                          <div className="row-main"><div className="row-title">{d.title}</div><div className="row-sub">{d.followUpNote || "Suivi requis"}{d.contact?.name?` · ${d.contact.name}`:""}</div></div>
-                          <div className="row-right">
-                            <span className="pill" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
-                            <span className="row-date" style={{color:isOD?"#B91C1C":isToday?"#4F46E5":"#6B7280"}}>{isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-
-          {view === "calendar" && (
-            <>
-              <div className="page-head">
-                <div className="page-title">Calendrier</div>
-                <div className="page-actions">
-                  <button className="btn" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?"⏳ Connexion...":gcalOk?"🔄 Actualiser Google":"🔗 Google Calendar"}</button>
-                  {gcalOk && !gcalLoading && <span style={{fontSize:12,color:"#16A34A",fontWeight:700}}>● Google connecté</span>}
-                  <button className="btn btn-primary" onClick={() => setModal("event")}>＋ Événement</button>
-                </div>
-              </div>
-              <div className="content">
-                {gcalLoading && <div className="status-note">Chargement des événements Google Calendar…</div>}
-                {gcalError && <div className="status-note error">{gcalError}</div>}
-
-                <div className="card" style={{padding:14}}>
-                  <div className="calendar-head">
-                    <button className="btn" onClick={() => setCalDate(new Date(y, m - 1, 1))}>‹</button>
-                    <div className="calendar-month">{MONTHS[m]} {y}</div>
-                    <button className="btn" onClick={() => setCalDate(new Date(y, m + 1, 1))}>›</button>
-                  </div>
-
-                  <div className="calendar-grid">
-                    {DAYS.map(d => <div key={d} className="day-label">{d}</div>)}
-                    {days.map((d, i) => {
-                      const k = dayKey(d);
-                      const evs = allEvents.filter(e => e.date === k);
-                      return (
-                        <div key={i} className={`day-cell${k===todayStr?" today":""}${d.other?" other":""}`} onClick={() => { setNewEv(n => ({ ...n, date:k })); setModal("event"); }}>
-                          <div className="day-num">{d.d}</div>
-                          {evs.slice(0,2).map(ev => <div key={ev.id} className={`day-event type-${ev.type}`} title={ev.title}>{ev.title}</div>)}
-                          {evs.length > 2 && <div style={{fontSize:10,color:"#9CA3AF"}}>+{evs.length - 2}</div>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {allEvents.filter(e => e.date >= todayStr).length > 0 && (
-                  <div className="card" style={{padding:14}}>
-                    <div className="section-head"><div className="section-title">Prochains événements</div></div>
-                    <div className="list">
-                      {allEvents.filter(e => e.date >= todayStr).sort((a,b) => a.date.localeCompare(b.date)).slice(0,8).map(ev => {
-                        const deal = deals.find(d => d.id === ev.dealId);
-                        const diff = Math.ceil((new Date(ev.date) - new Date(todayStr)) / 86400000);
+                  <div className="card sec">
+                    <div className="task-list">
+                      {followUps.map(d => {
+                        const st = STAGES.find(s=>s.id===d.stage) || STAGES[0];
+                        const isOD = d.diff < 0;
+                        const isToday = d.diff === 0;
                         return (
-                          <div key={ev.id} className="row-item" onClick={() => ev.dealId && openDeal(ev.dealId)}>
-                            <div className="row-ico">{ev.type==="followup"?"🔔":ev.type==="google"?"🗓️":"📅"}</div>
-                            <div className="row-main"><div className="row-title">{ev.title}</div><div className="row-sub">{deal?.title || ""}{ev.time ? ` · ${ev.time}` : ""}</div></div>
-                            <div className="row-date" style={{color:diff===0?"#4F46E5":"#6B7280"}}>{diff===0?"Aujourd'hui":`Dans ${diff}j`}</div>
+                          <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
+                            <div className="task-main">
+                              <div className="task-title">{d.title}</div>
+                              <div className="task-sub">{d.followUpNote || "Suivi requis"}{d.contact?.name ? ` · ${d.contact.name}` : ""}</div>
+                            </div>
+                            <span className="pill" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
+                            <span className="date-badge" style={{background:isOD?"#FCE9E6":isToday?"#F5EDD6":"#F4F1E8",color:isOD?"#C0392B":isToday?"#9B7A2A":"#6B6B6B"}}>
+                              {isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}
+                            </span>
                           </div>
                         );
                       })}
@@ -832,198 +877,267 @@ export default function App() {
             </>
           )}
 
-          {view === "workspace" && (
-            !current ? (
+          {view === "calendar" && (
+            <>
+              <Topbar title="Calendrier" overdue={stats.overdue} />
               <div className="content">
-                <div className="empty card">
-                  <div className="empty-icon">🏠</div>
-                  <div className="empty-title">Aucun deal</div>
-                  <div className="empty-sub">Sélectionnez un deal dans la barre de gauche.</div>
-                  <button className="btn btn-primary" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <button className="btn btn-gold" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?"Connexion...":gcalOk?"Actualiser Google Calendar":"Connecter Google Calendar"}</button>
+                  {gcalOk && !gcalLoading && <span className="status-note">Google Calendar connecté</span>}
+                  <button className="btn" onClick={() => setModal("event")}>＋ Événement</button>
                 </div>
-              </div>
-            ) : (
-              <>
-                <div className="page-head">
-                  <div style={{minWidth:0,flex:1}}><input className="workspace-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} /></div>
-                  <div className="page-actions">
-                    <span style={{fontSize:11,color:"#9CA3AF",fontWeight:600}}>{new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
-                    <button className="btn" onClick={() => setModal("event")}>＋ Événement</button>
-                    <button className="btn btn-danger" onClick={() => deleteDeal(current.id)}>Supprimer</button>
-                  </div>
-                </div>
+                {gcalLoading && <div className="status-note">Chargement des événements Google Calendar…</div>}
+                {gcalError && <div className="status-note error">{gcalError}</div>}
 
-                <div className="content">
-                  <div className="stage-progress">
-                    <div className="stage-track">
-                      {STAGES.map(s => (
-                        <button key={s.id} className={`stage-chip${current.stage===s.id?" active":""}`} onClick={() => setStage(s.id)}>
-                          {s.emoji} {s.label}
-                        </button>
-                      ))}
+                <div className="cal-layout">
+                  <div className="card cal-main">
+                    <div className="cal-hd">
+                      <button className="btn btn-sm" onClick={() => setCalDate(new Date(y, mo-1, 1))}>‹</button>
+                      <div className="cal-month">{MONTHS[mo]} {y}</div>
+                      <button className="btn btn-sm" onClick={() => setCalDate(new Date(y, mo+1, 1))}>›</button>
+                    </div>
+                    <div className="cal-grid">
+                      {DAYS.map(d => <div key={d} className="cal-dlbl">{d}</div>)}
+                      {days.map((d,i) => {
+                        const k = dayKey(d);
+                        const evs = allEvents.filter(e => e.date === k);
+                        return (
+                          <div key={i} className={`cal-day${k===todayStr?" today":""}${d.other?" other":""}`} onClick={() => { setNewEv(n => ({ ...n, date:k })); setModal("event"); }}>
+                            <div className="cal-num">{d.d}</div>
+                            {evs.slice(0,2).map(ev => <div key={ev.id} className={`cal-event type-${ev.type}`} title={ev.title}>{ev.title}</div>)}
+                            {evs.length>2 && <div style={{fontSize:9,color:"var(--text3)"}}>+{evs.length-2}</div>}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  <div className="tabbar">
-                    {[
-                      ["crm", "CRM"],
-                      ["notes", "Notes"],
-                      ["documents", `Documents${(current.files || []).length > 0 ? ` (${current.files.length})` : ""}`],
-                      ["checklist", `Checklist${stageCL.length > 0 ? ` ${stagePct}%` : ""}`],
-                      ["activity", "Activité"],
-                    ].map(([id, label]) => (
-                      <button key={id} className={`tab-btn${tab===id?" active":""}`} onClick={() => setTab(id)}>{label}</button>
+                  <div className="card cal-side">
+                    <div className="sec-head"><div className="sec-title">Prochains Événements</div></div>
+                    <div className="task-list">
+                      {allEvents.filter(e=>e.date>=todayStr).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,10).map(ev => {
+                        const deal = deals.find(d => d.id === ev.dealId);
+                        const diff = Math.ceil((new Date(ev.date)-new Date(todayStr))/86400000);
+                        return (
+                          <div key={ev.id} className="task" onClick={() => ev.dealId && openDeal(ev.dealId)}>
+                            <div className="task-main">
+                              <div className="task-title">{ev.title}</div>
+                              <div className="task-sub">{deal?.title || "Google Calendar"}{ev.time ? ` · ${ev.time}` : ""}</div>
+                            </div>
+                            <span className="date-badge" style={{background:diff===0?"#F5EDD6":"#F4F1E8",color:diff===0?"#9B7A2A":"#6B6B6B"}}>{diff===0?"Aujourd'hui":`Dans ${diff}j`}</span>
+                          </div>
+                        );
+                      })}
+                      {allEvents.filter(e=>e.date>=todayStr).length===0 && <div className="status-note">Aucun événement à venir.</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {view === "workspace" && (
+            !current ? (
+              <>
+                <Topbar title="Workspace" subtitle="Sélectionnez un deal" overdue={stats.overdue} />
+                <div className="content">
+                  <div className="card empty">
+                    <div className="empty-ico">🏠</div>
+                    <div className="empty-title">Aucun Deal</div>
+                    <div className="empty-sub">Sélectionnez un deal dans la barre de gauche pour commencer.</div>
+                    <button className="btn btn-gold" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <Topbar title="Workspace" subtitle={`${currentStageLabel} • ${current.contact?.company || "Adresse à compléter"}`} overdue={stats.overdue} />
+                <div className="content">
+                  <div className="ws-head">
+                    <div style={{minWidth:0,flex:1}}>
+                      <input className="ws-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} />
+                      <div className="ws-addr">{current.contact?.company || "Adresse / secteur à renseigner"}</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span className="stage-crumb">Mis à jour le {new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
+                      <button className="btn btn-sm" onClick={() => setModal("event")}>＋ Événement</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => deleteDeal(current.id)}>Supprimer</button>
+                    </div>
+                  </div>
+
+                  <div className="stage-wrap">
+                    <div className="stage-track">
+                      {STAGES.map(s => {
+                        const cl = current.checklists?.[s.id] || [];
+                        const pct = cl.length ? Math.round(cl.filter(i=>i.done).length/cl.length*100) : null;
+                        return (
+                          <button key={s.id} className={`stage-btn${current.stage===s.id?" active":""}`} onClick={() => setStage(s.id)}>
+                            {s.emoji} {s.label}{pct!==null && current.stage!==s.id ? ` ${pct}%` : ""}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="tabs">
+                    {[ ["crm","CRM & Suivi"], ["notes","Notes"], ["documents",`Documents${(current.files||[]).length>0?` (${current.files.length})`:""}`], ["checklist",`Checklist${stageCL.length>0?` ${stagePct}%`:""}`], ["activity","Activité"] ].map(([id,label]) => (
+                      <button key={id} className={`tab${tab===id?" active":""}`} onClick={() => setTab(id)}>{label}</button>
                     ))}
                   </div>
 
                   {tab === "crm" && (
-                    <div className="grid-2">
-                      <div className="card form-card">
-                        <div className="form-title">Contact (vendeur / courtier)</div>
-                        {[ ["name","Nom"], ["phone","Téléphone"], ["email","Email"], ["company","Compagnie"], ["role","Rôle"] ].map(([k, lbl]) => (
-                          <div key={k} className="field">
-                            <div className="label">{lbl}</div>
-                            <input value={current.contact?.[k] || ""} onChange={e => upd(current.id, d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} />
+                    <>
+                      <div className="ws-grid">
+                        <div className="card f-card">
+                          <div className="f-title">Contact (vendeur / courtier)</div>
+                          <div className="contact-top">
+                            <div className="contact-avatar">{initials(current.contact?.name, "CT")}</div>
+                            <div>
+                              <div style={{fontSize:14,fontWeight:700,color:"var(--text)"}}>{current.contact?.name || "Contact principal"}</div>
+                              <div style={{fontSize:11,color:"var(--text3)"}}>{current.contact?.role || "Rôle à définir"}</div>
+                            </div>
                           </div>
-                        ))}
-                      </div>
-
-                      <div className="card form-card">
-                        <div className="form-title">Suivi & Priorité</div>
-                        <div className="field">
-                          <div className="label">Priorité</div>
-                          <div className="priority-row">
-                            {Object.entries(PRIORITY).map(([k,{label,color}]) => (
-                              <button key={k} className="priority-btn" style={current.priority===k?{background:color+"1A",borderColor:color,color}:undefined} onClick={() => upd(current.id, d => ({ ...d, priority:k }))}>{label}</button>
-                            ))}
-                          </div>
+                          {[ ["name","Nom"], ["phone","Téléphone"], ["email","Email"], ["company","Compagnie"], ["role","Rôle"] ].map(([k,lbl]) => (
+                            <div key={k} className="f-row"><div className="f-lbl">{lbl}</div><input value={current.contact?.[k] || ""} onChange={e => upd(current.id,d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} /></div>
+                          ))}
                         </div>
-                        <div className="field"><div className="label">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id, d => ({ ...d, followUpDate:e.target.value }))} /></div>
-                        <div className="field"><div className="label">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id, d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
-                        <div className="field"><div className="label">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id, d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
+
+                        <div className="card f-card">
+                          <div className="f-title">Suivi & Priorité</div>
+                          <div className="f-row">
+                            <div className="f-lbl">Priorité</div>
+                            <div className="pri-row">
+                              {Object.entries(PRIORITY).map(([k,{label,color}]) => (
+                                <button key={k} className="pri-btn" style={current.priority===k?{background:color+"18",borderColor:color,color}:undefined} onClick={() => upd(current.id,d => ({ ...d, priority:k }))}>{label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
+                          <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
+                          <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
+                        </div>
                       </div>
 
-                      <div className="card form-card" style={{gridColumn:"1 / -1"}}>
-                        <div className="form-title">Enregistrer une activité</div>
+                      <div className="card f-card">
+                        <div className="f-title">Enregistrer une activité</div>
                         <ActivityLogger dealId={current.id} onLog={addAct} />
                       </div>
-                    </div>
+                    </>
                   )}
 
                   {tab === "notes" && (
-                    <div className="grid-2">
-                      <div className="card form-card">
+                    <div className="ws-grid">
+                      <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="form-title" style={{marginBottom:0}}>Notes deal</div>
-                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?"⏳ Analyse…":"✦ Résumer avec IA"}</button>
+                          <div className="f-title" style={{marginBottom:0}}>Notes deal</div>
+                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?"Analyse...":"✦ IA"}</button>
                         </div>
-                        <textarea value={current.notesDeal || ""} onChange={e => upd(current.id, d => ({ ...d, notesDeal:e.target.value }))} placeholder="Prix demandé, état général, potentiel, quartier, historique, stratégie…" />
-                        {current.aiDeal && <div className="ai-box"><div className="ai-label">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn" style={{marginTop:10}} onClick={() => upd(current.id, d => ({ ...d, aiDeal:"" }))}>Effacer</button></div>}
+                        <textarea value={current.notesDeal || ""} onChange={e => upd(current.id,d => ({ ...d, notesDeal:e.target.value }))} placeholder="Prix demandé, état général, potentiel, quartier, historique, stratégie…" />
+                        {current.aiDeal && <div className="ai-box"><div className="ai-box-lbl">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiDeal:"" }))}>Effacer</button></div>}
                       </div>
 
-                      <div className="card form-card">
+                      <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="form-title" style={{marginBottom:0}}>Notes vendeur</div>
-                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?"⏳ Analyse…":"✦ Résumer avec IA"}</button>
+                          <div className="f-title" style={{marginBottom:0}}>Notes vendeur</div>
+                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?"Analyse...":"✦ IA"}</button>
                         </div>
-                        <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id, d => ({ ...d, notesVendeur:e.target.value }))} placeholder="Motivation du vendeur, délai, flexibilité prix, points sensibles, style de négociation…" />
-                        {current.aiVendeur && <div className="ai-box"><div className="ai-label">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn" style={{marginTop:10}} onClick={() => upd(current.id, d => ({ ...d, aiVendeur:"" }))}>Effacer</button></div>}
+                        <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id,d => ({ ...d, notesVendeur:e.target.value }))} placeholder="Motivation du vendeur, délai, flexibilité prix, points sensibles, style de négociation…" />
+                        {current.aiVendeur && <div className="ai-box"><div className="ai-box-lbl">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiVendeur:"" }))}>Effacer</button></div>}
                       </div>
                     </div>
                   )}
 
                   {tab === "documents" && (
-                    <div>
+                    <>
                       {viewing && (
-                        <div className="pdf-viewer">
-                          <div className="pdf-bar">
+                        <div className="pdf-wrap">
+                          <div className="pdf-top">
                             <div className="pdf-name">📄 {viewing.name}</div>
                             <div style={{display:"flex",gap:8}}>
-                              <a href={viewing.dataUrl} download={viewing.name}><button className="btn">⬇ Télécharger</button></a>
-                              <button className="btn" onClick={() => setViewing(null)}>✕ Fermer</button>
+                              <a href={viewing.dataUrl} download={viewing.name}><button className="btn btn-sm">Télécharger</button></a>
+                              <button className="btn btn-sm" onClick={() => setViewing(null)}>Fermer</button>
                             </div>
                           </div>
                           {viewing.type?.includes("pdf")
                             ? <iframe src={viewing.dataUrl} className="pdf-frame" title={viewing.name} />
                             : viewing.type?.includes("image")
                             ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:520,display:"block",margin:"0 auto",objectFit:"contain",background:"#fff"}} />
-                            : <div style={{padding:20,fontSize:13,color:"#6B7280"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"#4F46E5"}}>Télécharger le fichier</a></div>
+                            : <div style={{padding:20,fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
                           }
                         </div>
                       )}
 
                       <div className={`doc-drop${dragging?" drag":""}`}
-                        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                        onDragOver={e => {e.preventDefault();setDragging(true);}}
                         onDragLeave={() => setDragging(false)}
-                        onDrop={e => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
+                        onDrop={e => {e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}
                         onClick={() => fileRef.current?.click()}>
                         <div style={{fontSize:30,marginBottom:8}}>📁</div>
-                        <div style={{fontSize:14,fontWeight:700,color:"#111827"}}>Glissez vos fichiers ici ou cliquez pour sélectionner</div>
-                        <div style={{fontSize:12,color:"#6B7280",marginTop:3}}>PDF, images, Word, Excel — tous formats acceptés</div>
+                        <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>Glissez vos fichiers ici ou cliquez pour sélectionner</div>
+                        <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>PDF, images, Word, Excel — tous formats acceptés</div>
                         <input ref={fileRef} type="file" multiple style={{display:"none"}} onChange={e => handleFiles(e.target.files)} />
                       </div>
 
-                      {(current.files || []).length > 0 && (
+                      {(current.files||[]).length>0 && (
                         <div className="doc-grid">
                           {current.files.map(f => (
-                            <div key={f.id} className="doc-card" onClick={() => setViewing(f)}>
+                            <div key={f.id} className="doc" onClick={() => setViewing(f)}>
                               <div className="doc-icon">{fileIco(f.type)}</div>
                               <div className="doc-name" title={f.name}>{f.name}</div>
                               <div className="doc-meta">{fmtSz(f.size)} · {new Date(f.uploadedAt).toLocaleDateString("fr-CA")}</div>
-                              <button className="doc-del" onClick={e => { e.stopPropagation(); delFile(f.id); }}>✕</button>
+                              <button className="doc-del" onClick={e => {e.stopPropagation();delFile(f.id);}}>✕</button>
                             </div>
                           ))}
                         </div>
                       )}
 
-                      {(current.files || []).length === 0 && !viewing && <div className="status-note" style={{marginTop:10}}>Aucun document pour ce deal.</div>}
-                    </div>
+                      {(current.files||[]).length===0 && !viewing && <div className="status-note">Aucun document pour ce deal.</div>}
+                    </>
                   )}
 
                   {tab === "checklist" && (
-                    <div className="card form-card">
-                      <div className="form-title">Checklist par étape</div>
-
-                      <div className="stage-pills">
+                    <div className="card f-card">
+                      <div className="f-title">Checklist par étape</div>
+                      <div className="cl-pills">
                         {STAGES.map(s => {
                           const cl = current.checklists?.[s.id] || [];
-                          const pct = cl.length ? Math.round(cl.filter(i => i.done).length / cl.length * 100) : null;
+                          const pct = cl.length ? Math.round(cl.filter(i=>i.done).length/cl.length*100) : null;
                           return (
-                            <button key={s.id} className={`stage-pill${clStage===s.id?" active":""}`} onClick={() => {
+                            <button key={s.id} className={`cl-pill${clStage===s.id?" active":""}`} onClick={() => {
                               setClStage(s.id);
-                              if (!current.checklists?.[s.id]) upd(current.id, d => ({ ...d, checklists:{ ...d.checklists, [s.id]:buildCL(s.id) } }));
-                            }}>{s.label}{pct!==null?` ${pct}%`:""}</button>
+                              if (!current.checklists?.[s.id]) upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [s.id]:buildCL(s.id) } }));
+                            }}>{s.label}{pct!==null ? ` ${pct}%` : ""}</button>
                           );
                         })}
                       </div>
 
-                      {activeCL.length > 0 && (
+                      {activeCL.length>0 && (
                         <>
-                          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#6B7280",marginBottom:4,fontWeight:600}}>
-                            <span>{activeCL.filter(i => i.done).length} / {activeCL.length}</span>
-                            <span>{donePct}%</span>
+                          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--text3)",marginBottom:4,fontWeight:700}}>
+                            <span>{activeCL.filter(i=>i.done).length} / {activeCL.length}</span><span>{donePct}%</span>
                           </div>
-                          <div className="progress"><div className="progress-bar" style={{width:`${donePct}%`}} /></div>
+                          <div className="cl-progress"><div className="cl-bar" style={{width:`${donePct}%`}}/></div>
                         </>
                       )}
 
                       {activeCL.map(item => (
-                        <div key={item.id} className="check-item" onClick={() => toggleCL(clStage, item.id)}>
-                          <div className={`check-box${item.done?" done":""}`}>{item.done && "✓"}</div>
-                          <span className={`check-label${item.done?" done":""}`}>{item.label}</span>
+                        <div key={item.id} className="cl-item" onClick={() => toggleCL(clStage,item.id)}>
+                          <div className={`cl-box${item.done?" done":""}`}>{item.done ? "✓" : ""}</div>
+                          <span className={`cl-lbl${item.done?" done":""}`}>{item.label}</span>
                         </div>
                       ))}
 
                       <div style={{display:"flex",gap:8,marginTop:10}}>
-                        <input value={clNew} onChange={e => setClNew(e.target.value)} placeholder="Ajouter un item…" onKeyDown={e => {
-                          if (e.key === "Enter" && clNew.trim()) {
-                            upd(current.id, d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage] || []), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
-                            setClNew("");
-                          }
-                        }} />
-                        <button className="btn btn-primary" onClick={() => {
+                        <input value={clNew} onChange={e => setClNew(e.target.value)} placeholder="Ajouter un item…"
+                          onKeyDown={e => {
+                            if (e.key==="Enter" && clNew.trim()) {
+                              upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage]||[]), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
+                              setClNew("");
+                            }
+                          }} />
+                        <button className="btn btn-gold" onClick={() => {
                           if (clNew.trim()) {
-                            upd(current.id, d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage] || []), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
+                            upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage]||[]), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
                             setClNew("");
                           }
                         }}>Ajouter</button>
@@ -1033,22 +1147,22 @@ export default function App() {
 
                   {tab === "activity" && (
                     <>
-                      <div className="card form-card">
-                        <div className="form-title">Enregistrer une activité</div>
+                      <div className="card f-card">
+                        <div className="f-title">Enregistrer une activité</div>
                         <ActivityLogger dealId={current.id} onLog={addAct} />
                       </div>
-
-                      <div className="card form-card">
-                        <div className="form-title">Historique</div>
-                        {(!current.activities || current.activities.length === 0)
+                      <div className="card f-card">
+                        <div className="f-title">Historique</div>
+                        {(!current.activities || current.activities.length===0)
                           ? <div className="status-note">Aucune activité encore.</div>
-                          : current.activities.map(a => (
-                            <div key={a.id} className="activity-item">
-                              <div className="activity-dot" />
-                              <div className="activity-text">{a.text}</div>
-                              <div className="activity-time">{new Date(a.time).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}</div>
-                            </div>
-                          ))}
+                          : <div className="timeline">{current.activities.map(a => (
+                              <div key={a.id} className="t-item">
+                                <div className="t-dot"/>
+                                <div className="t-text">{a.text}</div>
+                                <div className="t-time">{new Date(a.time).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
+                              </div>
+                            ))}</div>
+                        }
                       </div>
                     </>
                   )}
@@ -1060,38 +1174,38 @@ export default function App() {
       </div>
 
       {modal === "new" && (
-        <div className="modal" onClick={() => setModal(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Nouveau deal</div>
-            <div className="field">
-              <div className="label">Nom / Adresse de la propriété</div>
+        <div className="mo" onClick={() => setModal(null)}>
+          <div className="mo-box" onClick={e => e.stopPropagation()}>
+            <div className="mo-title">Nouveau deal</div>
+            <div className="f-row">
+              <div className="f-lbl">Nom / Adresse de la propriété</div>
               <input autoFocus value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu" onKeyDown={e => e.key === "Enter" && createDealFn()} />
             </div>
-            <div className="modal-foot">
+            <div className="mo-foot">
               <button className="btn" onClick={() => setModal(null)}>Annuler</button>
-              <button className="btn btn-primary" onClick={createDealFn}>Créer le deal</button>
+              <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
             </div>
           </div>
         </div>
       )}
 
       {modal === "event" && (
-        <div className="modal" onClick={() => setModal(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Nouvel événement</div>
-            <div className="field"><div className="label">Titre</div><input autoFocus value={newEv.title} onChange={e => setNewEv(n => ({ ...n, title:e.target.value }))} placeholder="Ex: Inspection 320 rue Bouchard" /></div>
-            <div className="field"><div className="label">Date</div><input type="date" value={newEv.date} onChange={e => setNewEv(n => ({ ...n, date:e.target.value }))} /></div>
-            <div className="field"><div className="label">Heure (optionnel)</div><input type="time" value={newEv.time} onChange={e => setNewEv(n => ({ ...n, time:e.target.value }))} /></div>
-            <div className="field">
-              <div className="label">Associer à un deal</div>
+        <div className="mo" onClick={() => setModal(null)}>
+          <div className="mo-box" onClick={e => e.stopPropagation()}>
+            <div className="mo-title">Nouvel événement</div>
+            <div className="f-row"><div className="f-lbl">Titre</div><input autoFocus value={newEv.title} onChange={e => setNewEv(n => ({ ...n, title:e.target.value }))} placeholder="Ex: Inspection 320 rue Bouchard"/></div>
+            <div className="f-row"><div className="f-lbl">Date</div><input type="date" value={newEv.date} onChange={e => setNewEv(n => ({ ...n, date:e.target.value }))}/></div>
+            <div className="f-row"><div className="f-lbl">Heure (optionnel)</div><input type="time" value={newEv.time} onChange={e => setNewEv(n => ({ ...n, time:e.target.value }))}/></div>
+            <div className="f-row">
+              <div className="f-lbl">Associer à un deal</div>
               <select value={newEv.dealId || currentId || ""} onChange={e => setNewEv(n => ({ ...n, dealId:e.target.value }))}>
                 <option value="">— Sélectionner —</option>
                 {deals.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
               </select>
             </div>
-            <div className="modal-foot">
+            <div className="mo-foot">
               <button className="btn" onClick={() => setModal(null)}>Annuler</button>
-              <button className="btn btn-primary" onClick={addEvent}>Créer</button>
+              <button className="btn btn-gold" onClick={addEvent}>Créer</button>
             </div>
           </div>
         </div>
@@ -1102,35 +1216,17 @@ export default function App() {
 
 function ActivityLogger({ dealId, onLog }) {
   const [text, setText] = useState("");
-  const QUICK = [
-    "📞 Appel effectué",
-    "📧 Email envoyé",
-    "🤝 Rencontre faite",
-    "💰 Offre déposée",
-    "📋 Documents reçus",
-    "🔍 Inspection faite",
-    "🏦 Dossier financier soumis",
-    "✅ Condition levée",
-  ];
+  const QUICK = ["📞 Appel effectué","📧 Email envoyé","🤝 Rencontre faite","💰 Offre déposée","📋 Documents reçus","🔍 Inspection faite","🏦 Dossier financier soumis","✅ Condition levée"];
 
   return (
     <div>
-      <div className="quick-actions">
-        {QUICK.map(q => <button key={q} className="quick-btn" onClick={() => onLog(dealId, q)}>{q}</button>)}
+      <div className="qa-wrap">
+        {QUICK.map(q => <button key={q} className="qa-btn" onClick={() => onLog(dealId, q)}>{q}</button>)}
       </div>
       <div style={{display:"flex",gap:8}}>
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="Note personnalisée…" onKeyDown={e => {
-          if (e.key === "Enter" && text.trim()) {
-            onLog(dealId, text.trim());
-            setText("");
-          }
-        }} />
-        <button className="btn btn-primary" onClick={() => {
-          if (text.trim()) {
-            onLog(dealId, text.trim());
-            setText("");
-          }
-        }}>Log</button>
+        <input value={text} onChange={e => setText(e.target.value)} placeholder="Note personnalisée…"
+          onKeyDown={e => { if (e.key === "Enter" && text.trim()) { onLog(dealId,text.trim()); setText(""); } }} />
+        <button className="btn btn-gold" onClick={() => { if (text.trim()) { onLog(dealId,text.trim()); setText(""); } }}>Log</button>
       </div>
     </div>
   );
