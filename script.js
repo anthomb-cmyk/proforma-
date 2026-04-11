@@ -419,22 +419,22 @@ function renderTranslatorQualificationPanel() {
   const status = String(payload.status || "incomplete").trim();
   const statusConfig = {
     eligible: {
-      icon: "🟢",
+      badge: "ÉLIGIBLE",
       title: "Locataire éligible",
       copy: "Tous les critères principaux sont remplis."
     },
     refused: {
-      icon: "🔴",
+      badge: "NON CONFORME",
       title: "Profil non conforme",
       copy: "Ce logement ne correspond pas au profil actuel."
     },
     incomplete: {
-      icon: "🟡",
+      badge: "EN COURS",
       title: "Informations manquantes",
       copy: "Il manque encore des éléments avant une décision ferme."
     }
   }[status] || {
-    icon: "🟡",
+    badge: "EN COURS",
     title: "Qualification en cours",
     copy: "Le dossier continue d’évoluer."
   };
@@ -443,7 +443,8 @@ function renderTranslatorQualificationPanel() {
   translatorQualificationPanel.innerHTML = `
     <div class="translator-qualification-head">
       <div>
-        <div class="translator-qualification-title">${statusConfig.icon} ${statusConfig.title}</div>
+        <span class="qualification-badge badge-${status}">${statusConfig.badge}</span>
+        <div class="translator-qualification-title">${statusConfig.title}</div>
         <div class="translator-qualification-copy">${statusConfig.copy}</div>
       </div>
       <div class="translator-qualification-chip">Confiance ${payload.confidence || "low"}</div>

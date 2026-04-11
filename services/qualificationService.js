@@ -93,6 +93,18 @@ export function createQualificationService({
       "email"
     ].filter((fieldKey) => !isThreadFieldKnown(threadState, fieldKey));
     const blockingReasons = pickBlockingReasons(result?.reasons || []);
+    const criticalFieldsKnown = ["employment_status", "income", "credit", "tal", "has_animals", "occupants_total"]
+      .some((fieldKey) => isThreadFieldKnown(threadState, fieldKey));
+
+    if (blockingReasons.length && !criticalFieldsKnown) {
+      return {
+        eligible: false,
+        confidence: "low",
+        blocking_reasons: [],
+        missing_fields: missingFields,
+        status: "incomplete"
+      };
+    }
 
     if (blockingReasons.length) {
       return {
