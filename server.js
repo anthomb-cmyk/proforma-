@@ -2243,7 +2243,14 @@ function normalizeTranslatorAiResponseFields(extractedFields = {}) {
   return normalized;
 }
 
-function getNextTranslatorStateStep(threadState) {
+function listingRefusesAnimals(listing) {
+  return Boolean(
+    listing &&
+    /\bnon\b|no\b|pas accept/i.test(String(listing?.animaux_acceptes || ""))
+  );
+}
+
+function getNextTranslatorStateStep(threadState, listing = null) {
   for (const step of TRANSLATOR_STEP_ORDER) {
     if (step === "animal_type") {
       if (!isTranslatorFieldKnown(threadState, "has_animals")) {
@@ -2251,6 +2258,10 @@ function getNextTranslatorStateStep(threadState) {
       }
 
       if (getTranslatorFieldValue(threadState, "has_animals") !== true) {
+        continue;
+      }
+
+      if (listingRefusesAnimals(listing)) {
         continue;
       }
     }
@@ -2310,7 +2321,21 @@ function updateTranslatorThreadState(threadState, extraction, options = {}) {
     };
   });
 
-  updatedState.current_step = getNextTranslatorStateStep(updatedState);
+  if (
+    listingRefusesAnimals(options?.listing) &&
+    isTranslatorFieldKnown(updatedState, "has_animals") &&
+    getTranslatorFieldValue(updatedState, "has_animals") === true
+  ) {
+    updatedState.qualification.animal_type = {
+      value: null,
+      known: true,
+      confidence: 1,
+      source: "system",
+      updated_at: now
+    };
+  }
+
+  updatedState.current_step = getNextTranslatorStateStep(updatedState, options?.listing || null);
   updatedState.visit_prequalification.ready = computeTranslatorVisitPrequalificationReady(updatedState);
 
   return updatedState;
@@ -2455,7 +2480,7 @@ function getTranslatorNextStepForState(threadState, extraction, listing = null) 
     return null;
   }
 
-  return getNextTranslatorStateStep(threadState);
+  return getNextTranslatorStateStep(threadState, listing);
 }
 
 function buildTranslatorDeterministicReply({ extraction, threadState, listing, message }) {
@@ -3519,9 +3544,21 @@ async function generateTranslatorPayload(message, options = {}) {
     ),
     confidence: 0.8
   });
+  const hasAnimalsInMessage = /\b(chien|chat|animal|animaux|chiot|pitou|minou|perroquet|lapin|cochon d.inde)\b/i.test(message);
+  const employmentInMessage = /\b(je travaille|cuisinier|cuisiniere|infirmier|infirmiere|comptable|electricien|plombier|professeur|chauffeur|employe|travail|temps plein|temps partiel|autonome|retraite|etudiant)\b/i.test(message);
+
+  if (hasAnimalsInMessage && listingRefusesAnimals(listing)) {
+    extraction.provided_fields.has_animals = extraction.provided_fields.has_animals || createTranslatorFieldUpdate(true, 0.88, "heuristic");
+  }
+
+  if (employmentInMessage && !extraction.provided_fields.employment_status) {
+    extraction.provided_fields.employment_status = createTranslatorFieldUpdate("mentionné", 0.68, "heuristic");
+  }
+
   const updatedThreadState = updateTranslatorThreadState(threadState, extraction, {
     employeeUserId: options?.userId,
-    listingRef: listing?.ref || ""
+    listingRef: listing?.ref || "",
+    listing
   });
   const nextStep = getTranslatorNextStepForState(updatedThreadState, extraction, listing);
   const deterministicReply = buildTranslatorDeterministicReply({
