@@ -117,8 +117,87 @@ function buildTranslatorListingSummary(listing) {
   }, null, 2);
 }
 
-function buildTranslatorSystemPrompt({ threadState, listing }) {
-  const nextStep = String(threadState?.current_step || "").trim() || "aucun";
+function detectFieldsInMessage(message) {
+  const msg = String(message || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const detected = new Set();
+
+  if (/\b(1er|\d{1,2})\s*(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/.test(msg)) {
+    detected.add("move_in_date");
+  }
+
+  if (/\b(on va etre|on sera|on est|nous sommes|je suis seul|seule|\d+\s*personne)/.test(msg)) {
+    detected.add("occupants_total");
+  }
+
+  if (/\b(chien|chat|animal|animaux|chiot|pitou|minou|perroquet|lapin|cochon d.inde)\b/.test(msg)) {
+    detected.add("has_animals");
+    detected.add("animal_type");
+  }
+  if (/\bpas d.animaux\b|\bsans animaux\b|\baucun animal\b/.test(msg)) {
+    detected.add("has_animals");
+  }
+
+  if (/\b(je travaille|travail|emploi|employe|temps plein|temps partiel|autonome|retraite|etudiant|sans emploi)\b/.test(msg)) {
+    detected.add("employment_status");
+  }
+
+  if (/\b(\d+\s*k|\d+\s*000|revenu|salaire|\d+\s*\/\s*mois|par mois)\b/.test(msg)) {
+    detected.add("income");
+  }
+
+  return detected;
+}
+
+function buildTranslatorSystemPrompt({ threadState, listing, currentMessage = "" }) {
+  const knownFields = buildTranslatorKnownFieldsSummary(threadState);
+  const listingSummary = buildTranslatorListingSummary(listing);
+
+  const fieldsInCurrentMessage = detectFieldsInMessage(currentMessage);
+
+  const stepOrder = [
+    "move_in_date", "occupants_total", "has_animals", "animal_type",
+    "employment_status", "employer", "employment_duration",
+    "income", "credit", "tal", "full_name", "phone", "email"
+  ];
+
+  const knownSet = new Set(
+    Object.entries(threadState?.qualification || {})
+      .filter(([, v]) => v?.known)
+      .map(([k]) => k)
+  );
+  for (const f of fieldsInCurrentMessage) knownSet.add(f);
+
+  let nextStep = null;
+  for (const step of stepOrder) {
+    if (step === "animal_type") {
+      const hasAnimals = knownSet.has("has_animals") &&
+        (threadState?.qualification?.has_animals?.value === true ||
+         fieldsInCurrentMessage.has("has_animals"));
+      if (!hasAnimals) continue;
+    }
+    if (!knownSet.has(step)) {
+      nextStep = step;
+      break;
+    }
+  }
+
+  const nextStepLabels = {
+    move_in_date: "Quand souhaitez-vous emménager ?",
+    occupants_total: "Vous seriez combien à habiter le logement ?",
+    has_animals: "Avez-vous des animaux ?",
+    animal_type: "Quel type d'animal avez-vous ?",
+    employment_status: "Quelle est votre situation d'emploi ?",
+    employer: "Chez quel employeur travaillez-vous ?",
+    employment_duration: "Depuis combien de temps occupez-vous cet emploi ?",
+    income: "Quel est votre revenu mensuel approximatif ?",
+    credit: "Comment est votre situation de crédit ?",
+    tal: "Avez-vous eu des problèmes au TAL ou avec un propriétaire précédent ?",
+    full_name: "Quel est votre nom complet ?",
+    phone: "Quel est votre numéro de téléphone ?",
+    email: "Quelle est votre adresse courriel ?"
+  };
+
+  const prochainQuestion = nextStep ? (nextStepLabels[nextStep] || null) : null;
 
   return [
     "Tu es un assistant interne qui aide un employé locatif à répondre à des messages de locataires potentiels.",
@@ -128,83 +207,75 @@ function buildTranslatorSystemPrompt({ threadState, listing }) {
     "2. Le reformuler en français international clair dans \"translation\"",
     "3. Proposer une réponse courte et naturelle dans \"reply\"",
     "4. Extraire toute information utile dans \"extracted_fields\"",
-    "5. Identifier le prochain champ inconnu à obtenir dans \"next_step\"",
+    "5. Indiquer si une visite a été demandée dans \"visit_requested\"",
+    "6. Identifier le type de question logement dans \"listing_question\" si applicable",
     "",
     "RÈGLES DE RÉPONSE :",
-    "- Maximum 3-4 phrases",
-    "- Ton direct, simple, humain — jamais formel ni robotique",
-    "- Jamais de \"Je peux vérifier\", \"N'hésitez pas\", \"Si cela vous intéresse\"",
-    "- Répondre D'ABORD à la question du locataire, ENSUITE poser UNE SEULE question",
+    "- Maximum 2-3 phrases — court et direct",
+    "- Ton naturel, humain — jamais formel ni robotique",
+    "- INTERDIT : \"Avez-vous d'autres questions ?\", \"N'hésitez pas\", \"Merci pour l'information\", \"Je peux vérifier\"",
+    "- Répondre D'ABORD à la question du locataire si applicable, ENSUITE poser UNE SEULE question de qualification",
     "- Ne jamais poser plus d'une question à la fois",
-    "- Ne jamais redemander une information déjà connue",
+    "- Ne jamais redemander une information déjà présente dans le message actuel ou le dossier",
+    "- Les infos données par le locataire dans son message sont extraites silencieusement — ne pas les confirmer verbalement",
+    prochainQuestion
+      ? `- PROCHAINE QUESTION OBLIGATOIRE à poser à la fin de la réponse : "${prochainQuestion}"`
+      : "- Dossier complet — pas de question à poser",
     "",
-    "INTERDICTIONS ABSOLUES dans \"reply\" :",
-    "- Jamais \"Avez-vous d'autres questions ?\" ou toute variante",
-    "- Jamais \"Merci pour l'information\", \"Merci de nous avoir contactés\"",
-    "- Jamais \"N'hésitez pas à nous contacter\"",
-    "- Jamais terminer une réponse sans poser la prochaine question de qualification",
-    "- Jamais combiner deux informations du locataire en une seule phrase de confirmation (\"Oui vous pouvez amener votre chien le 1er mai\" — ces deux infos sont séparées)",
+    "EXEMPLES DE BONNES RÉPONSES :",
+    "Message: \"1 mai je peu tu amener mon chien\" → Bonne réponse: \"Oui les animaux sont acceptés. Quelle est votre situation d'emploi ?\"",
+    "  (move_in_date et has_animals extraits silencieusement, on passe directement à employment_status)",
+    "Message: \"il atu de lelectriciter\" → Bonne réponse: \"Oui l'électricité est incluse. Vous seriez combien à habiter le logement ?\"",
+    "Message: \"cest tu inclus lelectriciter? on va etre 4 personnes\" → Bonne réponse: \"L'électricité n'est pas incluse dans le loyer. Quelle est votre situation d'emploi ?\"",
+    "  (occupants_total: 4 extrait silencieusement, on passe à employment_status)",
     "",
-    "COMPORTEMENT OBLIGATOIRE :",
-    "- Après avoir répondu à une question logement, TOUJOURS poser la prochaine question de qualification",
-    "- Si le locataire donne une info de qualification ET pose une question logement dans le même message : répondre à la question logement EN PREMIER, puis enchaîner avec la prochaine question de qualification",
-    "- Ne jamais terminer sur une question ouverte passive — toujours poser UNE question précise et utile",
+    "EXEMPLES DE MESSAGES RÉELS À RECONNAÎTRE :",
+    "\"stu dispo\" → question de disponibilité",
+    "\"cé tu encore a louer\" → question de disponibilité",
+    "\"le 1 mai je peux tu amener mon chat\" → move_in_date: \"1er mai\" ET has_animals: true",
+    "\"ouais ces correct\" après un refus → confirmation, le locataire continue",
+    "\"4\" après \"combien d'occupants\" → occupants_total: 4",
+    "\"demain il a tu de l'électricité\" → question sur l'électricité (\"demain\" = référence à la question, PAS une date d'emménagement)",
+    "\"je travaille au tim\" → employer: \"Tim Hortons\", employment_status: \"temps plein\" probable",
+    "\"jai un petit chien propre\" → has_animals: true, animal_type: \"chien\"",
+    "\"asap\" ou \"le plus vite possible\" → NE PAS extraire comme move_in_date précise",
     "",
-    "RÈGLES D'EXTRACTION :",
-    "- \"le 1 mai je peux tu amener mon chat\" → move_in_date: \"1er mai\" ET has_animals: true",
-    "- \"demain il a tu de l'électricité\" → \"demain\" n'est PAS une date d'emménagement, c'est une question sur l'électricité",
-    "- \"ouais ces correct\" après un refus → le locataire confirme qu'il continue malgré tout",
-    "- \"4\" après \"combien d'occupants\" → occupants_total: 4",
-    "- Une date précise (1er mai, 15 juin) = toujours extraire comme move_in_date même si le message contient aussi autre chose",
-    "- \"demain/ce soir/cette semaine\" seul sans date précise = NE PAS extraire comme move_in_date",
+    "RÈGLES D'EXTRACTION CRITIQUES :",
+    "- Une date précise (1er mai, 15 juin, début juillet) = move_in_date même si le message contient autre chose",
+    "- \"demain\", \"ce soir\", \"cette semaine\" seul sans date = NE PAS extraire comme move_in_date",
+    "- Si le message contient une question logement (électricité, animaux, stationnement, inclusions), ignorer les mots temporels vagues pour move_in_date",
+    "- Extraire TOUS les champs présents dans un même message, pas juste un",
+    "- null = information absente du message (pas false, pas 0)",
     "",
     "RÈGLES SUR LES INFOS LOGEMENT :",
-    "- Si l'info est dans la fiche : répondre directement et clairement",
+    "- Si l'info est dans la fiche ci-dessous : répondre directement et clairement",
     "- Si l'info n'est pas dans la fiche : ne pas inventer, dire qu'on va vérifier",
     "- Ne jamais inventer une information sur le logement",
     "",
-    "RÈGLE SUR L'EXTRACTION SILENCIEUSE :",
-    "- Quand le locataire donne une info de qualification en passant (dans une question sur le logement), NE PAS la confirmer verbalement dans la réponse. L'extraire dans \"extracted_fields\" et continuer.",
-    "- \"on va etre 4 personnes\" dans une question → extraire occupants_total: 4, ne pas dire \"Merci, je note que vous serez 4\"",
-    "- \"jai un chien\" dans une question → extraire has_animals: true, ne pas répéter \"Je note que vous avez un chien\"",
-    "",
-    "ORDRE DE QUALIFICATION (obtenir dans cet ordre, une info à la fois) :",
-    "1. move_in_date",
-    "2. occupants_total",
-    "3. has_animals",
-    "4. employment_status",
-    "5. income",
-    "6. credit",
-    "7. tal",
-    "8. full_name / phone / email",
-    "",
-    "EXEMPLES DE BONNES RÉPONSES :",
-    "",
-    "Message : \"le 1 mai je peux tu amener mon chien\"",
-    "Mauvaise réponse : \"Oui, vous pouvez amener votre chien le 1er mai. Avez-vous d'autres questions ?\"",
-    "Bonne réponse : \"Oui, les animaux sont acceptés. Vous seriez combien à habiter le logement ?\"",
-    "→ Pourquoi : on confirme les animaux, on ignore le \"1er mai\" dans la réponse (déjà extrait), on pose la prochaine question utile",
-    "",
-    "Message : \"il atu de lelectriciter\"",
-    "Mauvaise réponse : \"Oui, il y a de l'électricité. Avez-vous d'autres questions ?\"",
-    "Bonne réponse : \"Oui, l'électricité est incluse dans le loyer. Vous seriez combien à habiter le logement ?\"",
-    "→ Pourquoi : on répond clairement, on enchaîne immédiatement sur la qualification",
-    "",
-    "Message : \"cest tu inclus lelectriciter? on va etre 4 personnes\"",
-    "Mauvaise réponse : \"L'électricité n'est pas incluse. Merci pour l'information, vous serez donc 4 personnes. Avez-vous d'autres questions ?\"",
-    "Bonne réponse : \"L'électricité n'est pas incluse dans le loyer. Quelle est votre situation d'emploi ?\"",
-    "→ Pourquoi : on répond sur l'électricité, les 4 personnes sont extraites silencieusement, on passe à la prochaine étape de qualification sans confirmer verbalement ce qu'on vient d'extraire",
-    "",
     "FORMAT DE SORTIE JSON OBLIGATOIRE :",
-    "{\"translation\":\"...\",\"reply\":\"...\",\"extracted_fields\":{\"move_in_date\":null,\"occupants_total\":null,\"has_animals\":null,\"animal_type\":null,\"employment_status\":null,\"employer\":null,\"employment_duration\":null,\"income\":null,\"credit\":null,\"tal\":null,\"full_name\":null,\"phone\":null,\"email\":null},\"next_step\":null,\"visit_requested\":false,\"listing_question\":null}",
+    JSON.stringify({
+      translation: "reformulation en français international",
+      reply: "réponse suggérée naturelle",
+      extracted_fields: {
+        move_in_date: null, occupants_total: null, has_animals: null,
+        animal_type: null, employment_status: null, employer: null,
+        employment_duration: null, income: null, credit: null,
+        tal: null, full_name: null, phone: null, email: null
+      },
+      next_step: null,
+      visit_requested: false,
+      listing_question: null
+    }),
     "",
-    "ÉTAT DU DOSSIER ACTUEL :",
-    buildTranslatorKnownFieldsSummary(threadState),
+    "ÉTAT DU DOSSIER ACTUEL (ne jamais redemander ces infos) :",
+    knownFields,
     "",
-    `PROCHAIN CHAMP À OBTENIR : ${nextStep}`,
+    nextStep
+      ? `PROCHAIN CHAMP À OBTENIR : ${nextStep}`
+      : "DOSSIER COMPLET — toutes les informations sont connues",
     "",
     "LOGEMENT SÉLECTIONNÉ :",
-    buildTranslatorListingSummary(listing)
+    listingSummary
   ].join("\n");
 }
 
@@ -348,7 +419,7 @@ export function createOpenAIService({
         {
           role: "system",
           content:
-            "Tu es un assistant interne qui aide un employé locatif à répondre à des messages de locataires potentiels écrits en style Marketplace ou québécois oral.\n\nTu reçois :\n- La réponse à la question logement (si applicable)\n- La prochaine question à poser pour qualifier le candidat\n- L'historique récent de la conversation\n- L'état du dossier (ce qui est déjà connu)\n\nTu dois rédiger UNE réponse courte, naturelle et humaine qui :\n1. Répond d'abord à la question du locataire si une réponse est fournie\n2. Pose ensuite UNE SEULE question pour faire avancer le dossier\n\nRègles absolues :\n- Maximum 3 à 4 phrases au total\n- Ton direct, simple, humain — jamais formel ni robotique\n- Jamais de \"Je peux vérifier\", \"Si cela vous intéresse\", \"Voulez-vous plus de détails\", \"N'hésitez pas\"\n- Si la réponse logement est fournie : l'utiliser directement et clairement\n- Si la réponse logement est vide ou inconnue : ne rien inventer, rester prudent et naturel\n- Une seule question à la fin, jamais une liste\n- Ne pas répéter l'information que le locataire vient de donner\n- Sonner comme un vrai employé qui répond vite entre deux dossiers\n\nRÈGLE sur les questions répétées :\n- Si la \"Dernière question posée\" est move_in_date ET que le message actuel ne contient PAS de date d'emménagement, NE PAS reposer la même question\n- Si le locataire pose une question logement sans répondre à la question précédente, répondre à sa question d'abord, puis reposer la question en attente de façon naturelle SEULEMENT si c'est fluide\n- Exemple correct : \"Non, l'électricité n'est pas incluse. Au fait, vous souhaiteriez emménager pour quelle date ?\"\n- Exemple incorrect : \"Non, l'électricité n'est pas incluse. Quand est-ce que vous aimeriez emménager ?\""
+            "Tu es un assistant interne qui aide un employé locatif à répondre à des messages de locataires potentiels écrits en style Marketplace ou québécois oral.\n\nTu reçois :\n- La réponse à la question logement (si applicable)\n- La prochaine question à poser pour qualifier le candidat\n- L'historique récent de la conversation\n- L'état du dossier (ce qui est déjà connu)\n\nTu dois rédiger UNE réponse courte, naturelle et humaine qui :\n1. Répond d'abord à la question du locataire si une réponse est fournie\n2. Pose ensuite UNE SEULE question pour faire avancer le dossier\n\nRègles absolues :\n- Maximum 3 à 4 phrases au total\n- Ton direct, simple, humain — jamais formel ni robotique\n- Jamais de \"Je peux vérifier\", \"Si cela vous intéresse\", \"Voulez-vous plus de détails\", \"N'hésitez pas\"\n- Si la réponse logement est fournie : l'utiliser directement et clairement\n- Si la réponse logement est vide ou inconnue : ne rien inventer, rester prudent et naturel\n- Une seule question à la fin, jamais une liste\n- Ne pas répéter l'information que le locataire vient de donner\n- Sonner comme un vrai employé qui répond vite entre deux dossiers"
         },
         {
           role: "user",
@@ -388,7 +459,7 @@ export function createOpenAIService({
     const messages = [
       {
         role: "system",
-        content: buildTranslatorSystemPrompt({ threadState, listing })
+        content: buildTranslatorSystemPrompt({ threadState, listing, currentMessage: message })
       },
       ...truncateConversationHistory(conversationHistory, 40).map((entry) => ({
         role: entry.role === "assistant" ? "assistant" : "user",
