@@ -294,6 +294,22 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 
 .status-note{font-size:12px;color:var(--text2);padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff}
 .status-note.error{color:#A93425;background:#FDF0ED;border-color:#F2C7BF}
+.call-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.call-log-wrap{margin-top:12px}
+.call-log-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.call-log-item{border:1px solid var(--border);border-radius:10px;background:#fff;padding:10px}
+.call-log-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.call-log-title{font-size:12px;font-weight:700;color:var(--text)}
+.call-log-sub{font-size:11px;color:var(--text2);margin-top:2px}
+.call-log-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.call-pill{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:700}
+.call-pill.success{background:#E9F7EF;color:var(--green)}
+.call-pill.pending{background:#EAF1FF;color:var(--blue)}
+.call-pill.failed{background:#FDF0ED;color:var(--red)}
+.call-pill.neutral{background:#F4F1E8;color:#6B6B6B}
+.call-transcript{margin-top:8px}
+.call-transcript summary{cursor:pointer;font-size:11px;font-weight:700;color:var(--text2)}
+.call-transcript-text{margin-top:6px;font-size:12px;line-height:1.55;color:var(--text2);background:#FAF8F4;border:1px solid var(--border);border-radius:8px;padding:9px;white-space:pre-wrap}
 
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 
@@ -403,6 +419,22 @@ function dayKey({ d, m, y }) {
   return `${y}-${String(m + 1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
 }
 
+function fmtCallDateTime(value) {
+  if (!value) return "Date inconnue";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date inconnue";
+  return date.toLocaleString("fr-CA", { dateStyle: "short", timeStyle: "short" });
+}
+
+function fmtDurationSeconds(value) {
+  const seconds = Number(value || 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return `${minutes}m${rem > 0 ? ` ${rem}s` : ""}`;
+}
+
 function esc(str = "") {
   return String(str)
     .replaceAll("&", "&amp;")
@@ -484,6 +516,10 @@ export default function App() {
   const [newEv, setNewEv]         = useState({ title:"", date:"", time:"", dealId:"" });
   const [aiLoadD, setAiLoadD]     = useState(false);
   const [aiLoadV, setAiLoadV]     = useState(false);
+  const [callsByDeal, setCallsByDeal] = useState({});
+  const [callsLoading, setCallsLoading] = useState(false);
+  const [calling, setCalling] = useState(false);
+  const [callNotice, setCallNotice] = useState({ type: "", text: "" });
   const fileRef = useRef();
   const geocodeTimersRef = useRef({});
   const geocodeSkipRef = useRef({});
@@ -491,6 +527,95 @@ export default function App() {
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
 
   const current = useMemo(() => deals.find(d => d.id === currentId) || null, [deals, currentId]);
+  const currentCalls = useMemo(() => {
+    if (!current?.id) return [];
+    return callsByDeal[current.id] || [];
+  }, [callsByDeal, current?.id]);
+
+  const loadCallsForDeal = useCallback(async (dealId, options = {}) => {
+    if (!dealId) return;
+    if (!options.silent) {
+      setCallsLoading(true);
+    }
+    try {
+      const response = await fetch(`/api/deals/${encodeURIComponent(dealId)}/calls`);
+      const data = await response.json();
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || `Erreur ${response.status}`);
+      }
+      setCallsByDeal((prev) => ({ ...prev, [dealId]: data.calls || [] }));
+    } catch (error) {
+      if (!options.silent) {
+        setCallNotice({ type: "error", text: error.message || "Impossible de charger l'historique des appels." });
+      }
+    } finally {
+      if (!options.silent) {
+        setCallsLoading(false);
+      }
+    }
+  }, []);
+
+  const startDealCall = useCallback(async () => {
+    if (!current?.id) return;
+
+    const contactPhone = String(current.contact?.phone || "").trim();
+    if (!contactPhone) {
+      setCallNotice({ type: "error", text: "Ajoutez un téléphone dans la fiche contact avant d'appeler." });
+      return;
+    }
+
+    setCalling(true);
+    setCallNotice({ type: "", text: "" });
+    try {
+      const response = await fetch("/api/twilio/calls/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          dealId: current.id,
+          dealTitle: current.title || "",
+          contactName: String(current.contact?.name || "").trim(),
+          contactPhone
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || `Erreur ${response.status}`);
+      }
+
+      addAct(current.id, `📞 Appel lancé vers ${current.contact?.name || contactPhone}`);
+      setCallNotice({ type: "success", text: "Appel lancé. Le statut et l'enregistrement vont se mettre à jour automatiquement." });
+      await loadCallsForDeal(current.id, { silent: true });
+    } catch (error) {
+      setCallNotice({ type: "error", text: error.message || "Impossible de lancer l'appel." });
+    } finally {
+      setCalling(false);
+    }
+  }, [addAct, current, loadCallsForDeal]);
+
+  const retryCallTranscription = useCallback(async (callId) => {
+    if (!callId || !current?.id) return;
+    try {
+      const response = await fetch(`/api/calls/${encodeURIComponent(callId)}/transcribe/retry`, {
+        method: "POST"
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || `Erreur ${response.status}`);
+      }
+      setCallNotice({ type: "success", text: "Transcription relancée. Rafraîchissez dans quelques secondes." });
+      await loadCallsForDeal(current.id, { silent: true });
+    } catch (error) {
+      setCallNotice({ type: "error", text: error.message || "Impossible de relancer la transcription." });
+    }
+  }, [current?.id, loadCallsForDeal]);
+
+  useEffect(() => {
+    if (!current?.id) return;
+    setCallNotice({ type: "", text: "" });
+    loadCallsForDeal(current.id);
+  }, [current?.id, loadCallsForDeal]);
 
   const upd = useCallback((id, fn) => {
     setDeals(p => p.map(d => d.id === id ? { ...fn(d), updatedAt: Date.now() } : d));
@@ -521,6 +646,11 @@ export default function App() {
   const deleteDeal = (id) => {
     if (!window.confirm("Supprimer ce deal ?")) return;
     setDeals(p => p.filter(d => d.id !== id));
+    setCallsByDeal((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     if (currentId === id) setCurrentId(deals.find(d => d.id !== id)?.id || null);
   };
 
@@ -1200,6 +1330,84 @@ export default function App() {
                           {[ ["name","Nom"], ["phone","Téléphone"], ["email","Email"], ["company","Compagnie"], ["role","Rôle"] ].map(([k,lbl]) => (
                             <div key={k} className="f-row"><div className="f-lbl">{lbl}</div><input value={current.contact?.[k] || ""} onChange={e => upd(current.id,d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} /></div>
                           ))}
+
+                          <div className="call-actions">
+                            <button className="btn btn-gold" disabled={calling} onClick={startDealCall}>
+                              {calling ? "Appel en cours..." : "📞 Appeler ce contact"}
+                            </button>
+                            <button className="btn btn-sm" disabled={callsLoading} onClick={() => loadCallsForDeal(current.id)}>
+                              {callsLoading ? "Chargement..." : "Actualiser appels"}
+                            </button>
+                          </div>
+
+                          {callNotice.text && (
+                            <div className={`status-note${callNotice.type === "error" ? " error" : ""}`} style={{ marginTop: 10 }}>
+                              {callNotice.text}
+                            </div>
+                          )}
+
+                          <div className="call-log-wrap">
+                            <div className="f-title" style={{ marginBottom: 0 }}>Historique des appels</div>
+                            {currentCalls.length === 0 ? (
+                              <div className="status-note" style={{ marginTop: 8 }}>Aucun appel enregistré pour ce deal.</div>
+                            ) : (
+                              <div className="call-log-list">
+                                {currentCalls.slice(0, 6).map((call) => {
+                                  const transcriptState = call.transcript_status || "not_started";
+                                  const transcriptClass =
+                                    transcriptState === "completed"
+                                      ? "success"
+                                      : transcriptState === "failed"
+                                        ? "failed"
+                                        : transcriptState === "processing" || transcriptState === "pending_recording"
+                                          ? "pending"
+                                          : "neutral";
+
+                                  return (
+                                    <div key={call.id} className="call-log-item">
+                                      <div className="call-log-top">
+                                        <div>
+                                          <div className="call-log-title">{call.lead_name || call.to || "Contact"}</div>
+                                          <div className="call-log-sub">
+                                            {fmtCallDateTime(call.created_at)} · {fmtDurationSeconds(call.duration_seconds)}
+                                          </div>
+                                        </div>
+                                        <span className={`call-pill ${call.status === "completed" ? "success" : call.status === "failed" || call.status === "busy" || call.status === "no-answer" ? "failed" : "pending"}`}>
+                                          {call.status || "inconnu"}
+                                        </span>
+                                      </div>
+
+                                      <div className="call-log-meta">
+                                        <span className={`call-pill ${transcriptClass}`}>
+                                          Transcript: {transcriptState}
+                                        </span>
+                                        {call.recording_url && (
+                                          <a className="btn btn-sm" href={`/api/calls/${encodeURIComponent(call.id)}/recording`} target="_blank" rel="noreferrer">
+                                            Écouter
+                                          </a>
+                                        )}
+                                        {(transcriptState === "failed" || transcriptState === "not_started") && call.recording_url && (
+                                          <button className="btn btn-sm" onClick={() => retryCallTranscription(call.id)}>
+                                            Relancer transcript
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      {call.transcript && (
+                                        <details className="call-transcript">
+                                          <summary>Voir la transcription</summary>
+                                          <div className="call-transcript-text">{call.transcript}</div>
+                                        </details>
+                                      )}
+                                      {!call.transcript && call.transcript_error && (
+                                        <div className="status-note error" style={{ marginTop: 8 }}>{call.transcript_error}</div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         <div className="card f-card">

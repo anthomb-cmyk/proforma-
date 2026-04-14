@@ -8,7 +8,7 @@ import compression from "compression";
 import dotenv from "dotenv";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { Resend } from "resend";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createChatRouter } from "./routes/chat.js";
@@ -35,6 +35,12 @@ const SUPABASE_SERVER_KEY =
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const INVITATION_FROM_EMAIL = String(process.env.INVITATION_FROM_EMAIL || process.env.FROM_EMAIL || "").trim();
 const ADMIN_NOTIFICATION_EMAIL = String(process.env.ADMIN_NOTIFICATION_EMAIL || "").trim();
+const TWILIO_ACCOUNT_SID = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+const TWILIO_AUTH_TOKEN = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+const TWILIO_PHONE_NUMBER = String(process.env.TWILIO_PHONE_NUMBER || "").trim();
+const TWILIO_FORWARD_TO = String(process.env.TWILIO_FORWARD_TO || "").trim();
+const TWILIO_RECORD_CALLS = String(process.env.TWILIO_RECORD_CALLS || "true").trim().toLowerCase() !== "false";
+const OPENAI_TRANSCRIPTION_MODEL = String(process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1").trim();
 
 const DATA_DIR = path.join(__dirname, ".data");
 const LISTINGS_PATH = path.join(__dirname, "listings.json");
@@ -51,6 +57,7 @@ const USER_DAILY_TIME_PATH = path.join(DATA_DIR, "user-daily-time.json");
 const WORKSPACE_MESSAGES_PATH = path.join(DATA_DIR, "workspace-messages.json");
 const LISTING_TASKS_PATH = path.join(DATA_DIR, "listing-tasks.json");
 const NOTIFICATIONS_PATH = path.join(DATA_DIR, "notifications.json");
+const CALL_LOGS_PATH = path.join(DATA_DIR, "call-logs.json");
 
 const TRANSLATOR_STEP_ORDER = [
   "move_in_date",
@@ -236,6 +243,39 @@ async function writeJsonFile(filePath, value) {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2));
 }
 
+function normalizeDialPhone(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("+")) {
+    return `+${raw.replace(/[^\d]/g, "")}`;
+  }
+
+  const digits = raw.replace(/[^\d]/g, "");
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+
+  return "";
+}
+
+function getTwilioBasicAuthHeader() {
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
+    return "";
+  }
+  return `Basic ${Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64")}`;
+}
+
+async function loadCallLogs() {
+  return readJsonFile(CALL_LOGS_PATH, []);
+}
+
+async function saveCallLogs(callLogs) {
+  await writeJsonFile(CALL_LOGS_PATH, callLogs);
+}
+
 function createTranslatorFieldState() {
   return {
     value: null,
@@ -244,6 +284,28 @@ function createTranslatorFieldState() {
     source: null,
     updated_at: null
   };
+}
+
+function escapeXml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function toPublicUrl(pathname) {
+  if (!PUBLIC_APP_URL) {
+    return "";
+  }
+
+  return `${PUBLIC_APP_URL}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+}
+
+function sendTwiml(res, twiml) {
+  res.setHeader("Content-Type", "text/xml; charset=utf-8");
+  return res.status(200).send(twiml);
 }
 
 function createTranslatorQualificationState() {
@@ -945,6 +1007,141 @@ async function loadNotifications() {
 
 async function saveNotifications(notifications) {
   await writeJsonFile(NOTIFICATIONS_PATH, notifications);
+}
+
+function createCallLogRecord({
+  dealId = "",
+  direction = "outbound",
+  from = "",
+  to = "",
+  leadName = "",
+  dealTitle = "",
+  callSid = "",
+  parentCallSid = "",
+  status = "queued"
+} = {}) {
+  const nowIso = new Date().toISOString();
+  return {
+    id: createId("call"),
+    deal_id: String(dealId || "").trim(),
+    direction,
+    from,
+    to,
+    lead_name: leadName,
+    deal_title: dealTitle,
+    call_sid: callSid || null,
+    parent_call_sid: parentCallSid || null,
+    status,
+    duration_seconds: null,
+    recording_sid: null,
+    recording_url: null,
+    transcript: null,
+    transcript_status: "not_started",
+    transcript_error: null,
+    events: [{ at: nowIso, status }],
+    created_at: nowIso,
+    updated_at: nowIso
+  };
+}
+
+function appendCallEvent(callLog, status, extra = {}) {
+  const nowIso = new Date().toISOString();
+  const nextEvents = Array.isArray(callLog.events) ? callLog.events : [];
+  nextEvents.unshift({
+    at: nowIso,
+    status: String(status || "").trim() || "updated",
+    ...extra
+  });
+
+  callLog.status = String(status || "").trim() || callLog.status || "updated";
+  callLog.updated_at = nowIso;
+  callLog.events = nextEvents.slice(0, 25);
+  return callLog;
+}
+
+async function callTwilioApi(endpoint, payload) {
+  const authHeader = getTwilioBasicAuthHeader();
+  if (!authHeader) {
+    throw createHttpError(500, "Les identifiants Twilio ne sont pas configurés.");
+  }
+
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams(payload).toString()
+  });
+
+  const responseText = await response.text();
+  let data = {};
+  try {
+    data = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const message = String(data?.message || responseText || "Erreur Twilio inconnue.");
+    throw createHttpError(400, `Twilio API: ${message}`);
+  }
+
+  return data;
+}
+
+async function transcribeTwilioRecording(callLogId, recordingUrl, recordingSid) {
+  if (!openai) {
+    throw createHttpError(500, "OpenAI API non configurée pour la transcription.");
+  }
+
+  const authHeader = getTwilioBasicAuthHeader();
+  if (!authHeader) {
+    throw createHttpError(500, "Les identifiants Twilio ne sont pas configurés.");
+  }
+
+  const normalizedRecordingUrl = String(recordingUrl || "").trim();
+  if (!normalizedRecordingUrl) {
+    throw createHttpError(400, "URL d'enregistrement manquante.");
+  }
+
+  const recordingMediaUrl = /\.(mp3|wav)$/i.test(normalizedRecordingUrl)
+    ? normalizedRecordingUrl
+    : `${normalizedRecordingUrl}.mp3`;
+
+  const audioResponse = await fetch(recordingMediaUrl, {
+    headers: {
+      Authorization: authHeader
+    }
+  });
+
+  if (!audioResponse.ok) {
+    throw createHttpError(400, `Impossible de télécharger l'enregistrement (${audioResponse.status}).`);
+  }
+
+  const buffer = Buffer.from(await audioResponse.arrayBuffer());
+  const file = await toFile(buffer, `${recordingSid || callLogId || "call-recording"}.mp3`, {
+    type: "audio/mpeg"
+  });
+  const transcription = await openai.audio.transcriptions.create({
+    file,
+    model: OPENAI_TRANSCRIPTION_MODEL,
+    language: "fr"
+  });
+
+  const transcriptText = String(transcription?.text || "").trim();
+  const callLogs = await loadCallLogs();
+  const callLog = callLogs.find((log) => String(log.id) === String(callLogId));
+
+  if (!callLog) {
+    return;
+  }
+
+  callLog.transcript = transcriptText || "(Aucune transcription retournée)";
+  callLog.transcript_status = "completed";
+  callLog.transcript_error = null;
+  appendCallEvent(callLog, callLog.status || "completed", { note: "transcript_completed" });
+  await saveCallLogs(callLogs);
 }
 
 async function appendNotification(notification) {
@@ -3738,6 +3935,396 @@ app.post("/api/match", async (req, res) => {
   }
 
   return res.json(evaluateMatch(listing, candidate, criteria));
+});
+
+app.post("/api/twilio/calls/start", async (req, res) => {
+  try {
+    if (!PUBLIC_APP_URL) {
+      throw createHttpError(400, "PUBLIC_APP_URL est requis pour lancer les appels.");
+    }
+    if (!TWILIO_PHONE_NUMBER) {
+      throw createHttpError(400, "TWILIO_PHONE_NUMBER est requis.");
+    }
+    if (!TWILIO_FORWARD_TO) {
+      throw createHttpError(400, "TWILIO_FORWARD_TO est requis.");
+    }
+
+    const dealId = String(req.body?.dealId || "").trim();
+    const contactPhoneRaw = String(req.body?.contactPhone || "").trim();
+    const contactName = String(req.body?.contactName || "").trim();
+    const dealTitle = String(req.body?.dealTitle || "").trim();
+    const normalizedLeadPhone = normalizeDialPhone(contactPhoneRaw);
+
+    if (!dealId) {
+      throw createHttpError(400, "dealId est obligatoire.");
+    }
+    if (!normalizedLeadPhone) {
+      throw createHttpError(400, "Numéro du contact invalide.");
+    }
+
+    const callLog = createCallLogRecord({
+      dealId,
+      direction: "outbound",
+      from: TWILIO_PHONE_NUMBER,
+      to: normalizedLeadPhone,
+      leadName: contactName,
+      dealTitle,
+      status: "initiated"
+    });
+    callLog.transcript_status = TWILIO_RECORD_CALLS ? (openai ? "pending_recording" : "recording_only") : "disabled";
+
+    const statusCallback = `${toPublicUrl("/api/twilio/voice/status")}?callLogId=${encodeURIComponent(callLog.id)}&dealId=${encodeURIComponent(dealId)}`;
+    const bridgeUrl = `${toPublicUrl("/api/twilio/voice/outbound-bridge")}?callLogId=${encodeURIComponent(callLog.id)}&dealId=${encodeURIComponent(dealId)}&leadPhone=${encodeURIComponent(normalizedLeadPhone)}&leadName=${encodeURIComponent(contactName)}`;
+
+    const createdCall = await callTwilioApi("/Calls.json", {
+      To: TWILIO_FORWARD_TO,
+      From: TWILIO_PHONE_NUMBER,
+      Url: bridgeUrl,
+      Method: "POST",
+      StatusCallback: statusCallback,
+      StatusCallbackMethod: "POST",
+      StatusCallbackEvent: "initiated ringing answered completed"
+    });
+
+    callLog.call_sid = createdCall.sid || null;
+    callLog.status = String(createdCall.status || "queued").trim() || "queued";
+    appendCallEvent(callLog, callLog.status, { note: "outbound_call_created" });
+    const callLogs = await loadCallLogs();
+    callLogs.unshift(callLog);
+    await saveCallLogs(callLogs);
+
+    return res.status(201).json({
+      ok: true,
+      call: callLog
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de lancer l'appel."
+    });
+  }
+});
+
+app.post("/api/twilio/voice/outbound-bridge", express.urlencoded({ extended: false }), async (req, res) => {
+  const callLogId = String(req.query?.callLogId || req.body?.callLogId || "").trim();
+  const dealId = String(req.query?.dealId || req.body?.dealId || "").trim();
+  const leadPhone = normalizeDialPhone(String(req.query?.leadPhone || req.body?.leadPhone || "").trim());
+  const leadName = String(req.query?.leadName || req.body?.leadName || "").trim();
+
+  if (!leadPhone) {
+    return sendTwiml(
+      res,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="fr-CA" voice="alice">Numéro du contact invalide.</Say>\n</Response>`
+    );
+  }
+
+  const statusCallbackUrl = `${toPublicUrl("/api/twilio/voice/status")}?callLogId=${encodeURIComponent(callLogId)}&dealId=${encodeURIComponent(dealId)}`;
+  const recordingCallbackUrl = `${toPublicUrl("/api/twilio/voice/recording")}?callLogId=${encodeURIComponent(callLogId)}&dealId=${encodeURIComponent(dealId)}`;
+  const dialAttributes = [
+    "answerOnBridge=\"true\"",
+    "timeout=\"20\"",
+    `statusCallback=\"${escapeXml(statusCallbackUrl)}\"`,
+    "statusCallbackMethod=\"POST\"",
+    "statusCallbackEvent=\"initiated ringing answered completed\""
+  ];
+
+  if (TWILIO_RECORD_CALLS) {
+    dialAttributes.push("record=\"record-from-answer-dual\"");
+    dialAttributes.push(`recordingStatusCallback=\"${escapeXml(recordingCallbackUrl)}\"`);
+    dialAttributes.push("recordingStatusCallbackMethod=\"POST\"");
+  }
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="fr-CA" voice="alice">Cet appel peut être enregistré à des fins de suivi qualité.</Say>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(leadPhone)}</Dial>\n  <Say language="fr-CA" voice="alice">Le correspondant est indisponible pour le moment.</Say>\n</Response>`;
+  return sendTwiml(res, twiml);
+});
+
+app.post("/api/twilio/voice/inbound", express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    if (!TWILIO_FORWARD_TO) {
+      return sendTwiml(
+        res,
+        `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="fr-CA" voice="alice">Le service d'appel n'est pas encore configuré.</Say>\n</Response>`
+      );
+    }
+
+    const from = normalizeDialPhone(req.body?.From || "");
+    const to = normalizeDialPhone(req.body?.To || "");
+    const callSid = String(req.body?.CallSid || "").trim();
+    const callLog = createCallLogRecord({
+      direction: "inbound",
+      from,
+      to,
+      callSid,
+      status: String(req.body?.CallStatus || "incoming").trim() || "incoming"
+    });
+    callLog.transcript_status = TWILIO_RECORD_CALLS ? (openai ? "pending_recording" : "recording_only") : "disabled";
+
+    const callLogs = await loadCallLogs();
+    callLogs.unshift(callLog);
+    await saveCallLogs(callLogs);
+
+    const statusCallbackUrl = `${toPublicUrl("/api/twilio/voice/status")}?callLogId=${encodeURIComponent(callLog.id)}`;
+    const recordingCallbackUrl = `${toPublicUrl("/api/twilio/voice/recording")}?callLogId=${encodeURIComponent(callLog.id)}`;
+    const dialAttributes = [
+      "answerOnBridge=\"true\"",
+      "timeout=\"20\""
+    ];
+
+    if (statusCallbackUrl) {
+      dialAttributes.push(`statusCallback=\"${escapeXml(statusCallbackUrl)}\"`);
+      dialAttributes.push("statusCallbackMethod=\"POST\"");
+      dialAttributes.push("statusCallbackEvent=\"initiated ringing answered completed\"");
+    }
+
+    if (TWILIO_RECORD_CALLS) {
+      dialAttributes.push("record=\"record-from-answer-dual\"");
+      if (recordingCallbackUrl) {
+        dialAttributes.push(`recordingStatusCallback=\"${escapeXml(recordingCallbackUrl)}\"`);
+        dialAttributes.push("recordingStatusCallbackMethod=\"POST\"");
+      }
+    }
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(TWILIO_FORWARD_TO)}</Dial>\n</Response>`;
+    return sendTwiml(res, twiml);
+  } catch (error) {
+    return sendTwiml(
+      res,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="fr-CA" voice="alice">Une erreur temporaire est survenue.</Say>\n</Response>`
+    );
+  }
+});
+
+app.post("/api/twilio/voice/status", express.urlencoded({ extended: false }), async (req, res) => {
+  const callLogId = String(req.query?.callLogId || req.body?.callLogId || "").trim();
+  const dealId = String(req.query?.dealId || req.body?.dealId || "").trim();
+  const callbackCallSid = String(req.body?.CallSid || "").trim();
+  const callbackParentCallSid = String(req.body?.ParentCallSid || "").trim();
+  const callbackStatus = String(req.body?.CallStatus || "").trim() || "updated";
+  const callbackDuration = Number(req.body?.CallDuration || 0);
+  const callbackFrom = normalizeDialPhone(req.body?.From || "");
+  const callbackTo = normalizeDialPhone(req.body?.To || "");
+
+  const callLogs = await loadCallLogs();
+  let callLog = null;
+
+  if (callLogId) {
+    callLog = callLogs.find((log) => String(log.id) === callLogId) || null;
+  }
+  if (!callLog && callbackCallSid) {
+    callLog = callLogs.find((log) => String(log.call_sid) === callbackCallSid) || null;
+  }
+  if (!callLog && callbackParentCallSid) {
+    callLog = callLogs.find((log) => String(log.call_sid) === callbackParentCallSid) || null;
+  }
+
+  if (!callLog) {
+    callLog = createCallLogRecord({
+      dealId,
+      direction: String(req.body?.Direction || "unknown").trim() || "unknown",
+      from: callbackFrom,
+      to: callbackTo,
+      callSid: callbackParentCallSid || callbackCallSid,
+      parentCallSid: callbackParentCallSid || null,
+      status: callbackStatus
+    });
+    callLogs.unshift(callLog);
+  }
+
+  if (!callLog.call_sid) {
+    callLog.call_sid = callbackParentCallSid || callbackCallSid || callLog.call_sid;
+  }
+  if (callbackParentCallSid && callbackCallSid && callbackParentCallSid !== callbackCallSid) {
+    callLog.parent_call_sid = callbackParentCallSid;
+  }
+  if (Number.isFinite(callbackDuration) && callbackDuration > 0) {
+    callLog.duration_seconds = callbackDuration;
+  }
+  if (!callLog.from && callbackFrom) {
+    callLog.from = callbackFrom;
+  }
+  if (!callLog.to && callbackTo) {
+    callLog.to = callbackTo;
+  }
+  if (!callLog.deal_id && dealId) {
+    callLog.deal_id = dealId;
+  }
+
+  appendCallEvent(callLog, callbackStatus, {
+    call_sid: callbackCallSid || null,
+    parent_call_sid: callbackParentCallSid || null
+  });
+  await saveCallLogs(callLogs);
+
+  const payload = {
+    type: "call_status",
+    at: new Date().toISOString(),
+    callSid: callbackCallSid,
+    parentCallSid: callbackParentCallSid,
+    callStatus: callbackStatus,
+    from: String(req.body?.From || ""),
+    to: String(req.body?.To || ""),
+    direction: String(req.body?.Direction || ""),
+    callLogId: callLog.id
+  };
+
+  console.log("[twilio:status]", JSON.stringify(payload));
+  return res.status(204).send();
+});
+
+app.post("/api/twilio/voice/recording", express.urlencoded({ extended: false }), async (req, res) => {
+  const callLogId = String(req.query?.callLogId || req.body?.callLogId || "").trim();
+  const recordingStatus = String(req.body?.RecordingStatus || "").trim();
+  const recordingSid = String(req.body?.RecordingSid || "").trim();
+  const recordingUrl = String(req.body?.RecordingUrl || "").trim();
+  const callSid = String(req.body?.CallSid || "").trim();
+  const recordingDuration = Number(req.body?.RecordingDuration || 0);
+
+  const callLogs = await loadCallLogs();
+  let callLog = null;
+
+  if (callLogId) {
+    callLog = callLogs.find((log) => String(log.id) === callLogId) || null;
+  }
+  if (!callLog && callSid) {
+    callLog = callLogs.find((log) => String(log.call_sid) === callSid || String(log.parent_call_sid) === callSid) || null;
+  }
+
+  if (callLog) {
+    callLog.recording_sid = recordingSid || callLog.recording_sid;
+    callLog.recording_url = recordingUrl || callLog.recording_url;
+    if (Number.isFinite(recordingDuration) && recordingDuration > 0) {
+      callLog.duration_seconds = recordingDuration;
+    }
+    if (recordingStatus === "completed") {
+      callLog.transcript_status = openai ? "processing" : "recording_only";
+      callLog.transcript_error = openai ? null : "Transcription indisponible: OPENAI_API_KEY manquant.";
+    }
+    appendCallEvent(callLog, callLog.status || "updated", { note: `recording_${recordingStatus || "updated"}` });
+    await saveCallLogs(callLogs);
+  }
+
+  const payload = {
+    type: "recording_status",
+    at: new Date().toISOString(),
+    callSid,
+    recordingSid,
+    recordingStatus,
+    recordingUrl,
+    recordingDuration: String(req.body?.RecordingDuration || ""),
+    callLogId: callLog?.id || callLogId || null
+  };
+
+  console.log("[twilio:recording]", JSON.stringify(payload));
+
+  if (callLog && recordingStatus === "completed" && callLog.recording_url && openai) {
+    setImmediate(() => {
+      transcribeTwilioRecording(callLog.id, callLog.recording_url, callLog.recording_sid).catch(async (error) => {
+        const currentCallLogs = await loadCallLogs();
+        const failedLog = currentCallLogs.find((log) => String(log.id) === String(callLog.id));
+        if (!failedLog) return;
+        failedLog.transcript_status = "failed";
+        failedLog.transcript_error = error.message || "Échec de transcription.";
+        appendCallEvent(failedLog, failedLog.status || "updated", { note: "transcript_failed" });
+        await saveCallLogs(currentCallLogs);
+      });
+    });
+  }
+
+  return res.status(204).send();
+});
+
+app.get("/api/deals/:dealId/calls", async (req, res) => {
+  const dealId = String(req.params?.dealId || "").trim();
+  if (!dealId) {
+    return res.status(400).json({ ok: false, error: "dealId est obligatoire." });
+  }
+
+  const callLogs = await loadCallLogs();
+  const calls = callLogs
+    .filter((log) => String(log.deal_id || "") === dealId)
+    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  return res.json({ ok: true, calls });
+});
+
+app.get("/api/calls/:callId/recording", async (req, res) => {
+  try {
+    const callId = String(req.params?.callId || "").trim();
+    const callLogs = await loadCallLogs();
+    const callLog = callLogs.find((log) => String(log.id) === callId);
+
+    if (!callLog || !callLog.recording_url) {
+      throw createHttpError(404, "Enregistrement introuvable.");
+    }
+
+    const authHeader = getTwilioBasicAuthHeader();
+    if (!authHeader) {
+      throw createHttpError(500, "Les identifiants Twilio ne sont pas configurés.");
+    }
+
+    const recordingMediaUrl = /\.(mp3|wav)$/i.test(callLog.recording_url)
+      ? callLog.recording_url
+      : `${callLog.recording_url}.mp3`;
+    const recordingResponse = await fetch(recordingMediaUrl, {
+      headers: {
+        Authorization: authHeader
+      }
+    });
+
+    if (!recordingResponse.ok) {
+      throw createHttpError(400, `Impossible de charger l'audio (${recordingResponse.status}).`);
+    }
+
+    const arrayBuffer = await recordingResponse.arrayBuffer();
+    const audioBuffer = Buffer.from(arrayBuffer);
+    res.setHeader("Content-Type", recordingResponse.headers.get("content-type") || "audio/mpeg");
+    res.setHeader("Content-Length", String(audioBuffer.length));
+    return res.status(200).send(audioBuffer);
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de lire l'enregistrement."
+    });
+  }
+});
+
+app.post("/api/calls/:callId/transcribe/retry", async (req, res) => {
+  try {
+    const callId = String(req.params?.callId || "").trim();
+    const callLogs = await loadCallLogs();
+    const callLog = callLogs.find((log) => String(log.id) === callId);
+
+    if (!callLog) {
+      throw createHttpError(404, "Appel introuvable.");
+    }
+    if (!callLog.recording_url) {
+      throw createHttpError(400, "Aucun enregistrement disponible pour cet appel.");
+    }
+
+    callLog.transcript_status = "processing";
+    callLog.transcript_error = null;
+    appendCallEvent(callLog, callLog.status || "updated", { note: "transcript_retry" });
+    await saveCallLogs(callLogs);
+
+    setImmediate(() => {
+      transcribeTwilioRecording(callId, callLog.recording_url, callLog.recording_sid).catch(async (error) => {
+        const refreshedLogs = await loadCallLogs();
+        const failedLog = refreshedLogs.find((log) => String(log.id) === callId);
+        if (!failedLog) return;
+        failedLog.transcript_status = "failed";
+        failedLog.transcript_error = error.message || "Échec de transcription.";
+        appendCallEvent(failedLog, failedLog.status || "updated", { note: "transcript_failed" });
+        await saveCallLogs(refreshedLogs);
+      });
+    });
+
+    return res.json({ ok: true, callId });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      ok: false,
+      error: error.message || "Impossible de relancer la transcription."
+    });
+  }
 });
 
 app.get("/api/client/me", async (req, res) =>
