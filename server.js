@@ -3873,6 +3873,39 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/ai/summarize", async (req, res) => {
+  const type = String(req.body?.type || "deal").trim();
+  const text = String(req.body?.text || "").trim();
+  if (!text) return res.status(400).json({ ok: false, error: "Texte manquant." });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ ok: false, error: "ANTHROPIC_API_KEY non configurée." });
+
+  const prompt = type === "vendeur"
+    ? `Expert en négociation immobilière au Québec. Résume ces notes sur le vendeur en 3-5 points clés. Identifie motivation, contraintes et stratégies de négociation suggérées.\n\n${text}`
+    : `Expert en acquisition immobilière au Québec. Résume ces notes de deal en 3-5 points clés. Identifie opportunités et risques.\n\n${text}`;
+
+  try {
+    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    const data = await aiRes.json();
+    if (!aiRes.ok) return res.status(502).json({ ok: false, error: data?.error?.message || "Erreur API Claude." });
+    const summary = (data.content || []).map(b => b.text || "").join("").trim();
+    res.json({ ok: true, summary });
+  } catch {
+    res.status(502).json({ ok: false, error: "Impossible de joindre l'API Claude." });
+  }
+});
+
 app.use("/api/listings", createListingsRouter({
   listingsService
 }));

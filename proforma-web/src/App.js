@@ -755,24 +755,16 @@ export default function App() {
     if (!text?.trim()) { alert("Ajoutez des notes avant de résumer."); return; }
     type === "deal" ? setAiLoadD(true) : setAiLoadV(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/ai/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content:
-            type === "deal"
-              ? `Expert en acquisition immobilière au Québec. Résume ces notes de deal en 3-5 points clés. Identifie opportunités et risques.\n\n${text}`
-              : `Expert en négociation immobilière au Québec. Résume ces notes sur le vendeur en 3-5 points clés. Identifie motivation, contraintes et stratégies de négociation suggérées.\n\n${text}`
-          }]
-        })
+        body: JSON.stringify({ type: type === "deal" ? "deal" : "vendeur", text })
       });
       const data = await res.json();
-      const summary = data.content?.map(b => b.text || "").join("") || "Erreur API.";
+      const summary = data.ok ? data.summary : (data.error || "Erreur API.");
       upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: summary }));
     } catch {
-      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: "Erreur de connexion à l'API Claude." }));
+      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: "Erreur de connexion au serveur." }));
     } finally {
       type === "deal" ? setAiLoadD(false) : setAiLoadV(false);
     }
