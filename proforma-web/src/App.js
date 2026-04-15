@@ -523,11 +523,7 @@ export default function App() {
   const fileRef = useRef();
   const geocodeTimersRef = useRef({});
   const geocodeSkipRef = useRef({});
-  const [addrSuggestions, setAddrSuggestions] = useState([]);
-  const [wsAddrSuggestions, setWsAddrSuggestions] = useState([]);
   const [newAddrCoords, setNewAddrCoords] = useState(null);
-  const addrDebounceRef = useRef(null);
-  const wsAddrDebounceRef = useRef(null);
 
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
 
@@ -706,29 +702,6 @@ export default function App() {
     return { lat, lng };
   }, []);
 
-  const fetchAddressSuggestions = useCallback(async (query, setter) => {
-    if (!query || query.length < 3) { setter([]); return; }
-    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(query);
-    const q = encodeURIComponent(hasProvince ? query : `${query}, Québec, QC`);
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=5&addressdetails=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`, {
-        headers: { Accept: "application/json" }
-      });
-      if (!res.ok) { setter([]); return; }
-      const data = await res.json();
-      if (!Array.isArray(data)) { setter([]); return; }
-      setter(data.map(r => {
-        const a = r.address || {};
-        const street = [a.house_number, a.road].filter(Boolean).join(" ");
-        const city = a.city || a.town || a.village || a.municipality || "";
-        const province = a.state || "";
-        const label = [street, city, province].filter(Boolean).join(", ") || r.display_name.split(",").slice(0, 3).join(",").trim();
-        return { label, full: r.display_name, lat: Number(r.lat), lng: Number(r.lon) };
-      }));
-    } catch {
-      setter([]);
-    }
-  }, []);
 
   useEffect(() => {
     deals.forEach((deal) => {
@@ -1457,37 +1430,18 @@ export default function App() {
                           <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
                           <div className="f-row">
                             <div className="f-lbl">Adresse</div>
-                            <div style={{position:"relative",flex:1}}>
-                              <input
-                                value={current.address || ""}
-                                onChange={e => {
-                                  const nextAddress = e.target.value;
-                                  delete geocodeSkipRef.current[current.id];
-                                  upd(current.id, d => ({ ...d, address: nextAddress, coords: null }));
-                                  clearTimeout(wsAddrDebounceRef.current);
-                                  wsAddrDebounceRef.current = setTimeout(() => fetchAddressSuggestions(nextAddress, setWsAddrSuggestions), 400);
-                                }}
-                                onBlur={() => setTimeout(() => setWsAddrSuggestions([]), 200)}
-                                placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
-                                style={{width:"100%"}}
-                              />
-                              {wsAddrSuggestions.length > 0 && (
-                                <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #e0d9cc",borderRadius:6,boxShadow:"0 4px 12px rgba(0,0,0,0.12)",zIndex:200,maxHeight:220,overflowY:"auto"}}>
-                                  {wsAddrSuggestions.map((s, i) => (
-                                    <div key={i}
-                                      style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
-                                      onMouseDown={() => {
-                                        delete geocodeSkipRef.current[current.id];
-                                        upd(current.id, d => ({ ...d, address: s.label, coords: { lat: s.lat, lng: s.lng } }));
-                                        setWsAddrSuggestions([]);
-                                      }}
-                                    >
-                                      {s.label}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
+                            <AddressAutocomplete
+                              value={current.address || ""}
+                              onChange={v => {
+                                delete geocodeSkipRef.current[current.id];
+                                upd(current.id, d => ({ ...d, address: v, coords: null }));
+                              }}
+                              onSelect={s => {
+                                delete geocodeSkipRef.current[current.id];
+                                upd(current.id, d => ({ ...d, address: s.label, coords: { lat: s.lat, lng: s.lng } }));
+                              }}
+                              placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+                            />
                           </div>
                         </div>
                       </div>
@@ -1657,39 +1611,15 @@ export default function App() {
             </div>
             <div className="f-row">
               <div className="f-lbl">Adresse (pour la carte)</div>
-              <div style={{position:"relative"}}>
-                <input
-                  value={newAddress}
-                  onChange={e => {
-                    setNewAddress(e.target.value);
-                    setNewAddrCoords(null);
-                    clearTimeout(addrDebounceRef.current);
-                    addrDebounceRef.current = setTimeout(() => fetchAddressSuggestions(e.target.value, setAddrSuggestions), 400);
-                  }}
-                  onBlur={() => setTimeout(() => setAddrSuggestions([]), 200)}
-                  placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
-                  style={{width:"100%"}}
-                />
-                {addrSuggestions.length > 0 && (
-                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #e0d9cc",borderRadius:6,boxShadow:"0 4px 12px rgba(0,0,0,0.12)",zIndex:200,maxHeight:220,overflowY:"auto"}}>
-                    {addrSuggestions.map((s, i) => (
-                      <div key={i}
-                        style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
-                        onMouseDown={() => {
-                          setNewAddress(s.label);
-                          setNewAddrCoords({ lat: s.lat, lng: s.lng });
-                          setAddrSuggestions([]);
-                        }}
-                      >
-                        {s.label}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <AddressAutocomplete
+                value={newAddress}
+                onChange={v => { setNewAddress(v); setNewAddrCoords(null); }}
+                onSelect={s => { setNewAddress(s.label); setNewAddrCoords({ lat: s.lat, lng: s.lng }); }}
+                placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+              />
             </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); setNewAddrCoords(null); setAddrSuggestions([]); }}>Annuler</button>
+              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); setNewAddrCoords(null); }}>Annuler</button>
               <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
             </div>
           </div>
@@ -1715,6 +1645,79 @@ export default function App() {
               <button className="btn btn-gold" onClick={addEvent}>Créer</button>
             </div>
           </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function AddressAutocomplete({ value, onChange, onSelect, placeholder, style }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [dropRect, setDropRect] = useState(null);
+  const inputRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  const fetchSuggestions = useCallback(async (query) => {
+    if (!query || query.length < 3) { setSuggestions([]); return; }
+    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(query);
+    const q = encodeURIComponent(hasProvince ? query : `${query}, Québec, QC`);
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=5&addressdetails=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) { setSuggestions([]); return; }
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) { setSuggestions([]); return; }
+      const results = data.map(r => {
+        const a = r.address || {};
+        const street = [a.house_number, a.road].filter(Boolean).join(" ");
+        const city = a.city || a.town || a.village || a.municipality || "";
+        const province = a.state || "";
+        const label = [street, city, province].filter(Boolean).join(", ") || r.display_name.split(",").slice(0, 3).join(",").trim();
+        return { label, lat: Number(r.lat), lng: Number(r.lon) };
+      });
+      setSuggestions(results);
+      if (inputRef.current) {
+        const rect = inputRef.current.getBoundingClientRect();
+        setDropRect({ top: rect.bottom, left: rect.left, width: rect.width });
+      }
+    } catch {
+      setSuggestions([]);
+    }
+  }, []);
+
+  useEffect(() => () => clearTimeout(debounceRef.current), []);
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={e => {
+          onChange(e.target.value);
+          clearTimeout(debounceRef.current);
+          debounceRef.current = setTimeout(() => fetchSuggestions(e.target.value), 400);
+        }}
+        onBlur={() => setTimeout(() => setSuggestions([]), 200)}
+        placeholder={placeholder}
+        style={style}
+      />
+      {suggestions.length > 0 && dropRect && (
+        <div style={{
+          position:"fixed", top:dropRect.top, left:dropRect.left, width:dropRect.width,
+          background:"#fff", border:"1px solid #e0d9cc", borderRadius:6,
+          boxShadow:"0 4px 16px rgba(0,0,0,0.13)", zIndex:9999,
+          maxHeight:220, overflowY:"auto"
+        }}>
+          {suggestions.map((s, i) => (
+            <div key={i}
+              style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
+              onMouseDown={() => { onSelect(s); setSuggestions([]); }}
+            >
+              {s.label}
+            </div>
+          ))}
         </div>
       )}
     </>
