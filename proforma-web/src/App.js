@@ -204,10 +204,15 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .doc-meta{font-size:10px;color:var(--text3);margin-top:3px}
 .doc-del{position:absolute;top:6px;right:6px;border:1px solid #F2C7BF;background:#FDF0ED;color:#A93425;border-radius:5px;padding:2px 6px;font-size:9px;cursor:pointer;opacity:0;transition:opacity .12s}
 .doc:hover .doc-del{opacity:1}
-.pdf-wrap{background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:12px}
-.pdf-top{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border)}
-.pdf-name{font-size:12px;font-weight:700;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pdf-frame{width:100%;height:520px;border:none;background:#fff}
+.doc-modal{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;background:var(--bg)}
+.doc-modal-top{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0}
+.doc-modal-name{font-size:13px;font-weight:700;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:12px}
+.doc-modal-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.doc-modal-frame{width:100%;height:100%;border:none;background:#fff;flex:1}
+.xlsx-table-wrap{overflow:auto;padding:16px}
+.xlsx-table{border-collapse:collapse;font-size:12px;white-space:nowrap}
+.xlsx-table th,.xlsx-table td{border:1px solid #e0d9cc;padding:5px 10px;text-align:left}
+.xlsx-table th{background:#f5f1ea;font-weight:700;position:sticky;top:0}
 
 .cl-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .cl-pill{border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:999px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer}
@@ -1474,20 +1479,24 @@ export default function App() {
                   {tab === "documents" && (
                     <>
                       {viewing && (
-                        <div className="pdf-wrap">
-                          <div className="pdf-top">
-                            <div className="pdf-name">📄 {viewing.name}</div>
-                            <div style={{display:"flex",gap:8}}>
+                        <div className="doc-modal">
+                          <div className="doc-modal-top">
+                            <div className="doc-modal-name">📄 {viewing.name}</div>
+                            <div style={{display:"flex",gap:8,flexShrink:0}}>
                               <a href={viewing.dataUrl} download={viewing.name}><button className="btn btn-sm">Télécharger</button></a>
                               <button className="btn btn-sm" onClick={() => setViewing(null)}>Fermer</button>
                             </div>
                           </div>
-                          {viewing.type?.includes("pdf")
-                            ? <iframe src={viewing.dataUrl} className="pdf-frame" title={viewing.name} />
-                            : viewing.type?.includes("image")
-                            ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:520,display:"block",margin:"0 auto",objectFit:"contain",background:"#fff"}} />
-                            : <div style={{padding:20,fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
-                          }
+                          <div className="doc-modal-body">
+                            {viewing.type?.includes("pdf")
+                              ? <iframe src={viewing.dataUrl} className="doc-modal-frame" title={viewing.name} />
+                              : viewing.type?.includes("image")
+                              ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:"100%",display:"block",margin:"auto",objectFit:"contain",padding:16}} />
+                              : (viewing.type?.includes("spreadsheet") || viewing.name?.match(/\.xlsx?$/i))
+                              ? <XlsxViewer dataUrl={viewing.dataUrl} />
+                              : <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
+                            }
+                          </div>
                         </div>
                       )}
 
@@ -1644,6 +1653,55 @@ export default function App() {
         </div>
       )}
     </>
+  );
+}
+
+function XlsxViewer({ dataUrl }) {
+  const [sheets, setSheets] = useState(null);
+  const [activeSheet, setActiveSheet] = useState(0);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const XLSX = window.XLSX;
+    if (!XLSX) { setError("SheetJS non chargé."); return; }
+    try {
+      const base64 = dataUrl.split(",")[1];
+      const workbook = XLSX.read(base64, { type: "base64" });
+      const parsed = workbook.SheetNames.map(name => ({
+        name,
+        rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" })
+      }));
+      setSheets(parsed);
+    } catch {
+      setError("Impossible de lire le fichier Excel.");
+    }
+  }, [dataUrl]);
+
+  if (error) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{error}</div>;
+  if (!sheets) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement…</div>;
+
+  const current = sheets[activeSheet];
+  const headers = current.rows[0] || [];
+  const body = current.rows.slice(1);
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {sheets.length > 1 && (
+        <div style={{display:"flex",gap:6,padding:"8px 16px",borderBottom:"1px solid var(--border)",flexShrink:0,flexWrap:"wrap"}}>
+          {sheets.map((s, i) => (
+            <button key={i} className={`btn btn-sm${i===activeSheet?" btn-gold":""}`} onClick={() => setActiveSheet(i)}>{s.name}</button>
+          ))}
+        </div>
+      )}
+      <div className="xlsx-table-wrap" style={{flex:1}}>
+        <table className="xlsx-table">
+          <thead><tr>{headers.map((h, i) => <th key={i}>{String(h)}</th>)}</tr></thead>
+          <tbody>{body.map((row, r) => (
+            <tr key={r}>{headers.map((_, c) => <td key={c}>{String(row[c] ?? "")}</td>)}</tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
