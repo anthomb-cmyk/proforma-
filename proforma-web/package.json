@@ -19,7 +19,7 @@
   },
   "scripts": {
     "dev": "react-scripts start",
-    "start": "node -e \"const fs=require('fs');try{if(fs.existsSync('../node_modules')&&!fs.lstatSync('../node_modules').isSymbolicLink()){fs.rmSync('../node_modules',{recursive:true,force:true});}if(!fs.existsSync('../node_modules')){fs.symlinkSync('proforma-web/node_modules','../node_modules','junction');}}catch(e){console.error('node_modules link warning:',e.message)}\" && node ../server.js",
+    "start": "node -e \"const fs=require('fs'),path=require('path');const cwd=process.cwd();const link=path.join(cwd,'..','node_modules');const target=path.join(cwd,'node_modules');if(!fs.existsSync(link)){try{fs.symlinkSync(target,link);}catch(e){console.error('symlink warning:',e.message);}}\" && node ../server.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
