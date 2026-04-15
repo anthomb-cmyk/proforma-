@@ -386,6 +386,13 @@ function createDeal(title, address = "", coords = null) {
   };
 }
 
+function dealLabel(d) {
+  let label = d?.title || "Sans titre";
+  if (d?.units) label += ` • ${d.units} unités`;
+  if (d?.askingPrice) label += ` • ${Number(d.askingPrice).toLocaleString("fr-CA")} $`;
+  return label;
+}
+
 const SK = "acq_crm_v4";
 function load() { try { const r = localStorage.getItem(SK); return r ? JSON.parse(r) : null; } catch { return null; } }
 function persist(s) { try { localStorage.setItem(SK, JSON.stringify(s)); } catch {} }
@@ -964,7 +971,7 @@ export default function App() {
                 <div key={d.id} className={`deal-row${d.id===currentId && view==="workspace"?" active":""}`} onClick={() => openDeal(d.id)}>
                   <div className="deal-avatar" style={{background:st.color}}>{initials(d.title, "DL")}</div>
                   <div className="deal-main">
-                    <div className="deal-title">{d.title}</div>
+                    <div className="deal-title">{dealLabel(d)}</div>
                     <div className="deal-meta">
                       <span className="stage-pill-mini" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
                       <span style={{fontSize:10,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.contact?.name || "Sans contact"}</span>
@@ -1065,7 +1072,7 @@ export default function App() {
                         return (
                           <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
                             <div className="task-main">
-                              <div className="task-title">{d.title}</div>
+                              <div className="task-title">{dealLabel(d)}</div>
                               <div className="task-sub">{d.followUpNote || "Suivi à compléter"}</div>
                             </div>
                             <span className="date-badge" style={{background:isOD?"#FCE9E6":isToday?"#F5EDD6":"#F4F1E8",color:isOD?"#C0392B":isToday?"#9B7A2A":"#6B6B6B"}}>
@@ -1086,7 +1093,7 @@ export default function App() {
                         return (
                           <div key={d.id} className="opp" onClick={() => openDeal(d.id)}>
                             <div className="opp-l">
-                              <div className="opp-title">{d.title}</div>
+                              <div className="opp-title">{dealLabel(d)}</div>
                               <div className="opp-sub">{STAGES.find(s=>s.id===d.stage)?.label || "Prospection"}</div>
                             </div>
                             <span className={pr.cls}>{pr.tag}</span>
@@ -1125,9 +1132,9 @@ export default function App() {
                             const pr = PRIORITY[d.priority || "medium"];
                             return (
                               <div key={d.id} className="k-card" onClick={() => openDeal(d.id)}>
-                                <div className="k-title">{d.title}</div>
+                                <div className="k-title">{dealLabel(d)}</div>
                                 <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || "Contact à définir"}</span></div>
-                                <div className="k-price">Prix: À valider</div>
+                                <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("fr-CA")} $` : "Prix: À valider"}</div>
                                 {d.followUpDate && <div className="k-row"><span className="k-mk">Suivi</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
                                 <div className="k-row"><span className="k-mk">Documents</span><span className="k-mv">{(d.files||[]).length}</span></div>
                                 <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
@@ -1204,7 +1211,7 @@ export default function App() {
                         return (
                           <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
                             <div className="task-main">
-                              <div className="task-title">{d.title}</div>
+                              <div className="task-title">{dealLabel(d)}</div>
                               <div className="task-sub">{d.followUpNote || "Suivi requis"}{d.contact?.name ? ` · ${d.contact.name}` : ""}</div>
                             </div>
                             <span className="pill" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
@@ -1656,7 +1663,7 @@ export default function App() {
               <div className="f-lbl">Associer à un deal</div>
               <select value={newEv.dealId || currentId || ""} onChange={e => setNewEv(n => ({ ...n, dealId:e.target.value }))}>
                 <option value="">— Sélectionner —</option>
-                {deals.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
+                {deals.map(d => <option key={d.id} value={d.id}>{dealLabel(d)}</option>)}
               </select>
             </div>
             <div className="mo-foot">
@@ -1928,7 +1935,7 @@ function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh -
         const marker = L.marker([group.lat, group.lng], { icon }).addTo(layer);
         marker.bindPopup(`
           <div class="map-popup">
-            <div class="map-popup-title">${esc(deal.title)}</div>
+            <div class="map-popup-title">${esc(dealLabel(deal))}</div>
             <div class="map-popup-sub">${esc(STAGES.find((s) => s.id === deal.stage)?.label || "Prospection")}</div>
             <div class="map-popup-row">Contact: ${esc(deal.contact?.name || "N/A")}</div>
             <div class="map-popup-row">Priorité: <span class="map-pill" style="background:${priority.color}22;color:${priority.color}">${esc(priority.label)}</span></div>
@@ -1947,7 +1954,7 @@ function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh -
         const rows = group.items.slice(0, 8).map((deal) => (
           `<div class="map-popup-row">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${stageColor(deal.stage)};margin-right:6px;"></span>
-            ${esc(deal.title)}
+            ${esc(dealLabel(deal))}
             <button class="map-open-btn" data-open-deal="${esc(deal.id)}" style="padding:3px 7px;font-size:10px;margin-top:4px;margin-left:8px;">Ouvrir</button>
           </div>`
         )).join("");
