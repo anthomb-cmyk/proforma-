@@ -209,17 +209,17 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .doc-modal-name{font-size:13px;font-weight:700;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:12px}
 .doc-modal-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 .doc-modal-frame{width:100%;height:100%;border:none;background:#fff;flex:1}
-.xlsx-table-wrap{overflow:auto;flex:1;background:#fafaf8}
-.xlsx-table{border-collapse:collapse;font-size:13px;width:100%}
-.xlsx-table td{border:1px solid #ece6d8;padding:7px 14px;vertical-align:middle;color:#2a1f0e;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.xlsx-table tr:nth-child(even) td{background:#f8f5f0}
-.xlsx-table tr:nth-child(odd) td{background:#fff}
-.xlsx-table tr:hover td{background:#f2ead6}
-.xlsx-table td.cell-num{text-align:right;font-variant-numeric:tabular-nums;font-weight:500;color:#2a1f0e}
-.xlsx-table td.cell-head{font-weight:700;color:#fff;background:#8a7355!important;letter-spacing:.04em;font-size:11px;text-transform:uppercase}
-.xlsx-table td.cell-empty{border-color:transparent!important}
-.xlsx-table td:first-child{color:#5a4a32;font-weight:500;background:#faf7f2!important}
-.xlsx-table td.cell-head:first-child{background:#8a7355!important;color:#fff}
+.pf-wrap{overflow:auto;flex:1;background:#f7f4ef;padding:16px;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.pf-panel{border:2px solid #5a4a32;border-radius:4px;overflow:hidden;flex-shrink:0;background:#fff;font-family:Arial,sans-serif;font-size:12px}
+.pf-panel table{border-collapse:collapse;width:100%}
+.pf-panel td{padding:4px 10px;vertical-align:middle;white-space:nowrap;color:#1a1000;border-bottom:1px solid #ece6d8;height:22px}
+.pf-panel tr:hover td{background:#fef9ee!important}
+.pf-panel td.ph{font-weight:700;background:#5a4a32!important;color:#fff!important;text-transform:uppercase;letter-spacing:.05em;font-size:11px;border-bottom:2px solid #3a2e1e}
+.pf-panel td.psh{font-weight:700;background:#e8e0d0!important;color:#3a2e1e;font-size:11.5px;border-top:1px solid #aaa;border-bottom:1px solid #aaa}
+.pf-panel td.pnum{text-align:right;font-variant-numeric:tabular-nums}
+.pf-panel td.pbold{font-weight:700}
+.pf-panel td.plbl{color:#5a4a32}
+.pf-panel tr.pspacer td{height:8px;border-bottom:none;background:#f7f4ef!important}
 .xlsx-tabs{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0;flex-wrap:wrap}
 
 .cl-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
@@ -368,13 +368,15 @@ function buildCL(stageId) {
   return (CHECKLISTS[stageId] || []).map((label, i) => ({ id: `${stageId}_${i}`, label, done: false }));
 }
 
-function createDeal(title, address = "", coords = null) {
+function createDeal(title, address = "", coords = null, units = "", askingPrice = "") {
   const now = Date.now();
   return {
     id: `acq_${now}_${Math.random().toString(36).slice(2, 7)}`,
     title: title || "Nouveau deal",
     address: address || "",
     coords: coords || null,
+    units: units || "",
+    askingPrice: askingPrice || "",
     stage: "prospection", priority: "medium",
     createdAt: now, updatedAt: now,
     followUpDate: "", followUpNote: "", nextAction: "",
@@ -389,7 +391,11 @@ function createDeal(title, address = "", coords = null) {
 function dealLabel(d) {
   let label = d?.title || "Sans titre";
   if (d?.units) label += ` • ${d.units} unités`;
-  if (d?.askingPrice) label += ` • ${Number(d.askingPrice).toLocaleString("fr-CA")} $`;
+  if (d?.askingPrice) {
+    const n = Number(d.askingPrice);
+    const formatted = isNaN(n) ? d.askingPrice : n.toLocaleString("en-CA");
+    label += ` • ${formatted} $`;
+  }
   return label;
 }
 
@@ -544,6 +550,8 @@ export default function App() {
   const geocodeTimersRef = useRef({});
   const geocodeSkipRef = useRef({});
   const [newAddrCoords, setNewAddrCoords] = useState(null);
+  const [newUnits, setNewUnits] = useState("");
+  const [newAskingPrice, setNewAskingPrice] = useState("");
 
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
 
@@ -654,14 +662,15 @@ export default function App() {
   }, []);
 
   const createDealFn = () => {
-    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim(), newAddrCoords);
+    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim(), newAddrCoords, newUnits.trim(), newAskingPrice.trim());
     setDeals(p => [d, ...p]);
     setCurrentId(d.id);
     setModal(null);
     setNewTitle("");
     setNewAddress("");
     setNewAddrCoords(null);
-    setAddrSuggestions([]);
+    setNewUnits("");
+    setNewAskingPrice("");
     setView("workspace");
     setTab("crm");
   };
@@ -1134,7 +1143,7 @@ export default function App() {
                               <div key={d.id} className="k-card" onClick={() => openDeal(d.id)}>
                                 <div className="k-title">{dealLabel(d)}</div>
                                 <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || "Contact à définir"}</span></div>
-                                <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("fr-CA")} $` : "Prix: À valider"}</div>
+                                <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("en-CA")} $` : "Prix: À valider"}</div>
                                 {d.followUpDate && <div className="k-row"><span className="k-mk">Suivi</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
                                 <div className="k-row"><span className="k-mk">Documents</span><span className="k-mv">{(d.files||[]).length}</span></div>
                                 <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
@@ -1310,7 +1319,7 @@ export default function App() {
                       <div className="ws-addr">
                         {current.address || "Adresse / secteur à renseigner"}
                         {current.units ? <span style={{marginLeft:10,color:"var(--text2)"}}>• {current.units} unités</span> : null}
-                        {current.askingPrice ? <span style={{marginLeft:10,fontWeight:700,color:"var(--gold)"}}>• {Number(current.askingPrice).toLocaleString("fr-CA")} $</span> : null}
+                        {current.askingPrice ? <span style={{marginLeft:10,fontWeight:700,color:"var(--gold)"}}>• {Number(current.askingPrice).toLocaleString("en-CA")} $</span> : null}
                       </div>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1632,20 +1641,27 @@ export default function App() {
           <div className="mo-box" onClick={e => e.stopPropagation()}>
             <div className="mo-title">Nouveau deal</div>
             <div className="f-row">
-              <div className="f-lbl">Nom / Adresse de la propriété</div>
-              <input autoFocus value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu" onKeyDown={e => e.key === "Enter" && createDealFn()} />
-            </div>
-            <div className="f-row">
-              <div className="f-lbl">Adresse (pour la carte)</div>
+              <div className="f-lbl">Adresse de la propriété</div>
               <AddressAutocomplete
-                value={newAddress}
-                onChange={v => { setNewAddress(v); setNewAddrCoords(null); }}
-                onSelect={s => { setNewAddress(s.label); setNewAddrCoords({ lat: s.lat, lng: s.lng }); }}
-                placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+                autoFocus
+                value={newTitle}
+                onChange={v => { setNewTitle(v); setNewAddress(v); setNewAddrCoords(null); }}
+                onSelect={s => { setNewTitle(s.label); setNewAddress(s.label); setNewAddrCoords({ lat: s.lat, lng: s.lng }); }}
+                placeholder="Ex: 11 rue Molleur, Saint-Jean-sur-Richelieu"
               />
             </div>
+            <div className="f-row" style={{display:"flex",gap:10}}>
+              <div style={{flex:1}}>
+                <div className="f-lbl">Nombre d'unités</div>
+                <input type="number" min="1" step="1" value={newUnits} onChange={e => setNewUnits(e.target.value)} placeholder="Ex: 6" />
+              </div>
+              <div style={{flex:2}}>
+                <div className="f-lbl">Prix demandé ($)</div>
+                <input type="number" min="0" step="1000" value={newAskingPrice} onChange={e => setNewAskingPrice(e.target.value)} placeholder="Ex: 900000" onKeyDown={e => e.key === "Enter" && createDealFn()} />
+              </div>
+            </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); setNewAddrCoords(null); }}>Annuler</button>
+              <button className="btn" onClick={() => { setModal(null); setNewTitle(""); setNewAddress(""); setNewAddrCoords(null); setNewUnits(""); setNewAskingPrice(""); }}>Annuler</button>
               <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
             </div>
           </div>
@@ -1687,59 +1703,71 @@ function XlsxViewer({ dataUrl }) {
     if (!XLSX) { setError("SheetJS non chargé."); return; }
     try {
       const base64 = dataUrl.split(",")[1];
-      const workbook = XLSX.read(base64, { type: "base64" });
-      const parsed = workbook.SheetNames.map(name => ({
+      const wb = XLSX.read(base64, { type: "base64", cellStyles: true });
+      const parsed = wb.SheetNames.map(name => ({
         name,
-        rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" })
+        rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "" }),
+        ws: wb.Sheets[name],
       }));
       setSheets(parsed);
-    } catch {
-      setError("Impossible de lire le fichier Excel.");
-    }
+    } catch { setError("Impossible de lire le fichier Excel."); }
   }, [dataUrl]);
 
   if (error) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{error}</div>;
   if (!sheets) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement…</div>;
 
-  const current = sheets[activeSheet];
-  const maxCols = Math.max(...current.rows.map(r => r.length), 0);
-  // Drop fully empty rows
-  const rows = current.rows.filter(r => r.some(c => c !== "" && c !== null && c !== undefined));
+  const { rows, ws } = sheets[activeSheet];
+  const XLSX = window.XLSX;
 
-  // Find which columns have ANY data across all rows
-  const colUsed = Array.from({length: maxCols}, (_, c) => rows.some(r => String(r[c] ?? "").trim() !== ""));
+  // Fixed 3-panel layout matching the proforma format:
+  // Col A (idx 0) = spacer | B-E (1-4) = left | F-I (5-8) = center | J (9) = spacer | K-M (10-12) = right
+  const PANELS = [[1,2,3,4], [5,6,7,8], [10,11,12]];
+  const allPanelCols = PANELS.flat();
 
-  // Split into column sections separated by fully-empty columns
-  const sections = [];
-  let start = -1;
-  for (let c = 0; c <= maxCols; c++) {
-    const used = c < maxCols && colUsed[c];
-    if (used && start === -1) start = c;
-    if (!used && start !== -1) { sections.push([start, c - 1]); start = -1; }
+  const encCell = (r, c) => { try { return XLSX.utils.encode_cell({ r, c }); } catch { return ""; } };
+  const getCell = (r, c) => { try { return ws[encCell(r,c)]; } catch { return undefined; } };
+  const isBold = (r, c) => { try { return getCell(r,c)?.s?.font?.bold === true; } catch { return false; } };
+  const isPercent = (r, c) => { try { const f = getCell(r,c)?.z || ""; return f.includes("%"); } catch { return false; } };
+  const cellVal = (r, c) => rows[r]?.[c] ?? "";
+  const cellStr = (r, c) => String(cellVal(r,c)).trim();
+
+  function isNum(v) {
+    if (v === "" || v == null) return false;
+    if (typeof v === "number") return true;
+    const s = String(v).replace(/[$,%\s]/g, "");
+    return s !== "" && !isNaN(Number(s));
   }
 
-  function isEmpty(val) { return String(val ?? "").trim() === ""; }
-
-  function cellClass(val) {
-    const s = String(val ?? "").trim();
-    if (!s) return "cell-empty";
-    if (/^[A-Z][A-Z\s&\(\)\-\/]{3,}$/.test(s)) return "cell-head";
-    if (!isNaN(Number(s.replace(/[$,%\s]/g, "")))) return "cell-num";
-    return "";
-  }
-
-  function formatVal(val) {
-    const s = String(val ?? "").trim();
-    if (!s) return "";
-    const num = Number(s.replace(/[$,%\s]/g, ""));
-    if (!isNaN(num)) {
-      const rounded = Number.isInteger(num) ? num : Math.round(num * 100) / 100;
-      const parts = String(Math.abs(rounded)).split(".");
-      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-      return (rounded < 0 ? "-" : "") + parts.join(".");
+  function fmt(v, ri, c) {
+    if (v === "" || v == null) return "";
+    const n = typeof v === "number" ? v : Number(String(v).replace(/[$,%\s]/g, ""));
+    if (isNaN(n)) return String(v).trim();
+    if (isPercent(ri, c)) {
+      return (n * 100).toFixed(1).replace(/\.0$/, "") + "%";
     }
-    return s;
+    if (Number.isInteger(n)) return n.toLocaleString("en-CA");
+    return n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+
+  // Classify each row: "ph" (main header), "psh" (sub-header), "spacer", or "data"
+  function rowType(ri) {
+    if (allPanelCols.every(c => cellStr(ri, c) === "")) return "spacer";
+    const b1 = PANELS[0][0]; // col B = index 1
+    const v = cellStr(ri, b1);
+    if (!v) return "data";
+    const bold = isBold(ri, b1);
+    const allCaps = v.length > 2 && v === v.toUpperCase() && /[A-Z]/.test(v);
+    if (bold && allCaps) return "ph";
+    if (bold) return "psh";
+    return "data";
+  }
+
+  // Find last meaningful row
+  let lastRow = 0;
+  for (let ri = 0; ri < rows.length; ri++) {
+    if (allPanelCols.some(c => cellStr(ri, c) !== "")) lastRow = ri;
+  }
+  const rowIndices = Array.from({ length: lastRow + 1 }, (_, i) => i);
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
@@ -1750,28 +1778,48 @@ function XlsxViewer({ dataUrl }) {
           ))}
         </div>
       )}
-      <div className="xlsx-table-wrap" style={{padding:16}}>
-        <div style={{display:"flex",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}>
-          {sections.map(([s, e], si) => {
-            // Filter rows that have any content in this section's columns
-            const secRows = rows.filter(row => row.slice(s, e+1).some(c => !isEmpty(c)));
-            if (!secRows.length) return null;
-            return (
-              <table key={si} className="xlsx-table" style={{flexShrink:0,borderRadius:8,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+      <div className="pf-wrap">
+        {PANELS.map((pcols, pi) => {
+          const hasData = rowIndices.some(ri => pcols.some(c => cellStr(ri, c) !== ""));
+          if (!hasData) return null;
+          return (
+            <div key={pi} className="pf-panel">
+              <table>
                 <tbody>
-                  {secRows.map((row, r) => (
-                    <tr key={r}>
-                      {Array.from({length: e - s + 1}, (_, ci) => {
-                        const val = row[s + ci] ?? "";
-                        return <td key={ci} className={cellClass(val)} title={String(val)}>{formatVal(val)}</td>;
-                      })}
-                    </tr>
-                  ))}
+                  {rowIndices.map(ri => {
+                    const rt = rowType(ri);
+                    if (rt === "spacer") {
+                      return <tr key={ri} className="pspacer"><td colSpan={pcols.length}></td></tr>;
+                    }
+                    if (rt === "ph" || rt === "psh") {
+                      // Show the header text from this panel, falling back to Panel 1's text
+                      const headerText = pcols.map(c => cellStr(ri, c)).find(s => s !== "") || cellStr(ri, PANELS[0][0]);
+                      return (
+                        <tr key={ri}>
+                          <td className={rt} colSpan={pcols.length}>{headerText}</td>
+                        </tr>
+                      );
+                    }
+                    return (
+                      <tr key={ri}>
+                        {pcols.map((c, ci) => {
+                          const v = cellVal(ri, c);
+                          const bold = isBold(ri, c);
+                          const cls = (ci === 0 ? "plbl" : isNum(v) ? "pnum" : "") + (bold ? " pbold" : "");
+                          return (
+                            <td key={c} className={cls.trim()}>
+                              {isNum(v) ? fmt(v, ri, c) : String(v ?? "").trim()}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
