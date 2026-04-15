@@ -1693,16 +1693,29 @@ function XlsxViewer({ dataUrl }) {
   if (!sheets) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement…</div>;
 
   const current = sheets[activeSheet];
-  // Find max columns used
   const maxCols = Math.max(...current.rows.map(r => r.length), 0);
-  // Filter out fully empty rows
+  // Drop fully empty rows
   const rows = current.rows.filter(r => r.some(c => c !== "" && c !== null && c !== undefined));
+
+  // Find which columns have ANY data across all rows
+  const colUsed = Array.from({length: maxCols}, (_, c) => rows.some(r => String(r[c] ?? "").trim() !== ""));
+
+  // Split into column sections separated by fully-empty columns
+  const sections = [];
+  let start = -1;
+  for (let c = 0; c <= maxCols; c++) {
+    const used = c < maxCols && colUsed[c];
+    if (used && start === -1) start = c;
+    if (!used && start !== -1) { sections.push([start, c - 1]); start = -1; }
+  }
+
+  function isEmpty(val) { return String(val ?? "").trim() === ""; }
 
   function cellClass(val) {
     const s = String(val ?? "").trim();
     if (!s) return "cell-empty";
-    if (/^[A-Z][A-Z\s&\-\/]{3,}$/.test(s)) return "cell-head"; // all-caps section headers
-    if (!isNaN(Number(String(val).replace(/[$,%]/g, ""))) && s !== "") return "cell-num";
+    if (/^[A-Z][A-Z\s&\(\)\-\/]{3,}$/.test(s)) return "cell-head";
+    if (!isNaN(Number(s.replace(/[$,%\s]/g, "")))) return "cell-num";
     return "";
   }
 
@@ -1710,10 +1723,8 @@ function XlsxViewer({ dataUrl }) {
     const s = String(val ?? "").trim();
     if (!s) return "";
     const num = Number(s.replace(/[$,%\s]/g, ""));
-    if (!isNaN(num) && s !== "") {
-      // Round to 2 decimal places max
+    if (!isNaN(num)) {
       const rounded = Number.isInteger(num) ? num : Math.round(num * 100) / 100;
-      // Use comma as thousands separator — no spaces (easier for dyslexia)
       const parts = String(Math.abs(rounded)).split(".");
       parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
       return (rounded < 0 ? "-" : "") + parts.join(".");
@@ -1730,19 +1741,28 @@ function XlsxViewer({ dataUrl }) {
           ))}
         </div>
       )}
-      <div className="xlsx-table-wrap">
-        <table className="xlsx-table">
-          <tbody>
-            {rows.map((row, r) => (
-              <tr key={r}>
-                {Array.from({length: maxCols}, (_, c) => {
-                  const val = row[c] ?? "";
-                  return <td key={c} className={cellClass(val)} title={String(val)}>{formatVal(val)}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="xlsx-table-wrap" style={{padding:16}}>
+        <div style={{display:"flex",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}>
+          {sections.map(([s, e], si) => {
+            // Filter rows that have any content in this section's columns
+            const secRows = rows.filter(row => row.slice(s, e+1).some(c => !isEmpty(c)));
+            if (!secRows.length) return null;
+            return (
+              <table key={si} className="xlsx-table" style={{flexShrink:0,borderRadius:8,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+                <tbody>
+                  {secRows.map((row, r) => (
+                    <tr key={r}>
+                      {Array.from({length: e - s + 1}, (_, ci) => {
+                        const val = row[s + ci] ?? "";
+                        return <td key={ci} className={cellClass(val)} title={String(val)}>{formatVal(val)}</td>;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
