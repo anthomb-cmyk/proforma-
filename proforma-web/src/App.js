@@ -688,18 +688,22 @@ export default function App() {
   };
 
   const geocodeAddress = useCallback(async (address) => {
-    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(address);
-    const q = encodeURIComponent(hasProvince ? address : `${address}, Québec, QC`);
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`, {
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!Array.isArray(data) || !data[0]?.lat || !data[0]?.lon) return null;
-    const lat = Number(data[0].lat);
-    const lng = Number(data[0].lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    return { lat, lng };
+    const q = encodeURIComponent(address);
+    try {
+      const res = await fetch(
+        `https://photon.komoot.io/api/?q=${q}&lat=45.5088&lon=-73.5878&limit=1&lang=fr`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const f = data?.features?.[0];
+      if (!f) return null;
+      const [lng, lat] = f.geometry?.coordinates || [];
+      if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return null;
+      return { lat: Number(lat), lng: Number(lng) };
+    } catch {
+      return null;
+    }
   }, []);
 
 
@@ -1659,26 +1663,37 @@ function AddressAutocomplete({ value, onChange, onSelect, placeholder, style }) 
 
   const fetchSuggestions = useCallback(async (query) => {
     if (!query || query.length < 3) { setSuggestions([]); return; }
-    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(query);
-    const q = encodeURIComponent(hasProvince ? query : `${query}, Québec, QC`);
+    const q = encodeURIComponent(query);
     try {
+      // Photon: autocomplete engine on OSM data, biased toward Quebec (Montreal coords)
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=5&addressdetails=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`,
+        `https://photon.komoot.io/api/?q=${q}&lat=45.5088&lon=-73.5878&limit=6&lang=fr`,
         { headers: { Accept: "application/json" } }
       );
       if (!res.ok) { setSuggestions([]); return; }
       const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) { setSuggestions([]); return; }
-      const results = data.map(r => {
-        const a = r.address || {};
-        const street = [a.house_number, a.road].filter(Boolean).join(" ");
-        const city = a.city || a.town || a.village || a.municipality || "";
-        const province = a.state || "";
-        const label = [street, city, province].filter(Boolean).join(", ") || r.display_name.split(",").slice(0, 3).join(",").trim();
-        return { label, lat: Number(r.lat), lng: Number(r.lon) };
-      });
+      const features = data?.features;
+      if (!Array.isArray(features) || features.length === 0) { setSuggestions([]); return; }
+      const results = features
+        .filter(f => {
+          // Keep only Canadian results
+          const country = f.properties?.country || "";
+          return /canada/i.test(country);
+        })
+        .map(f => {
+          const p = f.properties || {};
+          const parts = [
+            p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street || p.name || "",
+            p.city || p.town || p.village || p.county || "",
+            p.state || ""
+          ].filter(Boolean);
+          const label = parts.join(", ");
+          const [lng, lat] = f.geometry?.coordinates || [null, null];
+          return { label, lat: Number(lat), lng: Number(lng) };
+        })
+        .filter(r => r.label && Number.isFinite(r.lat));
       setSuggestions(results);
-      if (inputRef.current) {
+      if (inputRef.current && results.length > 0) {
         const rect = inputRef.current.getBoundingClientRect();
         setDropRect({ top: rect.bottom, left: rect.left, width: rect.width });
       }
