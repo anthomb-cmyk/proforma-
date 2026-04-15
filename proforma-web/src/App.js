@@ -355,13 +355,13 @@ function buildCL(stageId) {
   return (CHECKLISTS[stageId] || []).map((label, i) => ({ id: `${stageId}_${i}`, label, done: false }));
 }
 
-function createDeal(title, address = "") {
+function createDeal(title, address = "", coords = null) {
   const now = Date.now();
   return {
     id: `acq_${now}_${Math.random().toString(36).slice(2, 7)}`,
     title: title || "Nouveau deal",
     address: address || "",
-    coords: null,
+    coords: coords || null,
     stage: "prospection", priority: "medium",
     createdAt: now, updatedAt: now,
     followUpDate: "", followUpNote: "", nextAction: "",
@@ -523,6 +523,11 @@ export default function App() {
   const fileRef = useRef();
   const geocodeTimersRef = useRef({});
   const geocodeSkipRef = useRef({});
+  const [addrSuggestions, setAddrSuggestions] = useState([]);
+  const [wsAddrSuggestions, setWsAddrSuggestions] = useState([]);
+  const [newAddrCoords, setNewAddrCoords] = useState(null);
+  const addrDebounceRef = useRef(null);
+  const wsAddrDebounceRef = useRef(null);
 
   useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
 
@@ -633,12 +638,14 @@ export default function App() {
   }, []);
 
   const createDealFn = () => {
-    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim());
+    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim(), newAddrCoords);
     setDeals(p => [d, ...p]);
     setCurrentId(d.id);
     setModal(null);
     setNewTitle("");
     setNewAddress("");
+    setNewAddrCoords(null);
+    setAddrSuggestions([]);
     setView("workspace");
     setTab("crm");
   };
@@ -685,8 +692,9 @@ export default function App() {
   };
 
   const geocodeAddress = useCallback(async (address) => {
-    const query = encodeURIComponent(address);
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&countrycodes=ca&limit=1`, {
+    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(address);
+    const q = encodeURIComponent(hasProvince ? address : `${address}, Québec, QC`);
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`, {
       headers: { Accept: "application/json" },
     });
     if (!res.ok) return null;
@@ -696,6 +704,30 @@ export default function App() {
     const lng = Number(data[0].lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
     return { lat, lng };
+  }, []);
+
+  const fetchAddressSuggestions = useCallback(async (query, setter) => {
+    if (!query || query.length < 3) { setter([]); return; }
+    const hasProvince = /\b(qc|québec|quebec|ontario|on|bc|alberta|ab)\b/i.test(query);
+    const q = encodeURIComponent(hasProvince ? query : `${query}, Québec, QC`);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&countrycodes=ca&limit=5&addressdetails=1&viewbox=-79.7624,44.9996,-57.1058,62.5819&bounded=0`, {
+        headers: { Accept: "application/json" }
+      });
+      if (!res.ok) { setter([]); return; }
+      const data = await res.json();
+      if (!Array.isArray(data)) { setter([]); return; }
+      setter(data.map(r => {
+        const a = r.address || {};
+        const street = [a.house_number, a.road].filter(Boolean).join(" ");
+        const city = a.city || a.town || a.village || a.municipality || "";
+        const province = a.state || "";
+        const label = [street, city, province].filter(Boolean).join(", ") || r.display_name.split(",").slice(0, 3).join(",").trim();
+        return { label, full: r.display_name, lat: Number(r.lat), lng: Number(r.lon) };
+      }));
+    } catch {
+      setter([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -1423,11 +1455,40 @@ export default function App() {
                           <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
                           <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
                           <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
-                          <div className="f-row"><div className="f-lbl">Adresse</div><input value={current.address || ""} onChange={e => {
-                            const nextAddress = e.target.value;
-                            delete geocodeSkipRef.current[current.id];
-                            upd(current.id,d => ({ ...d, address:nextAddress, coords:null }));
-                          }} placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu" /></div>
+                          <div className="f-row">
+                            <div className="f-lbl">Adresse</div>
+                            <div style={{position:"relative",flex:1}}>
+                              <input
+                                value={current.address || ""}
+                                onChange={e => {
+                                  const nextAddress = e.target.value;
+                                  delete geocodeSkipRef.current[current.id];
+                                  upd(current.id, d => ({ ...d, address: nextAddress, coords: null }));
+                                  clearTimeout(wsAddrDebounceRef.current);
+                                  wsAddrDebounceRef.current = setTimeout(() => fetchAddressSuggestions(nextAddress, setWsAddrSuggestions), 400);
+                                }}
+                                onBlur={() => setTimeout(() => setWsAddrSuggestions([]), 200)}
+                                placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+                                style={{width:"100%"}}
+                              />
+                              {wsAddrSuggestions.length > 0 && (
+                                <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #e0d9cc",borderRadius:6,boxShadow:"0 4px 12px rgba(0,0,0,0.12)",zIndex:200,maxHeight:220,overflowY:"auto"}}>
+                                  {wsAddrSuggestions.map((s, i) => (
+                                    <div key={i}
+                                      style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
+                                      onMouseDown={() => {
+                                        delete geocodeSkipRef.current[current.id];
+                                        upd(current.id, d => ({ ...d, address: s.label, coords: { lat: s.lat, lng: s.lng } }));
+                                        setWsAddrSuggestions([]);
+                                      }}
+                                    >
+                                      {s.label}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -1596,10 +1657,39 @@ export default function App() {
             </div>
             <div className="f-row">
               <div className="f-lbl">Adresse (pour la carte)</div>
-              <input value={newAddress} onChange={e => setNewAddress(e.target.value)} placeholder="Ex: Québec, QC" />
+              <div style={{position:"relative"}}>
+                <input
+                  value={newAddress}
+                  onChange={e => {
+                    setNewAddress(e.target.value);
+                    setNewAddrCoords(null);
+                    clearTimeout(addrDebounceRef.current);
+                    addrDebounceRef.current = setTimeout(() => fetchAddressSuggestions(e.target.value, setAddrSuggestions), 400);
+                  }}
+                  onBlur={() => setTimeout(() => setAddrSuggestions([]), 200)}
+                  placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+                  style={{width:"100%"}}
+                />
+                {addrSuggestions.length > 0 && (
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1px solid #e0d9cc",borderRadius:6,boxShadow:"0 4px 12px rgba(0,0,0,0.12)",zIndex:200,maxHeight:220,overflowY:"auto"}}>
+                    {addrSuggestions.map((s, i) => (
+                      <div key={i}
+                        style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
+                        onMouseDown={() => {
+                          setNewAddress(s.label);
+                          setNewAddrCoords({ lat: s.lat, lng: s.lng });
+                          setAddrSuggestions([]);
+                        }}
+                      >
+                        {s.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); }}>Annuler</button>
+              <button className="btn" onClick={() => { setModal(null); setNewAddress(""); setNewAddrCoords(null); setAddrSuggestions([]); }}>Annuler</button>
               <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
             </div>
           </div>
