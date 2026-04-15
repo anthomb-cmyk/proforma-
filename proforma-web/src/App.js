@@ -1300,7 +1300,10 @@ export default function App() {
                   <div className="ws-head">
                     <div style={{minWidth:0,flex:1}}>
                       <input className="ws-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} />
-                      <div className="ws-addr">{current.address || "Adresse / secteur à renseigner"}</div>
+                      <div className="ws-addr">
+                        {current.address || "Adresse / secteur à renseigner"}
+                        {current.askingPrice ? <span style={{marginLeft:10,fontWeight:700,color:"var(--gold)"}}>• {Number(current.askingPrice).toLocaleString("fr-CA")} $</span> : null}
+                      </div>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span className="stage-crumb">Mis à jour le {new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
@@ -1434,6 +1437,7 @@ export default function App() {
                               ))}
                             </div>
                           </div>
+                          <div className="f-row"><div className="f-lbl">Prix demandé ($)</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder="Ex: 900000" /></div>
                           <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
                           <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
                           <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
