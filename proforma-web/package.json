@@ -10,10 +10,12 @@
     "serve": "^14.2.0"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "dev": "react-scripts start",
+    "start": "node ../server.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "postinstall": "npm --prefix .. install"
   },
   "browserslist": {
     "production": [
