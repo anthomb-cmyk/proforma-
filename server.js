@@ -4049,7 +4049,7 @@ app.post("/api/twilio/voice/outbound-bridge", express.urlencoded({ extended: fal
     dialAttributes.push("recordingStatusCallbackMethod=\"POST\"");
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Say language="fr-CA" voice="alice">Cet appel peut être enregistré à des fins de suivi qualité.</Say>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(leadPhone)}</Dial>\n  <Say language="fr-CA" voice="alice">Le correspondant est indisponible pour le moment.</Say>\n</Response>`;
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(leadPhone)}</Dial>\n</Response>`;
   return sendTwiml(res, twiml);
 });
 
