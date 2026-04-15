@@ -1302,6 +1302,7 @@ export default function App() {
                       <input className="ws-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} />
                       <div className="ws-addr">
                         {current.address || "Adresse / secteur à renseigner"}
+                        {current.units ? <span style={{marginLeft:10,color:"var(--text2)"}}>• {current.units} unités</span> : null}
                         {current.askingPrice ? <span style={{marginLeft:10,fontWeight:700,color:"var(--gold)"}}>• {Number(current.askingPrice).toLocaleString("fr-CA")} $</span> : null}
                       </div>
                     </div>
@@ -1437,6 +1438,7 @@ export default function App() {
                               ))}
                             </div>
                           </div>
+                          <div className="f-row"><div className="f-lbl">Nombre d'unités</div><input type="number" min="1" step="1" value={current.units || ""} onChange={e => upd(current.id,d => ({ ...d, units: e.target.value }))} placeholder="Ex: 6" /></div>
                           <div className="f-row"><div className="f-lbl">Prix demandé ($)</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder="Ex: 900000" /></div>
                           <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
                           <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
