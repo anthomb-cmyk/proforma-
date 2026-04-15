@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
@@ -58,6 +59,9 @@ const WORKSPACE_MESSAGES_PATH = path.join(DATA_DIR, "workspace-messages.json");
 const LISTING_TASKS_PATH = path.join(DATA_DIR, "listing-tasks.json");
 const NOTIFICATIONS_PATH = path.join(DATA_DIR, "notifications.json");
 const CALL_LOGS_PATH = path.join(DATA_DIR, "call-logs.json");
+const PROFORMA_WEB_BUILD_DIR = path.join(__dirname, "proforma-web", "build");
+const PROFORMA_WEB_BUILD_INDEX = path.join(PROFORMA_WEB_BUILD_DIR, "index.html");
+const HAS_PROFORMA_WEB_BUILD = existsSync(PROFORMA_WEB_BUILD_INDEX);
 
 const TRANSLATOR_STEP_ORDER = [
   "move_in_date",
@@ -183,6 +187,7 @@ app.get("/employee.js", (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
+  index: false,
   setHeaders: (res, filePath) => {
     if (filePath.endsWith("index.html")) {
       res.setHeader("Cache-Control", "no-store");
@@ -190,11 +195,21 @@ app.use(express.static(path.join(__dirname, "public"), {
   }
 }));
 
+if (HAS_PROFORMA_WEB_BUILD) {
+  app.use(express.static(PROFORMA_WEB_BUILD_DIR, { index: false }));
+}
+
 app.get("/", (req, res) => {
+  if (HAS_PROFORMA_WEB_BUILD) {
+    return res.sendFile(PROFORMA_WEB_BUILD_INDEX);
+  }
   return res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.get("/index.html", (req, res) => {
+  if (HAS_PROFORMA_WEB_BUILD) {
+    return res.sendFile(PROFORMA_WEB_BUILD_INDEX);
+  }
   return res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 

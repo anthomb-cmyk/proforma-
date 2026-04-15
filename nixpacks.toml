@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "npm install",
+  "npm --prefix proforma-web install"
+]
+
+[phases.build]
+cmds = [
+  "npm --prefix proforma-web run build"
+]
+
+[start]
+cmd = "node server.js"
