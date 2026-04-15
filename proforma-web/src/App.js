@@ -532,6 +532,14 @@ export default function App() {
     return callsByDeal[current.id] || [];
   }, [callsByDeal, current?.id]);
 
+  const upd = useCallback((id, fn) => {
+    setDeals(p => p.map(d => d.id === id ? { ...fn(d), updatedAt: Date.now() } : d));
+  }, []);
+
+  const addAct = useCallback((id, text) => {
+    upd(id, d => ({ ...d, activities: [{ id: Date.now(), text, time: Date.now() }, ...(d.activities || [])] }));
+  }, [upd]);
+
   const loadCallsForDeal = useCallback(async (dealId, options = {}) => {
     if (!dealId) return;
     if (!options.silent) {
@@ -616,14 +624,6 @@ export default function App() {
     setCallNotice({ type: "", text: "" });
     loadCallsForDeal(current.id);
   }, [current?.id, loadCallsForDeal]);
-
-  const upd = useCallback((id, fn) => {
-    setDeals(p => p.map(d => d.id === id ? { ...fn(d), updatedAt: Date.now() } : d));
-  }, []);
-
-  const addAct = useCallback((id, text) => {
-    upd(id, d => ({ ...d, activities: [{ id: Date.now(), text, time: Date.now() }, ...(d.activities || [])] }));
-  }, [upd]);
 
   const openDeal = useCallback((id) => {
     setCurrentId(id);
