@@ -324,6 +324,33 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .call-transcript summary{cursor:pointer;font-size:11px;font-weight:700;color:var(--text2)}
 .call-transcript-text{margin-top:6px;font-size:12px;line-height:1.55;color:var(--text2);background:#FAF8F4;border:1px solid var(--border);border-radius:8px;padding:9px;white-space:pre-wrap}
 
+/* Phone Finder */
+.pf-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.pf-tbl th{padding:9px 12px;text-align:left;font-weight:700;color:var(--text2);font-size:11px;letter-spacing:.3px;white-space:nowrap;border-bottom:1px solid var(--border);background:#F7F4EE}
+.pf-tbl td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.pf-tbl tbody tr:hover td{background:#FAF8F4}
+.pf-tbl td.pf-input-col{max-width:180px}
+.pf-tbl td.pf-match-col{max-width:200px}
+.pf-tbl td.pf-web-col{max-width:160px}
+.pf-cell-name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-cell-addr{color:var(--text3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.pf-phone{font-weight:700;cursor:pointer;white-space:nowrap}
+.pf-phone:hover{text-decoration:underline}
+.pf-conf{display:inline-block;min-width:42px;text-align:center;font-size:11px;font-weight:700;padding:2px 7px;border-radius:999px;font-variant-numeric:tabular-nums}
+.pf-status{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.pf-status.found{background:#E9F7EF;color:#1A7A3F}
+.pf-status.needs_review{background:#FFF3D8;color:#B7791F}
+.pf-status.multiple_matches{background:#FFF0E0;color:#C05A00}
+.pf-status.not_found{background:#FDF0ED;color:#A93425}
+.pf-conf.hi{background:#E9F7EF;color:#1A7A3F}
+.pf-conf.mid{background:#FFF3D8;color:#B7791F}
+.pf-conf.lo{background:#FFF0E0;color:#C05A00}
+.pf-conf.zero{background:#FDF0ED;color:#A93425}
+.pf-drop{border:1.5px dashed #D9C07A;border-radius:12px;background:#FCF8EE;padding:28px;text-align:center;cursor:pointer;transition:all .15s}
+.pf-drop:hover{background:#F8F0DD}
+.pf-cand{border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;background:#fff;transition:border-color .15s}
+.pf-cand:hover{border-color:#D9C07A;background:#FFFBF1}
+.pf-cand.best{background:#FFFBF1;border-color:#E1CC94}
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 
 @media (max-width:1280px){
@@ -498,6 +525,7 @@ function NavIcon({ id }) {
   if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
   if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
   if (id === "followups") return <svg {...common}><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>;
+  if (id === "phonefinder") return <svg {...common}><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 11.39 19a19.45 19.45 0 0 1-5.07-5.07A19.79 19.79 0 0 1 3.08 4.18 2 2 0 0 1 5.06 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L9.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
   return <svg {...common}><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/></svg>;
 }
 
@@ -962,6 +990,7 @@ export default function App() {
               { id:"map", label:"Carte" },
               { id:"followups", label:"Follow-ups" },
               { id:"calendar", label:"Calendrier" },
+              { id:"phonefinder", label:"Recherche Tél." },
             ].map(item => (
               <button key={item.id} className={`nav-item${view===item.id?" active":""}`} onClick={() => setView(item.id)}>
                 <NavIcon id={item.id} />
@@ -1295,6 +1324,8 @@ export default function App() {
               </div>
             </>
           )}
+
+          {view === "phonefinder" && <PhoneFinder />}
 
           {view === "workspace" && (
             !current ? (
@@ -1824,6 +1855,392 @@ function XlsxViewer({ dataUrl }) {
     </div>
   );
 }
+
+// ─── Phone Number Finder ─────────────────────────────────────────────────────
+function PhoneFinder() {
+  const [pfTab, setPfTab] = useState("manual");
+  const [form, setForm] = useState({ name:"", address:"", city:"", province:"Québec", postalCode:"", country:"Canada" });
+  const [results, setResults] = useState(() => { try { return JSON.parse(localStorage.getItem("pf_results") || "[]"); } catch { return []; } });
+  const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState("");
+  const [csvFile, setCsvFile] = useState(null);
+  const [colMap, setColMap] = useState({});
+  const [showColMap, setShowColMap] = useState(false);
+  const [filter, setFilter] = useState({ status:"all", search:"" });
+  const [reviewRow, setReviewRow] = useState(null);
+
+  useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results)); } catch {} }, [results]);
+
+  function parseCSV(text) {
+    const lines = text.trim().split(/\r?\n/);
+    if (!lines.length) return { headers:[], rows:[] };
+    const parseLine = line => {
+      const res = []; let cur = "", inQ = false;
+      for (const c of line) {
+        if (c === '"') { inQ = !inQ; continue; }
+        if (c === ',' && !inQ) { res.push(cur.trim()); cur = ""; continue; }
+        cur += c;
+      }
+      res.push(cur.trim());
+      return res;
+    };
+    const headers = parseLine(lines[0]);
+    const rows = lines.slice(1).filter(l => l.trim()).map(l => {
+      const vals = parseLine(l);
+      return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
+    });
+    return { headers, rows };
+  }
+
+  function autoDetectCols(headers) {
+    const map = {};
+    const matchers = {
+      name:       /^(nom|name|company|compagnie|entreprise)/i,
+      address:    /^(adresse|address|rue|street)/i,
+      city:       /^(ville|city)/i,
+      province:   /^(province|etat|état|state)/i,
+      postalCode: /^(postal|zip|code.?postal)/i,
+      country:    /^(pays|country)/i,
+    };
+    for (const [f, rx] of Object.entries(matchers)) {
+      const m = headers.find(h => rx.test(h.trim()));
+      if (m && !map[f]) map[f] = m;
+    }
+    return map;
+  }
+
+  async function doLookup(rows) {
+    setLoading(true);
+    setApiError("");
+    try {
+      const resp = await fetch("/api/phone-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Erreur serveur");
+      setResults(prev => [...data.results, ...prev]);
+    } catch (err) {
+      setApiError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchManual() {
+    if (!form.name && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
+    setApiError("");
+    await doLookup([{ ...form }]);
+  }
+
+  async function searchCSV() {
+    if (!csvFile?.rows?.length) return;
+    const rows = csvFile.rows.map(r => ({
+      name:       colMap.name       ? (r[colMap.name] || "")       : "",
+      address:    colMap.address    ? (r[colMap.address] || "")    : "",
+      city:       colMap.city       ? (r[colMap.city] || "")       : "",
+      province:   colMap.province   ? (r[colMap.province] || "")   : "",
+      postalCode: colMap.postalCode ? (r[colMap.postalCode] || "") : "",
+      country:    colMap.country    ? (r[colMap.country] || "")    : "Canada",
+    })).filter(r => r.name || r.address);
+    if (!rows.length) { setApiError("Aucune ligne avec un nom ou une adresse après le mappage."); return; }
+    await doLookup(rows);
+  }
+
+  function handleCSVDrop(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const parsed = parseCSV(e.target.result);
+      setCsvFile(parsed);
+      setColMap(autoDetectCols(parsed.headers));
+      setShowColMap(true);
+    };
+    reader.readAsText(file, "UTF-8");
+  }
+
+  function pickCSVFile() {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".csv,text/csv";
+    inp.onchange = e => { if (e.target.files[0]) handleCSVDrop(e.target.files[0]); };
+    inp.click();
+  }
+
+  function exportCSV() {
+    const headers = ["Nom saisi","Adresse saisie","Nom trouvé","Adresse trouvée","Téléphone","Site web","Source","Confiance %","Statut","Date"];
+    const body = filteredResults.map(r => [
+      r.inputName, r.inputAddress, r.matchedName, r.matchedAddress,
+      r.phone, r.website, r.source, r.confidence, r.status, r.searchedAt,
+    ]);
+    const csv = [headers, ...body].map(row => row.map(c => `"${String(c ?? "").replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `recherche-tel-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const filteredResults = useMemo(() => {
+    let r = results;
+    if (filter.status !== "all") r = r.filter(x => x.status === filter.status);
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      r = r.filter(x => (x.inputName + x.inputAddress + x.matchedName + x.phone + x.website).toLowerCase().includes(q));
+    }
+    return r;
+  }, [results, filter]);
+
+  const FIELD_LABELS = { name:"Nom / Entreprise", address:"Adresse", city:"Ville", province:"Province", postalCode:"Code postal", country:"Pays" };
+  const FIELD_HINTS  = { name:"si l'adresse est vide, requis", address:"si le nom est vide, requis", city:"optionnel", province:"optionnel", postalCode:"optionnel", country:"optionnel" };
+
+  function confClass(n) { return n >= 80 ? "hi" : n >= 60 ? "mid" : n >= 40 ? "lo" : "zero"; }
+
+  const STATUS_CFG = {
+    found:            { label:"Trouvé",         cls:"found" },
+    needs_review:     { label:"À vérifier",     cls:"needs_review" },
+    multiple_matches: { label:"Choix multiple", cls:"multiple_matches" },
+    not_found:        { label:"Non trouvé",     cls:"not_found" },
+  };
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+
+      {/* ── Review Modal ───────────────────────────────────────────────── */}
+      {reviewRow && (
+        <div className="mo" onClick={() => setReviewRow(null)}>
+          <div className="mo-box" onClick={e => e.stopPropagation()} style={{maxWidth:560}}>
+            <div className="mo-title">Choisir le bon résultat</div>
+            <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
+              Recherche : <strong>{reviewRow.inputName || reviewRow.inputAddress}</strong>
+            </div>
+            {[
+              { name:reviewRow.matchedName, address:reviewRow.matchedAddress, phone:reviewRow.phone, website:reviewRow.website, confidence:reviewRow.confidence },
+              ...(reviewRow.candidates || []),
+            ].map((c, i) => (
+              <div key={i} className={`pf-cand${i===0?" best":""}`}
+                onClick={() => {
+                  setResults(prev => prev.map(r => r.id === reviewRow.id
+                    ? { ...r, matchedName:c.name, matchedAddress:c.address, phone:c.phone, website:c.website, confidence:c.confidence, status:"found" }
+                    : r));
+                  setReviewRow(null);
+                }}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <span style={{fontWeight:700,fontSize:13}}>{c.name || "(sans nom)"}</span>
+                  <span className={`pf-conf ${confClass(c.confidence)}`}>{c.confidence}%</span>
+                </div>
+                <div style={{fontSize:11,color:"var(--text2)"}}>{c.address}</div>
+                {c.phone && <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",marginTop:4}}>📞 {c.phone}</div>}
+                {c.website && <div style={{fontSize:11,color:"var(--blue)",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🌐 {c.website}</div>}
+              </div>
+            ))}
+            <div className="mo-foot">
+              <button className="btn btn-danger btn-sm" onClick={() => { setResults(prev => prev.map(r => r.id === reviewRow.id ? { ...r, status:"not_found" } : r)); setReviewRow(null); }}>Marquer introuvable</button>
+              <button className="btn" onClick={() => setReviewRow(null)}>Annuler</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Column Mapping Modal ──────────────────────────────────────── */}
+      {showColMap && csvFile && (
+        <div className="mo" onClick={() => setShowColMap(false)}>
+          <div className="mo-box" onClick={e => e.stopPropagation()}>
+            <div className="mo-title">Mapper les colonnes CSV</div>
+            <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
+              <strong>{csvFile.rows.length}</strong> lignes détectées. Assignez chaque colonne CSV à son champ.
+            </div>
+            {Object.entries(FIELD_LABELS).map(([f, lbl]) => (
+              <div className="f-row" key={f}>
+                <div className="f-lbl">{lbl} <span style={{color:"var(--text3)",fontWeight:400}}>— {FIELD_HINTS[f]}</span></div>
+                <select value={colMap[f] || ""} onChange={e => setColMap(m => ({ ...m, [f]: e.target.value }))}>
+                  <option value="">— Ignorer —</option>
+                  {csvFile.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+            ))}
+            <div className="mo-foot">
+              <button className="btn" onClick={() => setShowColMap(false)}>Annuler</button>
+              <button className="btn btn-gold" onClick={() => setShowColMap(false)}>Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ───────────────────────────────────────────────────── */}
+      <div style={{background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"14px 22px 0",flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div>
+            <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>Recherche de Numéros</div>
+            <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Google Places · résultats sauvegardés localement</div>
+          </div>
+          {results.length > 0 && (
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
+              <button className="btn btn-danger btn-sm" onClick={() => { if (window.confirm("Effacer tous les résultats ?")) setResults([]); }}>Vider</button>
+            </div>
+          )}
+        </div>
+        <div className="tabs">
+          <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>🔍 Recherche manuelle</button>
+          <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV</button>
+        </div>
+      </div>
+
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:22,display:"flex",flexDirection:"column",gap:14}}>
+
+        {/* ── Manual Form ───────────────────────────────────────────── */}
+        {pfTab === "manual" && (
+          <div className="card f-card">
+            <div className="f-title">Informations de recherche</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
+              {[
+                ["name","Nom de l'entreprise","Ex: Dépanneur Bélanger"],
+                ["address","Adresse","Ex: 320 rue Bouchard"],
+                ["city","Ville","Ex: Saint-Jean-sur-Richelieu"],
+                ["province","Province","Ex: Québec"],
+                ["postalCode","Code postal","Ex: J3B 6N5"],
+                ["country","Pays","Canada"],
+              ].map(([field, lbl, ph]) => (
+                <div className="f-row" key={field}>
+                  <div className="f-lbl">{lbl}</div>
+                  <input value={form[field]} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))} placeholder={ph} onKeyDown={e => e.key === "Enter" && searchManual()} />
+                </div>
+              ))}
+            </div>
+            {apiError && <div className="status-note error" style={{marginBottom:8}}>{apiError}</div>}
+            <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
+              <button className="btn btn-gold" onClick={searchManual} disabled={loading}>{loading ? "Recherche…" : "🔍 Rechercher"}</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── CSV Form ──────────────────────────────────────────────── */}
+        {pfTab === "csv" && (
+          <div className="card f-card">
+            <div className="f-title">Import CSV</div>
+            <div className="pf-drop"
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
+              onClick={pickCSVFile}>
+              <div style={{fontSize:32,marginBottom:8}}>📂</div>
+              {csvFile
+                ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes chargées · {csvFile.headers.length} colonnes</div>
+                : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier CSV ou cliquez pour choisir</div>}
+              <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes acceptées : nom, adresse, ville, province, code postal, pays</div>
+            </div>
+            {csvFile && (
+              <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div style={{fontSize:12,color:"var(--text2)"}}>
+                  <strong>{csvFile.rows.length}</strong> lignes •{" "}
+                  <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes mappées
+                  {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>modifier le mappage</button>)
+                </div>
+                <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? `Recherche en cours…` : `🔍 Rechercher ${csvFile.rows.filter(r => (colMap.name && r[colMap.name]) || (colMap.address && r[colMap.address])).length} lignes`}</button>
+              </div>
+            )}
+            {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
+          </div>
+        )}
+
+        {/* ── Loading ───────────────────────────────────────────────── */}
+        {loading && (
+          <div className="status-note" style={{textAlign:"center",padding:18}}>
+            ⏳ Recherche en cours via Google Places… (environ 2 s par ligne)
+          </div>
+        )}
+
+        {/* ── Results Table ─────────────────────────────────────────── */}
+        {filteredResults.length > 0 && (
+          <div className="card" style={{overflow:"hidden"}}>
+            <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+              <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => setFilter(f => ({ ...f, search:e.target.value }))} />
+              <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => setFilter(f => ({ ...f, status:e.target.value }))}>
+                <option value="all">Tous les statuts</option>
+                <option value="found">Trouvé</option>
+                <option value="needs_review">À vérifier</option>
+                <option value="multiple_matches">Choix multiple</option>
+                <option value="not_found">Non trouvé</option>
+              </select>
+              <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
+                {filteredResults.length} résultat{filteredResults.length !== 1 ? "s" : ""}
+                {results.length !== filteredResults.length ? ` / ${results.length} total` : ""}
+              </span>
+            </div>
+            <div style={{overflowX:"auto"}}>
+              <table className="pf-tbl">
+                <thead>
+                  <tr>
+                    <th>Recherche</th>
+                    <th>Correspondance trouvée</th>
+                    <th>Téléphone</th>
+                    <th>Site web</th>
+                    <th style={{textAlign:"center"}}>Conf.</th>
+                    <th>Statut</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredResults.map((r, i) => {
+                    const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
+                    const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
+                    return (
+                      <tr key={r.id || i}>
+                        <td className="pf-input-col">
+                          {r.inputName  && <div className="pf-cell-name">{r.inputName}</div>}
+                          {r.inputAddress && <div className="pf-cell-addr">{r.inputAddress}</div>}
+                        </td>
+                        <td className="pf-match-col">
+                          {r.matchedName    && <div className="pf-cell-name">{r.matchedName}</div>}
+                          {r.matchedAddress && <div className="pf-cell-addr">{r.matchedAddress}</div>}
+                          {!r.matchedName && !r.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
+                        </td>
+                        <td>
+                          {r.phone
+                            ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
+                            : <span style={{color:"var(--text3)"}}>—</span>}
+                        </td>
+                        <td className="pf-web-col">
+                          {r.website
+                            ? <a href={r.website} target="_blank" rel="noopener noreferrer" style={{color:"var(--blue)",fontSize:11,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.website.replace(/^https?:\/\/(www\.)?/,"")}</a>
+                            : <span style={{color:"var(--text3)"}}>—</span>}
+                        </td>
+                        <td style={{textAlign:"center"}}>
+                          <span className={`pf-conf ${confClass(r.confidence)}`}>{r.confidence}%</span>
+                        </td>
+                        <td><span className={`pf-status ${sc.cls}`}>{sc.label}</span></td>
+                        <td>
+                          <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
+                            {hasAlts && (
+                              <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>
+                            )}
+                            {r.phone && (
+                              <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier le numéro">📋</button>
+                            )}
+                            <button className="btn btn-sm btn-danger" onClick={() => setResults(prev => prev.filter(x => x.id !== r.id))} title="Supprimer">✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Empty State ───────────────────────────────────────────── */}
+        {!loading && results.length === 0 && (
+          <div className="card empty">
+            <div className="empty-ico">📞</div>
+            <div className="empty-title">Aucun résultat</div>
+            <div className="empty-sub">Recherchez par nom d'entreprise, adresse, ou les deux ensemble. Importez un CSV pour traiter plusieurs lignes en une fois.</div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 function AddressAutocomplete({ value, onChange, onSelect, placeholder, style }) {
   const [suggestions, setSuggestions] = useState([]);

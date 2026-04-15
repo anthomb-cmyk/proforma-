@@ -3896,6 +3896,106 @@ app.post("/api/ai/summarize", async (req, res) => {
   }
 });
 
+// ─── Phone Number Finder ─────────────────────────────────────────────────────
+const GOOGLE_PLACES_KEY = String(process.env.GOOGLE_PLACES_API_KEY || "").trim();
+
+function strSim(a, b) {
+  if (!a || !b) return 0;
+  const clean = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  a = clean(a); b = clean(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const tri = s => {
+    const t = new Set();
+    const w = ` ${s} `;
+    for (let i = 0; i < w.length - 2; i++) t.add(w.slice(i, i + 3));
+    return t;
+  };
+  const ta = tri(a), tb = tri(b);
+  if (!ta.size || !tb.size) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  return inter / (ta.size + tb.size - inter);
+}
+
+async function gPlacesSearch(query) {
+  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&language=fr&key=${GOOGLE_PLACES_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  const d = await r.json();
+  if (d.status === "REQUEST_DENIED") throw new Error(`Google Places: ${d.error_message || "REQUEST_DENIED"}`);
+  return d?.results || [];
+}
+
+async function gPlaceDetails(placeId) {
+  const fields = "name,formatted_address,formatted_phone_number,international_phone_number,website,business_status";
+  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=${fields}&language=fr&key=${GOOGLE_PLACES_KEY}`;
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  const d = await r.json();
+  return d?.result || {};
+}
+
+async function phoneLookupOne({ name, address, city, province, postalCode, country }) {
+  const queryParts = [name, address, city, province, postalCode, country || "Canada"].filter(Boolean);
+  const query = queryParts.join(", ");
+  const results = await gPlacesSearch(query);
+  if (!results.length) {
+    return { matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
+  }
+  const candidates = await Promise.all(results.slice(0, 3).map(async r => {
+    let d = {};
+    try { d = await gPlaceDetails(r.place_id); } catch {}
+    const rName = d.name || r.name || "";
+    const rAddr = d.formatted_address || r.formatted_address || "";
+    const nameSim = name ? strSim(name, rName) : null;
+    const addrSim = address ? strSim(address, rAddr) : null;
+    let confidence;
+    if (nameSim !== null && addrSim !== null) confidence = Math.round((nameSim * 0.6 + addrSim * 0.4) * 100);
+    else if (nameSim !== null) confidence = Math.round(nameSim * 100);
+    else if (addrSim !== null) confidence = Math.round(addrSim * 100);
+    else confidence = 65;
+    return { name: rName, address: rAddr, phone: d.formatted_phone_number || d.international_phone_number || "", website: d.website || "", confidence };
+  }));
+  candidates.sort((a, b) => b.confidence - a.confidence);
+  const best = candidates[0];
+  let status;
+  if (best.confidence >= 80 && best.phone) status = "found";
+  else if (best.confidence >= 80) status = "needs_review";
+  else if (candidates.length > 1 && candidates[1].confidence >= 45) status = "multiple_matches";
+  else if (best.confidence >= 45) status = "needs_review";
+  else status = "not_found";
+  return {
+    matchedName: best.name,
+    matchedAddress: best.address,
+    phone: best.phone,
+    website: best.website,
+    source: "google_places",
+    confidence: best.confidence,
+    status,
+    candidates: candidates.slice(1),
+  };
+}
+
+app.post("/api/phone-lookup", async (req, res) => {
+  if (!GOOGLE_PLACES_KEY) {
+    return res.status(503).json({ ok: false, error: "GOOGLE_PLACES_API_KEY manquante. Ajoutez-la dans Railway → Variables." });
+  }
+  const rows = req.body?.rows;
+  if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ ok: false, error: "rows[] requis." });
+  const results = [];
+  for (const row of rows.slice(0, 50)) {
+    const id = `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      const r = await phoneLookupOne(row);
+      results.push({ id, inputName: row.name || "", inputAddress: [row.address, row.city, row.province].filter(Boolean).join(", "), ...r, searchedAt: new Date().toISOString() });
+    } catch (err) {
+      results.push({ id, inputName: row.name || "", inputAddress: row.address || "", matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[], error: String(err?.message || err), searchedAt: new Date().toISOString() });
+    }
+    if (rows.length > 1) await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  res.json({ ok: true, results });
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.use("/api/listings", createListingsRouter({
   listingsService
 }));
