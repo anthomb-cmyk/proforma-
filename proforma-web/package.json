@@ -3,19 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.3.2",
     "leaflet": "^1.9.4",
+    "openai": "^4.104.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-scripts": "5.0.1",
+    "resend": "^4.0.0",
     "serve": "^14.2.0"
   },
   "scripts": {
     "dev": "react-scripts start",
-    "start": "node ../server.js",
+    "start": "node -e \"const fs=require('fs');try{if(fs.existsSync('../node_modules')&&!fs.lstatSync('../node_modules').isSymbolicLink()){fs.rmSync('../node_modules',{recursive:true,force:true});}if(!fs.existsSync('../node_modules')){fs.symlinkSync('proforma-web/node_modules','../node_modules','junction');}}catch(e){console.error('node_modules link warning:',e.message)}\" && node ../server.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "postinstall": "npm --prefix .. install"
+    "eject": "react-scripts eject"
   },
   "browserslist": {
     "production": [
