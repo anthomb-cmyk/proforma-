@@ -210,14 +210,16 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .doc-modal-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}
 .doc-modal-frame{width:100%;height:100%;border:none;background:#fff;flex:1}
 .xlsx-table-wrap{overflow:auto;flex:1;background:#fafaf8}
-.xlsx-table{border-collapse:collapse;font-size:12.5px;width:100%}
-.xlsx-table td{border:1px solid #e8e2d6;padding:6px 12px;vertical-align:middle;color:#2a1f0e;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.xlsx-table tr:nth-child(even) td{background:#f7f4ee}
+.xlsx-table{border-collapse:collapse;font-size:13px;width:100%}
+.xlsx-table td{border:1px solid #ece6d8;padding:7px 14px;vertical-align:middle;color:#2a1f0e;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xlsx-table tr:nth-child(even) td{background:#f8f5f0}
 .xlsx-table tr:nth-child(odd) td{background:#fff}
-.xlsx-table tr:hover td{background:#f0ead8}
-.xlsx-table td.cell-num{text-align:right;font-variant-numeric:tabular-nums;color:#1a4a2a;font-weight:500}
-.xlsx-table td.cell-head{font-weight:700;color:#1a1000;background:#ede8dd!important;letter-spacing:.03em}
-.xlsx-table td.cell-empty{background:transparent!important;border-color:#f0ebe2}
+.xlsx-table tr:hover td{background:#f2ead6}
+.xlsx-table td.cell-num{text-align:right;font-variant-numeric:tabular-nums;font-weight:500;color:#2a1f0e}
+.xlsx-table td.cell-head{font-weight:700;color:#fff;background:#8a7355!important;letter-spacing:.04em;font-size:11px;text-transform:uppercase}
+.xlsx-table td.cell-empty{background:transparent!important;border-color:#f2ede4}
+.xlsx-table td:first-child{color:#5a4a32;font-weight:500;background:#faf7f2!important}
+.xlsx-table td.cell-head:first-child{background:#8a7355!important;color:#fff}
 .xlsx-tabs{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--border);background:#fff;flex-shrink:0;flex-wrap:wrap}
 
 .cl-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
@@ -1703,10 +1705,14 @@ function XlsxViewer({ dataUrl }) {
   function formatVal(val) {
     const s = String(val ?? "").trim();
     if (!s) return "";
-    // Format large numbers with spaces for readability
     const num = Number(s.replace(/[$,%]/g, ""));
-    if (!isNaN(num) && Math.abs(num) >= 1000 && !s.includes("%")) {
-      return num.toLocaleString("fr-CA");
+    if (!isNaN(num) && s !== "") {
+      // Round long decimals to 2 places
+      const rounded = Number.isInteger(num) ? num : Math.round(num * 100) / 100;
+      if (Math.abs(rounded) >= 1000 && !s.includes("%")) {
+        return rounded.toLocaleString("fr-CA");
+      }
+      return String(rounded);
     }
     return s;
   }
