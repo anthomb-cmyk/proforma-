@@ -1884,7 +1884,7 @@ function PhoneFinder() {
     if (results.length > 0 && resultsRef.current) {
       resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [results.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [results.length]);
 
   function parseCSV(text) {
     const lines = text.trim().split(/\r?\n/);
