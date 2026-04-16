@@ -3958,10 +3958,8 @@ async function phoneLookupOne({ name, address, city, province, postalCode, count
   candidates.sort((a, b) => b.confidence - a.confidence);
   const best = candidates[0];
   let status;
-  if (best.confidence >= 80 && best.phone) status = "found";
-  else if (best.confidence >= 80) status = "needs_review";
-  else if (candidates.length > 1 && candidates[1].confidence >= 45) status = "multiple_matches";
-  else if (best.confidence >= 45) status = "needs_review";
+  if (best.phone) status = "found";
+  else if (best.confidence >= 50) status = "needs_review";
   else status = "not_found";
   return {
     matchedName: best.name,

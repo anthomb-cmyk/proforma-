@@ -1874,16 +1874,24 @@ function PhoneFinder() {
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState("");
   const stopRef = useRef(false);
-  const resultsRef = useRef(null);
+  const scrollWrapRef = useRef(null);
+  const hadResultsRef = useRef(results.length > 0);
   const PAGE_SIZE = 100;
 
   useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results.slice(0, 2000))); } catch {} }, [results]);
 
-  // Auto-scroll to results when first batch arrives
+  // Auto-scroll the scrollable panel when the first results arrive.
   useEffect(() => {
-    if (results.length > 0 && resultsRef.current) {
-      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    const hadResults = hadResultsRef.current;
+    const hasResults = results.length > 0;
+    if (!hadResults && hasResults && scrollWrapRef.current) {
+      const node = scrollWrapRef.current;
+      requestAnimationFrame(() => {
+        if (typeof node.scrollTo === "function") node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+        else node.scrollTop = node.scrollHeight;
+      });
     }
+    hadResultsRef.current = hasResults;
   }, [results.length]);
 
   function parseCSV(text) {
@@ -2129,7 +2137,7 @@ function PhoneFinder() {
         </div>
       </div>
 
-      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:22,display:"flex",flexDirection:"column",gap:14}}>
+      <div ref={scrollWrapRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:22,display:"flex",flexDirection:"column",gap:14}}>
 
         {/* ── Manual Form ───────────────────────────────────────────── */}
         {pfTab === "manual" && (
@@ -2215,7 +2223,7 @@ function PhoneFinder() {
 
         {/* ── Results Table ─────────────────────────────────────────── */}
         {filteredResults.length > 0 && (
-          <div ref={resultsRef} className="card" style={{overflow:"hidden"}}>
+          <div className="card" style={{overflow:"hidden"}}>
             <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
               <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => { setFilter(f => ({ ...f, search:e.target.value })); setPage(1); }} />
               <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
