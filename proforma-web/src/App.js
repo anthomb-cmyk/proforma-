@@ -1858,11 +1858,58 @@ function XlsxViewer({ dataUrl }) {
 
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
 const BATCH_SIZE = 10; // rows per API call to avoid proxy timeouts
+const PF_RUNS_KEY = "pf_runs";
+const PF_ACTIVE_RUN_KEY = "pf_active_run";
+const MAX_PHONE_RUNS = 40;
 
 function PhoneFinder() {
+  const [pfPage, setPfPage] = useState("search");
   const [pfTab, setPfTab] = useState("manual");
   const [form, setForm] = useState({ name:"", address:"", city:"", province:"Québec", postalCode:"", country:"Canada" });
-  const [results, setResults] = useState(() => { try { return JSON.parse(localStorage.getItem("pf_results") || "[]"); } catch { return []; } });
+  const [resultRuns, setResultRuns] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PF_RUNS_KEY) || "[]");
+      if (Array.isArray(stored) && stored.length) {
+        return stored
+          .map((run, idx) => {
+            if (!run || typeof run !== "object") return null;
+            const rows = Array.isArray(run.rows) ? run.rows : [];
+            const createdAt = run.createdAt || new Date().toISOString();
+            const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
+            return {
+              id: run.id || `pf_run_${Date.now()}_${idx}`,
+              title: run.title || fallbackTitle,
+              source: run.source || "csv",
+              createdAt,
+              totalRows: Number.isFinite(run.totalRows) ? run.totalRows : rows.length,
+              foundCount: Number.isFinite(run.foundCount) ? run.foundCount : rows.filter(r => r.phone).length,
+              rows,
+            };
+          })
+          .filter(Boolean)
+          .slice(0, MAX_PHONE_RUNS);
+      }
+    } catch {}
+    try {
+      const legacy = JSON.parse(localStorage.getItem("pf_results") || "[]");
+      if (Array.isArray(legacy) && legacy.length) {
+        const createdAt = new Date().toISOString();
+        return [{
+          id: `pf_run_legacy_${Date.now()}`,
+          title: `Historique importé · ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`,
+          source: "legacy",
+          createdAt,
+          totalRows: legacy.length,
+          foundCount: legacy.filter(r => r.phone).length,
+          rows: legacy,
+        }];
+      }
+    } catch {}
+    return [];
+  });
+  const [activeRunId, setActiveRunId] = useState(() => {
+    try { return localStorage.getItem(PF_ACTIVE_RUN_KEY) || null; } catch { return null; }
+  });
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [progress, setProgress] = useState(null); // { done, total }
@@ -1874,39 +1921,104 @@ function PhoneFinder() {
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState("");
   const stopRef = useRef(false);
-  const scrollWrapRef = useRef(null);
-  const hadResultsRef = useRef(results.length > 0);
   const PAGE_SIZE = 100;
 
-  useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results.slice(0, 2000))); } catch {} }, [results]);
+  const activeRun = useMemo(() => resultRuns.find(run => run.id === activeRunId) || null, [resultRuns, activeRunId]);
+  const results = activeRun?.rows || [];
 
-  // Auto-scroll the scrollable panel when the first results arrive.
   useEffect(() => {
-    const hadResults = hadResultsRef.current;
-    const hasResults = results.length > 0;
-    if (!hadResults && hasResults && scrollWrapRef.current) {
-      const node = scrollWrapRef.current;
-      requestAnimationFrame(() => {
-        if (typeof node.scrollTo === "function") node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-        else node.scrollTop = node.scrollHeight;
-      });
+    try { localStorage.setItem(PF_RUNS_KEY, JSON.stringify(resultRuns.slice(0, MAX_PHONE_RUNS))); } catch {}
+  }, [resultRuns]);
+
+  useEffect(() => {
+    try { localStorage.setItem("pf_results", JSON.stringify(results.slice(0, 2000))); } catch {}
+  }, [results]);
+
+  useEffect(() => {
+    try {
+      if (activeRunId) localStorage.setItem(PF_ACTIVE_RUN_KEY, activeRunId);
+      else localStorage.removeItem(PF_ACTIVE_RUN_KEY);
+    } catch {}
+  }, [activeRunId]);
+
+  useEffect(() => {
+    if (!resultRuns.length) {
+      if (activeRunId) setActiveRunId(null);
+      return;
     }
-    hadResultsRef.current = hasResults;
-  }, [results.length]);
+    if (!activeRunId || !resultRuns.some(run => run.id === activeRunId)) {
+      setActiveRunId(resultRuns[0].id);
+    }
+  }, [resultRuns, activeRunId]);
+
+  useEffect(() => {
+    setPage(1);
+    setFilter({ status:"all", search:"" });
+    setReviewRow(null);
+  }, [activeRunId]);
+
+  function formatRunDate(value) {
+    if (!value) return "";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" });
+  }
+
+  function makeRunTitle(source, createdAt = new Date().toISOString()) {
+    const stamp = formatRunDate(createdAt);
+    if (source === "manual") return `Recherche manuelle · ${stamp}`;
+    return `Import CSV · ${stamp}`;
+  }
+
+  function buildRunPatch(rows) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    return {
+      rows: safeRows,
+      totalRows: safeRows.length,
+      foundCount: safeRows.filter(r => r.phone).length,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function updateActiveRunRows(updater) {
+    if (!activeRunId) return;
+    setResultRuns(prev => prev.map(run => {
+      if (run.id !== activeRunId) return run;
+      const currentRows = Array.isArray(run.rows) ? run.rows : [];
+      const nextRows = typeof updater === "function" ? updater(currentRows) : updater;
+      return { ...run, ...buildRunPatch(nextRows) };
+    }));
+  }
+
+  function removeRun(runId) {
+    setResultRuns(prev => prev.filter(run => run.id !== runId));
+    setActiveRunId(prev => (prev === runId ? null : prev));
+    setReviewRow(null);
+  }
+
+  function clearAllRuns() {
+    if (!window.confirm("Effacer tous les imports sauvegardés ?")) return;
+    setResultRuns([]);
+    setActiveRunId(null);
+    setReviewRow(null);
+    setFilter({ status:"all", search:"" });
+    setPage(1);
+    setPfPage("search");
+  }
 
   function parseCSV(text) {
     const lines = text.trim().split(/\r?\n/);
     if (!lines.length) return { headers:[], rows:[] };
     // Auto-detect delimiter: semicolon (French Excel), tab, or comma
     const first = lines[0];
-    const counts = { ',': (first.match(/,/g)||[]).length, ';': (first.match(/;/g)||[]).length, '\t': (first.match(/\t/g)||[]).length };
-    const delim = counts[';'] >= counts[','] && counts[';'] >= counts['\t'] ? ';'
-                : counts['\t'] >= counts[','] ? '\t'
-                : ',';
+    const counts = { ",": (first.match(/,/g)||[]).length, ";": (first.match(/;/g)||[]).length, "\t": (first.match(/\t/g)||[]).length };
+    const delim = counts[";"] >= counts[","] && counts[";"] >= counts["\t"] ? ";"
+                : counts["\t"] >= counts[","] ? "\t"
+                : ",";
     const parseLine = line => {
-      const res = []; let cur = "", inQ = false;
+      const res = []; let cur = ""; let inQ = false;
       for (const c of line) {
-        if (c === '"') { inQ = !inQ; continue; }
+        if (c === "\"") { inQ = !inQ; continue; }
         if (c === delim && !inQ) { res.push(cur.trim()); cur = ""; continue; }
         cur += c;
       }
@@ -1939,14 +2051,33 @@ function PhoneFinder() {
   }
 
   // Send rows in small batches so each request completes in < 5s (no proxy timeout)
-  async function doLookupBatched(allRows) {
+  async function doLookupBatched(allRows, source = "csv") {
     stopRef.current = false;
     setLoading(true);
     setApiError("");
     setProgress({ done: 0, total: allRows.length });
     setPage(1);
+
+    const runId = `plrun_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const createdAt = new Date().toISOString();
+    const run = {
+      id: runId,
+      title: makeRunTitle(source, createdAt),
+      source,
+      createdAt,
+      totalRows: 0,
+      foundCount: 0,
+      rows: [],
+    };
+
+    setResultRuns(prev => [run, ...prev].slice(0, MAX_PHONE_RUNS));
+    setActiveRunId(runId);
+    setPfPage("results");
+
     let done = 0;
     let added = 0;
+    let runRows = [];
+
     for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
       if (stopRef.current) break;
       const batch = allRows.slice(i, i + BATCH_SIZE);
@@ -1958,8 +2089,10 @@ function PhoneFinder() {
         });
         const data = await resp.json();
         if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
-        const found = data.results.filter(r => r.phone);
-        setResults(prev => [...data.results, ...prev]);
+        const chunk = Array.isArray(data.results) ? data.results : [];
+        const found = chunk.filter(r => r.phone);
+        runRows = [...runRows, ...chunk];
+        setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
         done += batch.length;
         added += found.length;
         setProgress({ done, total: allRows.length });
@@ -1968,18 +2101,24 @@ function PhoneFinder() {
         break;
       }
     }
+
     setLoading(false);
     setProgress(null);
+
     if (done > 0) {
       setToast(`✅ ${done} lignes traitées · ${added} numéros trouvés`);
       setTimeout(() => setToast(""), 6000);
+      setPfPage("results");
+    } else {
+      setResultRuns(prev => prev.filter(r => r.id !== runId));
+      setPfPage("search");
     }
   }
 
   async function searchManual() {
     if (!form.name && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
     setApiError("");
-    await doLookupBatched([{ ...form }]);
+    await doLookupBatched([{ ...form }], "manual");
   }
 
   async function searchCSV() {
@@ -1994,7 +2133,7 @@ function PhoneFinder() {
       country:    colMap.country    ? (r[colMap.country]?.trim()    || "") : "Canada",
     })).filter(r => r.name || r.address);
     if (!rows.length) { setApiError("Aucune ligne avec un nom ou une adresse. Vérifiez le mappage des colonnes."); return; }
-    await doLookupBatched(rows);
+    await doLookupBatched(rows, "csv");
   }
 
   function handleCSVDrop(file) {
@@ -2016,15 +2155,17 @@ function PhoneFinder() {
   }
 
   function exportCSV() {
+    if (!activeRun) return;
     const headers = ["Nom saisi","Adresse saisie","Nom trouvé","Adresse trouvée","Téléphone","Site web","Source","Confiance %","Statut","Date"];
     const body = filteredResults.map(r => [
       r.inputName, r.inputAddress, r.matchedName, r.matchedAddress,
       r.phone, r.website, r.source, r.confidence, r.status, r.searchedAt,
     ]);
-    const csv = [headers, ...body].map(row => row.map(c => `"${String(c ?? "").replace(/"/g,'""')}"`).join(",")).join("\n");
+    const csv = [headers, ...body].map(row => row.map(c => `"${String(c ?? "").replace(/"/g, "\"\"")}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `recherche-tel-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    const runDate = (activeRun.createdAt || new Date().toISOString()).slice(0, 10);
+    const a = document.createElement("a"); a.href = url; a.download = `recherche-tel-${runDate}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -2039,7 +2180,6 @@ function PhoneFinder() {
   }, [results, filter]);
 
   const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
-
   const FIELD_LABELS = { name:"Nom / Entreprise", address:"Adresse", city:"Ville", province:"Province", postalCode:"Code postal", country:"Pays" };
   const FIELD_HINTS  = { name:"si l'adresse est vide, requis", address:"si le nom est vide, requis", city:"optionnel", province:"optionnel", postalCode:"optionnel", country:"optionnel" };
 
@@ -2069,7 +2209,7 @@ function PhoneFinder() {
             ].map((c, i) => (
               <div key={i} className={`pf-cand${i===0?" best":""}`}
                 onClick={() => {
-                  setResults(prev => prev.map(r => r.id === reviewRow.id
+                  updateActiveRunRows(prev => prev.map(r => r.id === reviewRow.id
                     ? { ...r, matchedName:c.name, matchedAddress:c.address, phone:c.phone, website:c.website, confidence:c.confidence, status:"found" }
                     : r));
                   setReviewRow(null);
@@ -2084,7 +2224,7 @@ function PhoneFinder() {
               </div>
             ))}
             <div className="mo-foot">
-              <button className="btn btn-danger btn-sm" onClick={() => { setResults(prev => prev.map(r => r.id === reviewRow.id ? { ...r, status:"not_found" } : r)); setReviewRow(null); }}>Marquer introuvable</button>
+              <button className="btn btn-danger btn-sm" onClick={() => { updateActiveRunRows(prev => prev.map(r => r.id === reviewRow.id ? { ...r, status:"not_found" } : r)); setReviewRow(null); }}>Marquer introuvable</button>
               <button className="btn" onClick={() => setReviewRow(null)}>Annuler</button>
             </div>
           </div>
@@ -2097,7 +2237,7 @@ function PhoneFinder() {
           <div className="mo-box" style={{maxWidth:520,maxHeight:"85vh",overflow:"auto"}}>
             <div className="mo-title">Mapper les colonnes CSV</div>
             <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
-              <strong>{csvFile.rows.length}</strong> lignes · <strong>{csvFile.headers.length}</strong> colonnes détectées (séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === '\t' ? 'TAB' : csvFile.delim}</code>)<br/>
+              <strong>{csvFile.rows.length}</strong> lignes · <strong>{csvFile.headers.length}</strong> colonnes détectées (séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code>)<br/>
               Assignez chaque colonne CSV à son champ. Au moins <strong>Nom</strong> ou <strong>Adresse</strong> est requis.
             </div>
             {Object.entries(FIELD_LABELS).map(([f, lbl]) => (
@@ -2122,76 +2262,23 @@ function PhoneFinder() {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div>
             <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>Recherche de Numéros</div>
-            <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Google Places · résultats sauvegardés localement</div>
+            <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Google Places · imports sauvegardés localement</div>
           </div>
-          {results.length > 0 && (
+          {activeRun && (
             <div style={{display:"flex",gap:8}}>
+              {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>Voir résultats</button>}
               <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
-              <button className="btn btn-danger btn-sm" onClick={() => { if (window.confirm("Effacer tous les résultats ?")) setResults([]); }}>Vider</button>
+              <button className="btn btn-danger btn-sm" onClick={clearAllRuns}>Vider</button>
             </div>
           )}
         </div>
         <div className="tabs">
-          <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>🔍 Recherche manuelle</button>
-          <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV</button>
+          <button className={`tab${pfPage==="search"?" active":""}`} onClick={() => setPfPage("search")}>🔎 Recherche</button>
+          <button className={`tab${pfPage==="results"?" active":""}`} onClick={() => setPfPage("results")}>📚 Résultats ({resultRuns.length})</button>
         </div>
       </div>
 
-      <div ref={scrollWrapRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:22,display:"flex",flexDirection:"column",gap:14}}>
-
-        {/* ── Manual Form ───────────────────────────────────────────── */}
-        {pfTab === "manual" && (
-          <div className="card f-card">
-            <div className="f-title">Informations de recherche</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
-              {[
-                ["name","Nom de l'entreprise","Ex: Dépanneur Bélanger"],
-                ["address","Adresse","Ex: 320 rue Bouchard"],
-                ["city","Ville","Ex: Saint-Jean-sur-Richelieu"],
-                ["province","Province","Ex: Québec"],
-                ["postalCode","Code postal","Ex: J3B 6N5"],
-                ["country","Pays","Canada"],
-              ].map(([field, lbl, ph]) => (
-                <div className="f-row" key={field}>
-                  <div className="f-lbl">{lbl}</div>
-                  <input value={form[field]} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))} placeholder={ph} onKeyDown={e => e.key === "Enter" && searchManual()} />
-                </div>
-              ))}
-            </div>
-            {apiError && <div className="status-note error" style={{marginBottom:8}}>{apiError}</div>}
-            <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
-              <button className="btn btn-gold" onClick={searchManual} disabled={loading}>{loading ? "Recherche…" : "🔍 Rechercher"}</button>
-            </div>
-          </div>
-        )}
-
-        {/* ── CSV Form ──────────────────────────────────────────────── */}
-        {pfTab === "csv" && (
-          <div className="card f-card">
-            <div className="f-title">Import CSV</div>
-            <div className="pf-drop"
-              onDragOver={e => e.preventDefault()}
-              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
-              onClick={pickCSVFile}>
-              <div style={{fontSize:32,marginBottom:8}}>📂</div>
-              {csvFile
-                ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes · {csvFile.headers.length} colonnes · séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === '\t' ? 'TAB' : csvFile.delim}</code></div>
-                : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier CSV ou cliquez pour choisir</div>}
-              <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes acceptées : nom, adresse, ville, province, code postal, pays</div>
-            </div>
-            {csvFile && (
-              <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                <div style={{fontSize:12,color:"var(--text2)"}}>
-                  <strong>{csvFile.rows.length}</strong> lignes •{" "}
-                  <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes mappées
-                  {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>modifier le mappage</button>)
-                </div>
-                <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? `Recherche en cours…` : `🔍 Rechercher ${csvFile.rows.filter(r => (colMap.name && r[colMap.name]) || (colMap.address && r[colMap.address])).length} lignes`}</button>
-              </div>
-            )}
-            {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
-          </div>
-        )}
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:22,display:"flex",flexDirection:"column",gap:14}}>
 
         {/* ── Progress bar ──────────────────────────────────────────── */}
         {loading && progress && (
@@ -2214,109 +2301,239 @@ function PhoneFinder() {
           <div className="status-note" style={{textAlign:"center",padding:18}}>⏳ Connexion à Google Places…</div>
         )}
 
+        {/* ── Search Page ───────────────────────────────────────────── */}
+        {pfPage === "search" && (
+          <>
+            <div className="tabs" style={{paddingLeft:2}}>
+              <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>🔍 Recherche manuelle</button>
+              <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV</button>
+            </div>
+
+            {pfTab === "manual" && (
+              <div className="card f-card">
+                <div className="f-title">Informations de recherche</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
+                  {[
+                    ["name","Nom de l'entreprise","Ex: Dépanneur Bélanger"],
+                    ["address","Adresse","Ex: 320 rue Bouchard"],
+                    ["city","Ville","Ex: Saint-Jean-sur-Richelieu"],
+                    ["province","Province","Ex: Québec"],
+                    ["postalCode","Code postal","Ex: J3B 6N5"],
+                    ["country","Pays","Canada"],
+                  ].map(([field, lbl, ph]) => (
+                    <div className="f-row" key={field}>
+                      <div className="f-lbl">{lbl}</div>
+                      <input value={form[field]} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))} placeholder={ph} onKeyDown={e => e.key === "Enter" && searchManual()} />
+                    </div>
+                  ))}
+                </div>
+                {apiError && <div className="status-note error" style={{marginBottom:8}}>{apiError}</div>}
+                <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
+                  <button className="btn btn-gold" onClick={searchManual} disabled={loading}>{loading ? "Recherche…" : "🔍 Rechercher"}</button>
+                </div>
+              </div>
+            )}
+
+            {pfTab === "csv" && (
+              <div className="card f-card">
+                <div className="f-title">Import CSV</div>
+                <div className="pf-drop"
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
+                  onClick={pickCSVFile}>
+                  <div style={{fontSize:32,marginBottom:8}}>📂</div>
+                  {csvFile
+                    ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes · {csvFile.headers.length} colonnes · séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code></div>
+                    : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier CSV ou cliquez pour choisir</div>}
+                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes acceptées : nom, adresse, ville, province, code postal, pays</div>
+                </div>
+                {csvFile && (
+                  <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                    <div style={{fontSize:12,color:"var(--text2)"}}>
+                      <strong>{csvFile.rows.length}</strong> lignes •{" "}
+                      <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes mappées
+                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>modifier le mappage</button>)
+                    </div>
+                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.filter(r => (colMap.name && r[colMap.name]) || (colMap.address && r[colMap.address])).length} lignes`}</button>
+                  </div>
+                )}
+                {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
+              </div>
+            )}
+
+            {!loading && resultRuns.length === 0 && (
+              <div className="card empty">
+                <div className="empty-ico">📞</div>
+                <div className="empty-title">Aucun import sauvegardé</div>
+                <div className="empty-sub">Lancez une recherche manuelle ou un import CSV. Chaque import sera enregistré dans l'onglet Résultats avec une date.</div>
+              </div>
+            )}
+
+            {!loading && resultRuns.length > 0 && (
+              <div className="card" style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                <div style={{fontSize:12,color:"var(--text2)"}}>
+                  Dernier import : <strong style={{color:"var(--text)"}}>{resultRuns[0].title}</strong> · {resultRuns[0].totalRows} lignes
+                </div>
+                <button className="btn btn-gold" onClick={() => { setActiveRunId(resultRuns[0].id); setPfPage("results"); }}>Ouvrir les résultats</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Results Page ──────────────────────────────────────────── */}
+        {pfPage === "results" && (
+          resultRuns.length === 0 ? (
+            <div className="card empty">
+              <div className="empty-ico">📚</div>
+              <div className="empty-title">Aucun import sauvegardé</div>
+              <div className="empty-sub">Retournez dans l'onglet Recherche pour lancer une recherche. Les résultats seront sauvegardés automatiquement avec la date.</div>
+              <button className="btn btn-gold" onClick={() => setPfPage("search")}>Aller à la recherche</button>
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"280px minmax(0, 1fr)",gap:14,alignItems:"start"}}>
+              <div className="card" style={{overflow:"hidden",display:"flex",flexDirection:"column",minHeight:120}}>
+                <div style={{padding:"10px 12px",borderBottom:"1px solid var(--border)",fontSize:11,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:"var(--text3)"}}>
+                  Imports sauvegardés
+                </div>
+                <div style={{padding:10,display:"flex",flexDirection:"column",gap:8,maxHeight:"calc(100vh - 290px)",overflowY:"auto"}}>
+                  {resultRuns.map(run => {
+                    const selected = run.id === activeRunId;
+                    return (
+                      <div key={run.id} style={{display:"flex",gap:6}}>
+                        <button
+                          className="btn"
+                          style={{flex:1,textAlign:"left",padding:"9px 10px",background:selected ? "#F5EDD6" : "#fff",borderColor:selected ? "#E1CC94" : "var(--border)"}}
+                          onClick={() => setActiveRunId(run.id)}
+                        >
+                          <div style={{fontSize:12,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{run.title}</div>
+                          <div style={{fontSize:10,color:"var(--text3)",marginTop:3}}>
+                            {run.totalRows || 0} lignes · {run.foundCount || 0} trouvés
+                          </div>
+                        </button>
+                        <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm("Supprimer cet import sauvegardé ?")) removeRun(run.id); }}>✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{display:"flex",flexDirection:"column",gap:14,minWidth:0}}>
+                {activeRun && (
+                  <div className="card" style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:700,color:"var(--text)"}}>{activeRun.title}</div>
+                      <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>
+                        {formatRunDate(activeRun.createdAt)} · {activeRun.totalRows || 0} lignes · {activeRun.foundCount || 0} numéros trouvés
+                      </div>
+                    </div>
+                    <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
+                  </div>
+                )}
+
+                {activeRun && (
+                  filteredResults.length > 0 ? (
+                    <div className="card" style={{overflow:"hidden"}}>
+                      <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                        <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => { setFilter(f => ({ ...f, search:e.target.value })); setPage(1); }} />
+                        <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
+                          <option value="all">Tous les statuts</option>
+                          <option value="found">Trouvé</option>
+                          <option value="needs_review">À vérifier</option>
+                          <option value="multiple_matches">Choix multiple</option>
+                          <option value="not_found">Non trouvé</option>
+                        </select>
+                        <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
+                          {pagedResults.length < filteredResults.length
+                            ? `${pagedResults.length} affichés sur ${filteredResults.length}`
+                            : `${filteredResults.length} résultat${filteredResults.length !== 1 ? "s" : ""}`}
+                          {results.length !== filteredResults.length ? ` (total: ${results.length})` : ""}
+                        </span>
+                      </div>
+                      <div style={{overflowX:"auto"}}>
+                        <table className="pf-tbl">
+                          <thead>
+                            <tr>
+                              <th>#</th>
+                              <th>Recherche</th>
+                              <th>Correspondance trouvée</th>
+                              <th>Téléphone</th>
+                              <th>Site web</th>
+                              <th style={{textAlign:"center"}}>Conf.</th>
+                              <th>Statut</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedResults.map((r, i) => {
+                              const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
+                              const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
+                              return (
+                                <tr key={r.id || i}>
+                                  <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
+                                  <td className="pf-input-col">
+                                    {r.inputName    && <div className="pf-cell-name">{r.inputName}</div>}
+                                    {r.inputAddress && <div className="pf-cell-addr">{r.inputAddress}</div>}
+                                    {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
+                                  </td>
+                                  <td className="pf-match-col">
+                                    {r.matchedName    && <div className="pf-cell-name">{r.matchedName}</div>}
+                                    {r.matchedAddress && <div className="pf-cell-addr">{r.matchedAddress}</div>}
+                                    {!r.matchedName && !r.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
+                                  </td>
+                                  <td>
+                                    {r.phone
+                                      ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
+                                      : <span style={{color:"var(--text3)"}}>—</span>}
+                                  </td>
+                                  <td className="pf-web-col">
+                                    {r.website
+                                      ? <a href={r.website} target="_blank" rel="noopener noreferrer" style={{color:"var(--blue)",fontSize:11,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.website.replace(/^https?:\/\/(www\.)?/,"")}</a>
+                                      : <span style={{color:"var(--text3)"}}>—</span>}
+                                  </td>
+                                  <td style={{textAlign:"center"}}>
+                                    <span className={`pf-conf ${confClass(r.confidence)}`}>{r.confidence}%</span>
+                                  </td>
+                                  <td><span className={`pf-status ${sc.cls}`}>{sc.label}</span></td>
+                                  <td>
+                                    <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
+                                      {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
+                                      {r.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📋</button>}
+                                      <button className="btn btn-sm btn-danger" onClick={() => updateActiveRunRows(prev => prev.filter(x => x.id !== r.id))}>✕</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {pagedResults.length < filteredResults.length && (
+                        <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
+                          <button className="btn" onClick={() => setPage(p => p + 1)}>
+                            Afficher {Math.min(PAGE_SIZE, filteredResults.length - pagedResults.length)} de plus ({filteredResults.length - pagedResults.length} restants)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="card empty">
+                      <div className="empty-ico">📄</div>
+                      <div className="empty-title">Aucun résultat dans cet import</div>
+                      <div className="empty-sub">Cet import existe mais ne contient pas de lignes affichables avec le filtre actuel.</div>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
+          )
+        )}
+
         {/* ── Toast ────────────────────────────────────────────────── */}
         {toast && (
           <div style={{position:"fixed",bottom:24,right:24,background:"#1A7A3F",color:"#fff",padding:"12px 18px",borderRadius:10,fontWeight:700,fontSize:13,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>
             {toast}
           </div>
         )}
-
-        {/* ── Results Table ─────────────────────────────────────────── */}
-        {filteredResults.length > 0 && (
-          <div className="card" style={{overflow:"hidden"}}>
-            <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => { setFilter(f => ({ ...f, search:e.target.value })); setPage(1); }} />
-              <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
-                <option value="all">Tous les statuts</option>
-                <option value="found">Trouvé</option>
-                <option value="needs_review">À vérifier</option>
-                <option value="multiple_matches">Choix multiple</option>
-                <option value="not_found">Non trouvé</option>
-              </select>
-              <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
-                {pagedResults.length < filteredResults.length
-                  ? `${pagedResults.length} affichés sur ${filteredResults.length}`
-                  : `${filteredResults.length} résultat${filteredResults.length !== 1 ? "s" : ""}`}
-                {results.length !== filteredResults.length ? ` (total: ${results.length})` : ""}
-              </span>
-            </div>
-            <div style={{overflowX:"auto"}}>
-              <table className="pf-tbl">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Recherche</th>
-                    <th>Correspondance trouvée</th>
-                    <th>Téléphone</th>
-                    <th>Site web</th>
-                    <th style={{textAlign:"center"}}>Conf.</th>
-                    <th>Statut</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedResults.map((r, i) => {
-                    const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
-                    const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
-                    return (
-                      <tr key={r.id || i}>
-                        <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
-                        <td className="pf-input-col">
-                          {r.inputName    && <div className="pf-cell-name">{r.inputName}</div>}
-                          {r.inputAddress && <div className="pf-cell-addr">{r.inputAddress}</div>}
-                          {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
-                        </td>
-                        <td className="pf-match-col">
-                          {r.matchedName    && <div className="pf-cell-name">{r.matchedName}</div>}
-                          {r.matchedAddress && <div className="pf-cell-addr">{r.matchedAddress}</div>}
-                          {!r.matchedName && !r.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
-                        </td>
-                        <td>
-                          {r.phone
-                            ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
-                            : <span style={{color:"var(--text3)"}}>—</span>}
-                        </td>
-                        <td className="pf-web-col">
-                          {r.website
-                            ? <a href={r.website} target="_blank" rel="noopener noreferrer" style={{color:"var(--blue)",fontSize:11,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.website.replace(/^https?:\/\/(www\.)?/,"")}</a>
-                            : <span style={{color:"var(--text3)"}}>—</span>}
-                        </td>
-                        <td style={{textAlign:"center"}}>
-                          <span className={`pf-conf ${confClass(r.confidence)}`}>{r.confidence}%</span>
-                        </td>
-                        <td><span className={`pf-status ${sc.cls}`}>{sc.label}</span></td>
-                        <td>
-                          <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                            {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
-                            {r.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📋</button>}
-                            <button className="btn btn-sm btn-danger" onClick={() => setResults(prev => prev.filter(x => x.id !== r.id))}>✕</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {pagedResults.length < filteredResults.length && (
-              <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
-                <button className="btn" onClick={() => setPage(p => p + 1)}>
-                  Afficher {Math.min(PAGE_SIZE, filteredResults.length - pagedResults.length)} de plus ({filteredResults.length - pagedResults.length} restants)
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Empty State ───────────────────────────────────────────── */}
-        {!loading && results.length === 0 && (
-          <div className="card empty">
-            <div className="empty-ico">📞</div>
-            <div className="empty-title">Aucun résultat</div>
-            <div className="empty-sub">Recherchez par nom d'entreprise, adresse, ou les deux ensemble. Importez un CSV pour traiter plusieurs lignes en une fois.</div>
-          </div>
-        )}
-
       </div>
     </div>
   );
