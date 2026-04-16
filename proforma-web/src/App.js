@@ -1857,17 +1857,21 @@ function XlsxViewer({ dataUrl }) {
 }
 
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
+const BATCH_SIZE = 10; // rows per API call to avoid proxy timeouts
+
 function PhoneFinder() {
   const [pfTab, setPfTab] = useState("manual");
   const [form, setForm] = useState({ name:"", address:"", city:"", province:"Québec", postalCode:"", country:"Canada" });
   const [results, setResults] = useState(() => { try { return JSON.parse(localStorage.getItem("pf_results") || "[]"); } catch { return []; } });
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [progress, setProgress] = useState(null); // { done, total }
   const [csvFile, setCsvFile] = useState(null);
   const [colMap, setColMap] = useState({});
   const [showColMap, setShowColMap] = useState(false);
   const [filter, setFilter] = useState({ status:"all", search:"" });
   const [reviewRow, setReviewRow] = useState(null);
+  const stopRef = useRef(false);
 
   useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results)); } catch {} }, [results]);
 
@@ -1915,43 +1919,55 @@ function PhoneFinder() {
     return map;
   }
 
-  async function doLookup(rows) {
+  // Send rows in small batches so each request completes in < 5s (no proxy timeout)
+  async function doLookupBatched(allRows) {
+    stopRef.current = false;
     setLoading(true);
     setApiError("");
-    try {
-      const resp = await fetch("/api/phone-lookup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
-      });
-      const data = await resp.json();
-      if (!data.ok) throw new Error(data.error || "Erreur serveur");
-      setResults(prev => [...data.results, ...prev]);
-    } catch (err) {
-      setApiError(err.message);
-    } finally {
-      setLoading(false);
+    setProgress({ done: 0, total: allRows.length });
+    let done = 0;
+    for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
+      if (stopRef.current) break;
+      const batch = allRows.slice(i, i + BATCH_SIZE);
+      try {
+        const resp = await fetch("/api/phone-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: batch }),
+        });
+        const data = await resp.json();
+        if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
+        setResults(prev => [...data.results, ...prev]);
+        done += batch.length;
+        setProgress({ done, total: allRows.length });
+      } catch (err) {
+        setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
+        break;
+      }
     }
+    setLoading(false);
+    setProgress(null);
   }
 
   async function searchManual() {
     if (!form.name && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
     setApiError("");
-    await doLookup([{ ...form }]);
+    await doLookupBatched([{ ...form }]);
   }
 
   async function searchCSV() {
     if (!csvFile?.rows?.length) return;
+    if (!Object.values(colMap).some(Boolean)) { setApiError("Configurez le mappage des colonnes d'abord."); setShowColMap(true); return; }
     const rows = csvFile.rows.map(r => ({
-      name:       colMap.name       ? (r[colMap.name] || "")       : "",
-      address:    colMap.address    ? (r[colMap.address] || "")    : "",
-      city:       colMap.city       ? (r[colMap.city] || "")       : "",
-      province:   colMap.province   ? (r[colMap.province] || "")   : "",
-      postalCode: colMap.postalCode ? (r[colMap.postalCode] || "") : "",
-      country:    colMap.country    ? (r[colMap.country] || "")    : "Canada",
+      name:       colMap.name       ? (r[colMap.name]?.trim()       || "") : "",
+      address:    colMap.address    ? (r[colMap.address]?.trim()    || "") : "",
+      city:       colMap.city       ? (r[colMap.city]?.trim()       || "") : "",
+      province:   colMap.province   ? (r[colMap.province]?.trim()   || "") : "",
+      postalCode: colMap.postalCode ? (r[colMap.postalCode]?.trim() || "") : "",
+      country:    colMap.country    ? (r[colMap.country]?.trim()    || "") : "Canada",
     })).filter(r => r.name || r.address);
-    if (!rows.length) { setApiError("Aucune ligne avec un nom ou une adresse après le mappage."); return; }
-    await doLookup(rows);
+    if (!rows.length) { setApiError("Aucune ligne avec un nom ou une adresse. Vérifiez le mappage des colonnes."); return; }
+    await doLookupBatched(rows);
   }
 
   function handleCSVDrop(file) {
@@ -2048,24 +2064,25 @@ function PhoneFinder() {
 
       {/* ── Column Mapping Modal ──────────────────────────────────────── */}
       {showColMap && csvFile && (
-        <div className="mo" onClick={() => setShowColMap(false)}>
-          <div className="mo-box" onClick={e => e.stopPropagation()}>
+        <div className="mo">
+          <div className="mo-box" style={{maxWidth:520,maxHeight:"85vh",overflow:"auto"}}>
             <div className="mo-title">Mapper les colonnes CSV</div>
             <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
-              <strong>{csvFile.rows.length}</strong> lignes détectées. Assignez chaque colonne CSV à son champ.
+              <strong>{csvFile.rows.length}</strong> lignes · <strong>{csvFile.headers.length}</strong> colonnes détectées (séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === '\t' ? 'TAB' : csvFile.delim}</code>)<br/>
+              Assignez chaque colonne CSV à son champ. Au moins <strong>Nom</strong> ou <strong>Adresse</strong> est requis.
             </div>
             {Object.entries(FIELD_LABELS).map(([f, lbl]) => (
               <div className="f-row" key={f}>
                 <div className="f-lbl">{lbl} <span style={{color:"var(--text3)",fontWeight:400}}>— {FIELD_HINTS[f]}</span></div>
                 <select value={colMap[f] || ""} onChange={e => setColMap(m => ({ ...m, [f]: e.target.value }))}>
                   <option value="">— Ignorer —</option>
-                  {csvFile.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  {csvFile.headers.map(h => <option key={h} value={h}>{h} {csvFile.rows[0]?.[h] ? `→ ex: "${String(csvFile.rows[0][h]).slice(0,30)}"` : ""}</option>)}
                 </select>
               </div>
             ))}
             <div className="mo-foot">
-              <button className="btn" onClick={() => setShowColMap(false)}>Annuler</button>
-              <button className="btn btn-gold" onClick={() => setShowColMap(false)}>Confirmer</button>
+              <button className="btn" onClick={() => setShowColMap(false)}>Fermer</button>
+              <button className="btn btn-gold" onClick={() => { setShowColMap(false); }}>Confirmer le mappage</button>
             </div>
           </div>
         </div>
@@ -2147,11 +2164,25 @@ function PhoneFinder() {
           </div>
         )}
 
-        {/* ── Loading ───────────────────────────────────────────────── */}
-        {loading && (
-          <div className="status-note" style={{textAlign:"center",padding:18}}>
-            ⏳ Recherche en cours via Google Places… (environ 2 s par ligne)
+        {/* ── Progress bar ──────────────────────────────────────────── */}
+        {loading && progress && (
+          <div className="card" style={{padding:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                ⏳ {progress.done} / {progress.total} lignes traitées
+              </div>
+              <button className="btn btn-danger btn-sm" onClick={() => { stopRef.current = true; }}>⏹ Arrêter</button>
+            </div>
+            <div style={{height:8,background:"#F0E8D8",borderRadius:999,overflow:"hidden"}}>
+              <div style={{height:"100%",background:"var(--gold)",borderRadius:999,width:`${Math.round((progress.done/progress.total)*100)}%`,transition:"width .3s"}} />
+            </div>
+            <div style={{fontSize:11,color:"var(--text3)",marginTop:5,textAlign:"right"}}>
+              {Math.round((progress.done/progress.total)*100)}% · ~{Math.round(((progress.total - progress.done) / BATCH_SIZE) * 3)}s restantes
+            </div>
           </div>
+        )}
+        {loading && !progress && (
+          <div className="status-note" style={{textAlign:"center",padding:18}}>⏳ Connexion à Google Places…</div>
         )}
 
         {/* ── Results Table ─────────────────────────────────────────── */}

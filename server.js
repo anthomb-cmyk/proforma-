@@ -3990,7 +3990,7 @@ app.post("/api/phone-lookup", async (req, res) => {
     } catch (err) {
       results.push({ id, inputName: row.name || "", inputAddress: row.address || "", matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[], error: String(err?.message || err), searchedAt: new Date().toISOString() });
     }
-    if (rows.length > 1) await new Promise(resolve => setTimeout(resolve, 200));
+    if (rows.length > 1) await new Promise(resolve => setTimeout(resolve, 100));
   }
   res.json({ ok: true, results });
 });
