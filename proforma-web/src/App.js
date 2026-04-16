@@ -1874,11 +1874,17 @@ function PhoneFinder() {
   function parseCSV(text) {
     const lines = text.trim().split(/\r?\n/);
     if (!lines.length) return { headers:[], rows:[] };
+    // Auto-detect delimiter: semicolon (French Excel), tab, or comma
+    const first = lines[0];
+    const counts = { ',': (first.match(/,/g)||[]).length, ';': (first.match(/;/g)||[]).length, '\t': (first.match(/\t/g)||[]).length };
+    const delim = counts[';'] >= counts[','] && counts[';'] >= counts['\t'] ? ';'
+                : counts['\t'] >= counts[','] ? '\t'
+                : ',';
     const parseLine = line => {
       const res = []; let cur = "", inQ = false;
       for (const c of line) {
         if (c === '"') { inQ = !inQ; continue; }
-        if (c === ',' && !inQ) { res.push(cur.trim()); cur = ""; continue; }
+        if (c === delim && !inQ) { res.push(cur.trim()); cur = ""; continue; }
         cur += c;
       }
       res.push(cur.trim());
@@ -1889,7 +1895,7 @@ function PhoneFinder() {
       const vals = parseLine(l);
       return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
     });
-    return { headers, rows };
+    return { headers, rows, delim };
   }
 
   function autoDetectCols(headers) {
@@ -2123,7 +2129,7 @@ function PhoneFinder() {
               onClick={pickCSVFile}>
               <div style={{fontSize:32,marginBottom:8}}>📂</div>
               {csvFile
-                ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes chargées · {csvFile.headers.length} colonnes</div>
+                ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes · {csvFile.headers.length} colonnes · séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === '\t' ? 'TAB' : csvFile.delim}</code></div>
                 : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier CSV ou cliquez pour choisir</div>}
               <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes acceptées : nom, adresse, ville, province, code postal, pays</div>
             </div>
