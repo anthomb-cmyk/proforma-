@@ -4069,10 +4069,24 @@ function sanitizeBusinessName(value, { allowAmbiguous = true } = {}) {
   const txt = cleanLookupValue(value);
   if (!txt) return "";
   if (looksLikeAddress(txt) || looksLikePostalCode(txt) || looksLikePhone(txt) || looksLikeEmail(txt)) return "";
+  if (!/[a-z\u00c0-\u017f]/i.test(txt)) return "";
   const hasHint = hasCompanyNameHints(txt);
   if (isLikelyPersonalName(txt) && !hasHint) return "";
   if (!allowAmbiguous && !hasHint) return "";
   return txt;
+}
+
+function extractPrimaryAddressNumbers(value) {
+  const firstChunk = cleanLookupValue(value).split(",")[0] || "";
+  const matches = firstChunk.match(/\b\d{1,6}\b/g) || [];
+  return [...new Set(matches)];
+}
+
+function hasSharedAddressNumber(left, right) {
+  const a = extractPrimaryAddressNumbers(left);
+  const b = extractPrimaryAddressNumbers(right);
+  if (!a.length || !b.length) return true;
+  return a.some(num => b.includes(num));
 }
 
 function normalizeLookupPhoneKey(value) {
@@ -4339,8 +4353,15 @@ async function phoneLookupOne({ name, address, city, province, postalCode, count
   }
 
   const candidatesWithPhone = uniqueCandidates.filter(candidate => normalizeLookupPhoneKey(candidate.phone));
-  const allPhones = mergeLookupPhones(candidatesWithPhone.map(candidate => candidate.phone));
-  const best = candidatesWithPhone[0] || uniqueCandidates[0] || null;
+  const filteredPhoneCandidates = candidatesWithPhone.filter(candidate => {
+    if (Number(candidate.confidence || 0) < 10) return false;
+    if (candidate.queryType === "address" && lookupAddress) {
+      return hasSharedAddressNumber(lookupAddress, candidate.address);
+    }
+    return true;
+  });
+  const allPhones = mergeLookupPhones(filteredPhoneCandidates.map(candidate => candidate.phone));
+  const best = filteredPhoneCandidates[0] || uniqueCandidates[0] || null;
   const bestKey = best ? candidateIdentityKey(best) : "";
 
   return {
