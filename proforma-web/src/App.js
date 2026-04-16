@@ -1871,9 +1871,20 @@ function PhoneFinder() {
   const [showColMap, setShowColMap] = useState(false);
   const [filter, setFilter] = useState({ status:"all", search:"" });
   const [reviewRow, setReviewRow] = useState(null);
+  const [page, setPage] = useState(1);
+  const [toast, setToast] = useState("");
   const stopRef = useRef(false);
+  const resultsRef = useRef(null);
+  const PAGE_SIZE = 100;
 
-  useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results)); } catch {} }, [results]);
+  useEffect(() => { try { localStorage.setItem("pf_results", JSON.stringify(results.slice(0, 2000))); } catch {} }, [results]);
+
+  // Auto-scroll to results when first batch arrives
+  useEffect(() => {
+    if (results.length > 0 && resultsRef.current) {
+      resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [results.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function parseCSV(text) {
     const lines = text.trim().split(/\r?\n/);
@@ -1925,7 +1936,9 @@ function PhoneFinder() {
     setLoading(true);
     setApiError("");
     setProgress({ done: 0, total: allRows.length });
+    setPage(1);
     let done = 0;
+    let added = 0;
     for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
       if (stopRef.current) break;
       const batch = allRows.slice(i, i + BATCH_SIZE);
@@ -1937,8 +1950,10 @@ function PhoneFinder() {
         });
         const data = await resp.json();
         if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
+        const found = data.results.filter(r => r.phone);
         setResults(prev => [...data.results, ...prev]);
         done += batch.length;
+        added += found.length;
         setProgress({ done, total: allRows.length });
       } catch (err) {
         setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
@@ -1947,6 +1962,10 @@ function PhoneFinder() {
     }
     setLoading(false);
     setProgress(null);
+    if (done > 0) {
+      setToast(`✅ ${done} lignes traitées · ${added} numéros trouvés`);
+      setTimeout(() => setToast(""), 6000);
+    }
   }
 
   async function searchManual() {
@@ -2010,6 +2029,8 @@ function PhoneFinder() {
     }
     return r;
   }, [results, filter]);
+
+  const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
 
   const FIELD_LABELS = { name:"Nom / Entreprise", address:"Adresse", city:"Ville", province:"Province", postalCode:"Code postal", country:"Pays" };
   const FIELD_HINTS  = { name:"si l'adresse est vide, requis", address:"si le nom est vide, requis", city:"optionnel", province:"optionnel", postalCode:"optionnel", country:"optionnel" };
@@ -2185,12 +2206,19 @@ function PhoneFinder() {
           <div className="status-note" style={{textAlign:"center",padding:18}}>⏳ Connexion à Google Places…</div>
         )}
 
+        {/* ── Toast ────────────────────────────────────────────────── */}
+        {toast && (
+          <div style={{position:"fixed",bottom:24,right:24,background:"#1A7A3F",color:"#fff",padding:"12px 18px",borderRadius:10,fontWeight:700,fontSize:13,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>
+            {toast}
+          </div>
+        )}
+
         {/* ── Results Table ─────────────────────────────────────────── */}
         {filteredResults.length > 0 && (
-          <div className="card" style={{overflow:"hidden"}}>
+          <div ref={resultsRef} className="card" style={{overflow:"hidden"}}>
             <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => setFilter(f => ({ ...f, search:e.target.value }))} />
-              <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => setFilter(f => ({ ...f, status:e.target.value }))}>
+              <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => { setFilter(f => ({ ...f, search:e.target.value })); setPage(1); }} />
+              <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
                 <option value="all">Tous les statuts</option>
                 <option value="found">Trouvé</option>
                 <option value="needs_review">À vérifier</option>
@@ -2198,14 +2226,17 @@ function PhoneFinder() {
                 <option value="not_found">Non trouvé</option>
               </select>
               <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
-                {filteredResults.length} résultat{filteredResults.length !== 1 ? "s" : ""}
-                {results.length !== filteredResults.length ? ` / ${results.length} total` : ""}
+                {pagedResults.length < filteredResults.length
+                  ? `${pagedResults.length} affichés sur ${filteredResults.length}`
+                  : `${filteredResults.length} résultat${filteredResults.length !== 1 ? "s" : ""}`}
+                {results.length !== filteredResults.length ? ` (total: ${results.length})` : ""}
               </span>
             </div>
             <div style={{overflowX:"auto"}}>
               <table className="pf-tbl">
                 <thead>
                   <tr>
+                    <th>#</th>
                     <th>Recherche</th>
                     <th>Correspondance trouvée</th>
                     <th>Téléphone</th>
@@ -2216,14 +2247,16 @@ function PhoneFinder() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredResults.map((r, i) => {
+                  {pagedResults.map((r, i) => {
                     const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
                     const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
                     return (
                       <tr key={r.id || i}>
+                        <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
                         <td className="pf-input-col">
-                          {r.inputName  && <div className="pf-cell-name">{r.inputName}</div>}
+                          {r.inputName    && <div className="pf-cell-name">{r.inputName}</div>}
                           {r.inputAddress && <div className="pf-cell-addr">{r.inputAddress}</div>}
+                          {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
                         </td>
                         <td className="pf-match-col">
                           {r.matchedName    && <div className="pf-cell-name">{r.matchedName}</div>}
@@ -2246,13 +2279,9 @@ function PhoneFinder() {
                         <td><span className={`pf-status ${sc.cls}`}>{sc.label}</span></td>
                         <td>
                           <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                            {hasAlts && (
-                              <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>
-                            )}
-                            {r.phone && (
-                              <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier le numéro">📋</button>
-                            )}
-                            <button className="btn btn-sm btn-danger" onClick={() => setResults(prev => prev.filter(x => x.id !== r.id))} title="Supprimer">✕</button>
+                            {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
+                            {r.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📋</button>}
+                            <button className="btn btn-sm btn-danger" onClick={() => setResults(prev => prev.filter(x => x.id !== r.id))}>✕</button>
                           </div>
                         </td>
                       </tr>
@@ -2261,6 +2290,13 @@ function PhoneFinder() {
                 </tbody>
               </table>
             </div>
+            {pagedResults.length < filteredResults.length && (
+              <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
+                <button className="btn" onClick={() => setPage(p => p + 1)}>
+                  Afficher {Math.min(PAGE_SIZE, filteredResults.length - pagedResults.length)} de plus ({filteredResults.length - pagedResults.length} restants)
+                </button>
+              </div>
+            )}
           </div>
         )}
 
