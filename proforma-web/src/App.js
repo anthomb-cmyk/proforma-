@@ -455,14 +455,24 @@ function normalizePhoneKey(value) {
 
 function extractPhonesFromText(value) {
   const txt = String(value || "");
-  const matches = txt.match(/\+?\d[\d\s().-]{6,}\d/g) || [];
-  return matches.filter(raw => {
-    const digits = normalizePhoneKey(raw);
-    if (digits.length < 10 || digits.length > 15) return false;
-    // Reject short numeric ranges commonly found in civic addresses (ex: 105-1043).
-    if (/^\s*\d{1,5}\s*-\s*\d{1,5}\s*$/.test(String(raw || ""))) return false;
-    return true;
-  }).map(raw => String(raw).trim());
+  const matches = [
+    ...(txt.match(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/g) || []),
+    ...(txt.match(/\b(?:1)?\d{10}\b/g) || []),
+  ];
+  const normalized = [];
+  const seen = new Set();
+  for (const raw of matches) {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) continue;
+    const digits = normalizePhoneKey(trimmed);
+    const isNanp = digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+    if (!isNanp) continue;
+    const key = digits.length === 11 ? digits.slice(1) : digits;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(trimmed);
+  }
+  return normalized;
 }
 
 function mergePhoneLists(...sources) {
@@ -2459,6 +2469,80 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     setSelectedLeadId(null);
   }
 
+  function extractRawLeadPhoneCandidates(lead) {
+    const parts = [];
+    const push = (value) => {
+      if (value === null || value === undefined) return;
+      if (Array.isArray(value)) { value.forEach(push); return; }
+      const txt = String(value || "").trim();
+      if (!txt) return;
+      txt
+        .split(/[\n|;,/]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .forEach(item => parts.push(item));
+    };
+    push(lead?.phones);
+    push(lead?.phone);
+    push(lead?.originalPhone);
+    const unique = [];
+    const seen = new Set();
+    for (const item of parts) {
+      const key = item.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(item);
+    }
+    return unique;
+  }
+
+  function cleanLegacyLeadPhones() {
+    if (!Array.isArray(leads) || leads.length === 0) {
+      setToast("Aucun lead à nettoyer.");
+      setTimeout(() => setToast(""), 2500);
+      return;
+    }
+    if (!window.confirm("Nettoyer les téléphones invalides dans tous les leads existants ?")) return;
+
+    let changed = 0;
+    let removedValues = 0;
+    const now = Date.now();
+    const cleaned = leads.map(lead => {
+      const rawCandidates = extractRawLeadPhoneCandidates(lead);
+      const normalizedPhones = getLeadPhones(lead);
+      removedValues += Math.max(0, rawCandidates.length - normalizedPhones.length);
+
+      const prevPhones = Array.isArray(lead.phones) ? lead.phones.map(v => String(v || "").trim()).filter(Boolean) : [];
+      const prevPrimary = String(lead.phone || "").trim();
+      const nextPrimary = normalizedPhones[0] || "";
+      const cleanOriginal = mergePhoneLists(lead.originalPhone)[0] || "";
+      const nextOriginal = cleanOriginal || nextPrimary || "";
+      const samePhones = prevPhones.length === normalizedPhones.length && prevPhones.every((v, i) => v === normalizedPhones[i]);
+      if (samePhones && prevPrimary === nextPrimary && String(lead.originalPhone || "") === String(nextOriginal || "")) {
+        return lead;
+      }
+
+      changed++;
+      return {
+        ...lead,
+        phone: nextPrimary,
+        phones: normalizedPhones,
+        originalPhone: nextOriginal,
+        updatedAt: now,
+      };
+    });
+
+    if (changed === 0) {
+      setToast("Aucun numéro invalide trouvé dans les leads.");
+      setTimeout(() => setToast(""), 3200);
+      return;
+    }
+
+    setLeads(cleaned);
+    setToast(`✅ Nettoyage terminé: ${changed} leads corrigés · ${removedValues} valeurs retirées`);
+    setTimeout(() => setToast(""), 4500);
+  }
+
   function exportLeads() {
     const headers = ["Entreprise", "Contact", "Adresse Immeuble", "Téléphone", "Email", "Statut", "Source", "Nom trouvé", "Adresse trouvée", "Confiance", "Site", "Date import"];
     const rows = filteredLeads.map(lead => [
@@ -2649,6 +2733,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
             <option value="linked">Liens: deal lié</option>
             <option value="unlinked">Liens: pas de deal</option>
           </select>
+          <button className="btn btn-sm" onClick={cleanLegacyLeadPhones}>Nettoyer téléphones</button>
           <button className="btn btn-sm" onClick={exportLeads}>⬇ Exporter</button>
           <button className="btn btn-sm btn-danger" onClick={clearLeads}>Vider</button>
           <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
