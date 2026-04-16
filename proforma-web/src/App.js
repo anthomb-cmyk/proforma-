@@ -440,6 +440,69 @@ function normalizeDeal(d) {
   };
 }
 
+function normalizeTextKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizePhoneKey(value) {
+  return String(value || "").replace(/\D+/g, "");
+}
+
+function extractPhonesFromText(value) {
+  const txt = String(value || "");
+  const matches = txt.match(/\+?\d[\d\s().-]{6,}\d/g) || [];
+  return matches.filter(raw => {
+    const digits = normalizePhoneKey(raw);
+    return digits.length >= 7 && digits.length <= 15;
+  }).map(raw => String(raw).trim());
+}
+
+function mergePhoneLists(...sources) {
+  const merged = [];
+  const seen = new Set();
+  const pushOne = (value) => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) { value.forEach(pushOne); return; }
+    const raw = String(value || "").trim();
+    if (!raw) return;
+    const candidates = extractPhonesFromText(raw);
+    if (!candidates.length) return;
+    candidates.forEach(phone => {
+      const key = normalizePhoneKey(phone);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      merged.push(phone);
+    });
+  };
+  sources.forEach(pushOne);
+  return merged;
+}
+
+function extractPhonesFromRow(row) {
+  if (!row || typeof row !== "object") return [];
+  return mergePhoneLists(Object.values(row));
+}
+
+function getLeadPhones(lead) {
+  return mergePhoneLists(lead?.phones || [], lead?.phone, lead?.originalPhone);
+}
+
+function buildLeadIdentityKey(item = {}) {
+  const company = normalizeTextKey(item.companyName || item.inputName || item.matchedName || "");
+  const address = normalizeTextKey(item.buildingAddress || item.inputAddress || item.matchedAddress || item.address || "");
+  const contact = normalizeTextKey(item.contactName || item.leadContact || "");
+  if (!company && !address && !contact) {
+    const phone = normalizePhoneKey((item.phones || [])[0] || item.phone || "");
+    return phone ? `p:${phone}` : "";
+  }
+  return `c:${company}|a:${address}|ct:${contact}`;
+}
+
 function fmtSz(b) { return b < 1048576 ? `${Math.round(b/1024)} KB` : `${(b/1048576).toFixed(1)} MB`; }
 function fileIco(t) {
   if (t?.includes("pdf")) return "📄";
@@ -709,16 +772,17 @@ export default function App() {
     if (!lead) return null;
     const title = (lead.companyName || lead.contactName || lead.buildingAddress || "Lead importé").trim();
     const address = (lead.buildingAddress || lead.address || "").trim();
+    const phones = getLeadPhones(lead);
     const nextDeal = {
       ...createDeal(title, address, null, "", ""),
       contact: {
         name: lead.contactName || "",
-        phone: lead.phone || "",
+        phone: phones[0] || "",
         email: lead.email || "",
         company: lead.companyName || "",
         role: "Lead",
       },
-      notesDeal: lead.notes || "",
+      notesDeal: `${lead.notes || ""}${phones.length > 1 ? `\nAutres numéros: ${phones.slice(1).join(" · ")}` : ""}`.trim(),
       activities: [{ id: Date.now(), text: "Lead converti en deal", time: Date.now() }],
     };
     setDeals(prev => [nextDeal, ...prev]);
@@ -728,6 +792,88 @@ export default function App() {
     setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, stage: "converted", linkedDealId: nextDeal.id, updatedAt: Date.now() } : l));
     return nextDeal.id;
   }, []);
+
+  const importPhoneFinderResultsToLeads = useCallback((rows, meta = {}) => {
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+    const sourceTitle = String(meta?.title || "").trim();
+    const sourceFile = sourceTitle ? `Recherche Tél. · ${sourceTitle}` : "Recherche Tél.";
+    const now = Date.now();
+    const current = (Array.isArray(leads) ? leads : []).map(lead => {
+      const phones = getLeadPhones(lead);
+      return { ...lead, phones, phone: phones[0] || "", updatedAt: lead.updatedAt || now };
+    });
+    const byKey = new Map();
+    current.forEach(lead => {
+      const key = buildLeadIdentityKey(lead);
+      if (key && !byKey.has(key)) byKey.set(key, lead);
+    });
+    const additions = [];
+
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const phones = mergePhoneLists(row?.phone, row?.inputPhones, extractPhonesFromRow(row?.rawRow));
+      if (!phones.length) { skipped++; continue; }
+      const companyName = String(row?.companyName || row?.inputName || row?.matchedName || "").trim();
+      const contactName = String(row?.leadContact || "").trim();
+      const buildingAddress = String(row?.buildingAddress || row?.inputAddress || row?.matchedAddress || "").trim();
+      const key = buildLeadIdentityKey({ companyName, contactName, buildingAddress, inputName: row?.inputName, matchedName: row?.matchedName, inputAddress: row?.inputAddress, matchedAddress: row?.matchedAddress, phones });
+      const createdAt = String(row?.searchedAt || new Date().toISOString());
+
+      const existing = key ? byKey.get(key) : null;
+      if (existing) {
+        const merged = mergePhoneLists(existing.phones, phones);
+        if (merged.length === existing.phones.length) { skipped++; continue; }
+        existing.phones = merged;
+        existing.phone = merged[0] || "";
+        existing.updatedAt = now;
+        if (!existing.companyName) existing.companyName = companyName;
+        if (!existing.contactName) existing.contactName = contactName;
+        if (!existing.buildingAddress) existing.buildingAddress = buildingAddress;
+        if (!existing.website && row?.website) existing.website = String(row.website);
+        if (!existing.matchedName && row?.matchedName) existing.matchedName = String(row.matchedName);
+        if (!existing.matchedAddress && row?.matchedAddress) existing.matchedAddress = String(row.matchedAddress);
+        if (!existing.sourceFile) existing.sourceFile = sourceFile;
+        updated++;
+        continue;
+      }
+
+      const nextLead = {
+        id: `lead_pf_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        createdAt,
+        updatedAt: now,
+        stage: "to_call",
+        companyName,
+        contactName,
+        buildingAddress,
+        city: "",
+        province: "",
+        postalCode: "",
+        country: "Canada",
+        email: "",
+        phone: phones[0] || "",
+        phones,
+        originalPhone: "",
+        notes: sourceTitle ? `Importé depuis Recherche Tél. (${sourceTitle})` : "Importé depuis Recherche Tél.",
+        sourceFile,
+        matchedName: String(row?.matchedName || ""),
+        matchedAddress: String(row?.matchedAddress || ""),
+        confidence: Number(row?.confidence || 0),
+        lookupStatus: String(row?.status || "found"),
+        website: String(row?.website || ""),
+        linkedDealId: "",
+      };
+      additions.push(nextLead);
+      if (key) byKey.set(key, nextLead);
+      added++;
+    }
+
+    if (additions.length || updated > 0) {
+      setLeads([...additions, ...current].slice(0, 6000));
+    }
+
+    return { added, updated, skipped };
+  }, [leads]);
 
   const deleteDeal = (id) => {
     if (!window.confirm("Supprimer ce deal ?")) return;
@@ -1361,7 +1507,12 @@ export default function App() {
             </>
           )}
 
-          {view === "phonefinder" && <PhoneFinder />}
+          {view === "phonefinder" && (
+            <PhoneFinder
+              onExportFoundToLeads={importPhoneFinderResultsToLeads}
+              onOpenLeads={() => setView("leads")}
+            />
+          )}
 
           {view === "workspace" && (
             !current ? (
@@ -2046,7 +2197,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       }
       setImportFile({ ...parsed, fileName: file.name });
       setColMap(autoDetectCols(parsed.headers || []));
-      setShowColMap(true);
+      setShowColMap(false);
     } catch (err) {
       setImportError(`Import impossible: ${String(err?.message || err)}`);
     }
@@ -2062,13 +2213,6 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
 
   async function importLeads() {
     if (!importFile?.rows?.length) return;
-    const hasInputs = Boolean(colMap.buildingAddress || colMap.companyName || colMap.contactName);
-    if (!hasInputs) {
-      setImportError("Mappez au moins adresse immeuble, entreprise ou contact.");
-      setShowColMap(true);
-      return;
-    }
-
     const prepared = importFile.rows.map(row => {
       const companyName = pickValue(row, colMap.companyName);
       const contactName = pickValue(row, colMap.contactName);
@@ -2082,8 +2226,9 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const notes = pickValue(row, colMap.notes);
       const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
       const lookupName = companyName || contactName || "";
-      return { companyName, contactName, address, city, province, postalCode, country, email, phone, notes, buildingAddress, lookupName };
-    }).filter(row => row.buildingAddress || row.lookupName);
+      const inputPhones = mergePhoneLists(phone, extractPhonesFromRow(row));
+      return { companyName, contactName, address, city, province, postalCode, country, email, phone, inputPhones, notes, buildingAddress, lookupName, rawRow: row };
+    }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
 
     if (!prepared.length) {
       setImportError("Aucune ligne exploitable après mappage.");
@@ -2109,6 +2254,10 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           province: item.province,
           postalCode: item.postalCode,
           country: item.country || "Canada",
+          companyName: item.companyName,
+          contactName: item.contactName,
+          buildingAddress: item.buildingAddress,
+          rawRow: item.rawRow,
         }));
         const resp = await fetch("/api/phone-lookup", {
           method: "POST",
@@ -2132,23 +2281,25 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const nowIso = new Date().toISOString();
       const mapped = batch.map((item, idx) => {
         const looked = lookupResults[idx] || {};
-        const resolvedPhone = item.phone || looked.phone || "";
-        const linkedStatus = looked.status || (resolvedPhone ? "found" : "not_found");
+        const mergedPhones = mergePhoneLists(item.inputPhones, looked.phone);
+        const resolvedPhone = mergedPhones[0] || "";
+        const linkedStatus = looked.status || (mergedPhones.length ? "found" : "not_found");
         return {
           id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           createdAt: nowIso,
           updatedAt: Date.now(),
-          stage: resolvedPhone ? "to_call" : "new",
-          companyName: item.companyName || "",
+          stage: mergedPhones.length ? "to_call" : "new",
+          companyName: item.companyName || looked.inputName || looked.matchedName || "",
           contactName: item.contactName || "",
-          buildingAddress: item.buildingAddress || "",
+          buildingAddress: item.buildingAddress || looked.inputAddress || looked.matchedAddress || "",
           city: item.city || "",
           province: item.province || "",
           postalCode: item.postalCode || "",
           country: item.country || "Canada",
           email: item.email || "",
           phone: resolvedPhone,
-          originalPhone: item.phone || "",
+          phones: mergedPhones,
+          originalPhone: item.inputPhones[0] || "",
           notes: item.notes || "",
           sourceFile: importFile.fileName || "",
           matchedName: looked.matchedName || "",
@@ -2173,8 +2324,64 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       return;
     }
 
-    setLeads(prev => [...imported, ...prev].slice(0, 6000));
-    setToast(`✅ ${imported.length} lead${imported.length > 1 ? "s" : ""} importé${imported.length > 1 ? "s" : ""}.`);
+    let addedCount = 0;
+    let updatedCount = 0;
+    let unchangedCount = 0;
+    const now = Date.now();
+    const current = (Array.isArray(leads) ? leads : []).map(lead => {
+      const phones = getLeadPhones(lead);
+      return { ...lead, phones, phone: phones[0] || "", updatedAt: lead.updatedAt || now };
+    });
+    const byKey = new Map();
+    current.forEach(lead => {
+      const key = buildLeadIdentityKey(lead);
+      if (key && !byKey.has(key)) byKey.set(key, lead);
+    });
+    const additions = [];
+
+    for (const incomingRaw of imported) {
+      const incoming = { ...incomingRaw, phones: getLeadPhones(incomingRaw) };
+      const key = buildLeadIdentityKey(incoming);
+      const existing = key ? byKey.get(key) : null;
+      if (!existing) {
+        additions.push({ ...incoming, phone: incoming.phones[0] || incoming.phone || "" });
+        if (key) byKey.set(key, additions[additions.length - 1]);
+        addedCount++;
+        continue;
+      }
+
+      const mergedPhones = mergePhoneLists(existing.phones, incoming.phones);
+      let changed = false;
+      if (mergedPhones.length !== existing.phones.length) {
+        existing.phones = mergedPhones;
+        existing.phone = mergedPhones[0] || "";
+        changed = true;
+      }
+      if (!existing.companyName && incoming.companyName) { existing.companyName = incoming.companyName; changed = true; }
+      if (!existing.contactName && incoming.contactName) { existing.contactName = incoming.contactName; changed = true; }
+      if (!existing.buildingAddress && incoming.buildingAddress) { existing.buildingAddress = incoming.buildingAddress; changed = true; }
+      if (!existing.email && incoming.email) { existing.email = incoming.email; changed = true; }
+      if (!existing.website && incoming.website) { existing.website = incoming.website; changed = true; }
+      if (!existing.matchedName && incoming.matchedName) { existing.matchedName = incoming.matchedName; changed = true; }
+      if (!existing.matchedAddress && incoming.matchedAddress) { existing.matchedAddress = incoming.matchedAddress; changed = true; }
+      if ((Number(incoming.confidence || 0) > Number(existing.confidence || 0))) {
+        existing.confidence = Number(incoming.confidence || 0);
+        changed = true;
+      }
+      if (changed) {
+        existing.updatedAt = now;
+        updatedCount++;
+      } else {
+        unchangedCount++;
+      }
+    }
+
+    setLeads([...additions, ...current].slice(0, 6000));
+    const summary = [];
+    if (addedCount > 0) summary.push(`${addedCount} nouveau${addedCount > 1 ? "x" : ""}`);
+    if (updatedCount > 0) summary.push(`${updatedCount} enrichi${updatedCount > 1 ? "s" : ""}`);
+    if (unchangedCount > 0) summary.push(`${unchangedCount} inchangé${unchangedCount > 1 ? "s" : ""}`);
+    setToast(`✅ Import Leads terminé${summary.length ? ` · ${summary.join(" · ")}` : ""}.`);
     setTimeout(() => setToast(""), 5000);
     setImportFile(null);
     setColMap({});
@@ -2200,7 +2407,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       lead.companyName || "",
       lead.contactName || "",
       lead.buildingAddress || "",
-      lead.phone || "",
+      getLeadPhones(lead).join(" | "),
       lead.email || "",
       STAGE_CFG[lead.stage]?.label || lead.stage || "Nouveau",
       lead.sourceFile || "",
@@ -2226,7 +2433,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     if (filter.search) {
       const q = filter.search.toLowerCase();
       list = list.filter(lead => (
-        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${lead.phone || ""} ${lead.email || ""} ${lead.notes || ""}`
+        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""}`
       ).toLowerCase().includes(q));
     }
     return list;
@@ -2305,7 +2512,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
             <div style={{fontSize:12,color:"var(--text2)"}}>
               <strong>{importFile.rows.length}</strong> lignes prêtes ·{" "}
               <button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>
-                modifier le mappage
+                mappage avancé (optionnel)
               </button>
             </div>
             <button className="btn btn-gold" onClick={importLeads} disabled={importBusy}>
@@ -2366,6 +2573,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                 <tbody>
                   {pagedLeads.map((lead, i) => {
                     const stage = STAGE_CFG[lead.stage] || STAGE_CFG.new;
+                    const leadPhones = getLeadPhones(lead);
                     return (
                       <tr key={lead.id || i}>
                         <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i + 1}</td>
@@ -2375,7 +2583,14 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                           {lead.contactName && lead.companyName && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {lead.contactName}</div>}
                         </td>
                         <td>
-                          {lead.phone ? <div className="pf-phone">📞 {lead.phone}</div> : <span style={{color:"var(--text3)"}}>—</span>}
+                          {leadPhones.length ? (
+                            <>
+                              <div className="pf-phone">📞 {leadPhones[0]}</div>
+                              {leadPhones.slice(1).map((phone, idx) => (
+                                <div key={idx} style={{fontSize:11,color:"var(--text2)",marginTop:2}}>↳ {phone}</div>
+                              ))}
+                            </>
+                          ) : <span style={{color:"var(--text3)"}}>—</span>}
                           {lead.email && <div style={{fontSize:11,color:"var(--text2)",marginTop:2}}>{lead.email}</div>}
                         </td>
                         <td className="pf-match-col">
@@ -2393,7 +2608,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                         </td>
                         <td>
                           <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                            {lead.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(lead.phone)}>📋</button>}
+                            {leadPhones.length > 0 && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))}>📋</button>}
                             {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(lead)}>Créer deal</button>}
                             {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F"}}>Deal lié</span>}
                             <button className="btn btn-sm btn-danger" onClick={() => removeLead(lead.id)}>✕</button>
@@ -2431,7 +2646,11 @@ const PF_RUNS_KEY = "pf_runs";
 const PF_ACTIVE_RUN_KEY = "pf_active_run";
 const MAX_PHONE_RUNS = 40;
 
-function PhoneFinder() {
+function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
+  function rowHasAnyPhone(row) {
+    return mergePhoneLists(row?.phone, row?.inputPhones).length > 0;
+  }
+
   const [pfPage, setPfPage] = useState("search");
   const [pfTab, setPfTab] = useState("manual");
   const [form, setForm] = useState({ name:"", address:"", city:"", province:"Québec", postalCode:"", country:"Canada" });
@@ -2451,7 +2670,7 @@ function PhoneFinder() {
               source: run.source || "csv",
               createdAt,
               totalRows: Number.isFinite(run.totalRows) ? run.totalRows : rows.length,
-              foundCount: Number.isFinite(run.foundCount) ? run.foundCount : rows.filter(r => r.phone).length,
+              foundCount: Number.isFinite(run.foundCount) ? run.foundCount : rows.filter(rowHasAnyPhone).length,
               rows,
             };
           })
@@ -2469,7 +2688,7 @@ function PhoneFinder() {
           source: "legacy",
           createdAt,
           totalRows: legacy.length,
-          foundCount: legacy.filter(r => r.phone).length,
+          foundCount: legacy.filter(rowHasAnyPhone).length,
           rows: legacy,
         }];
       }
@@ -2489,6 +2708,7 @@ function PhoneFinder() {
   const [reviewRow, setReviewRow] = useState(null);
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState("");
+  const [exportBusy, setExportBusy] = useState(false);
   const stopRef = useRef(false);
   const PAGE_SIZE = 100;
 
@@ -2544,7 +2764,7 @@ function PhoneFinder() {
     return {
       rows: safeRows,
       totalRows: safeRows.length,
-      foundCount: safeRows.filter(r => r.phone).length,
+      foundCount: safeRows.filter(rowHasAnyPhone).length,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -2591,6 +2811,50 @@ function PhoneFinder() {
     setFilter({ status:"all", search:"" });
     setPage(1);
     setPfPage("search");
+  }
+
+  async function exportRunToLeads(run = activeRun) {
+    if (!run) return;
+    const foundRows = (run.rows || []).filter(rowHasAnyPhone);
+    if (!foundRows.length) {
+      setToast("Aucun numéro trouvé à exporter.");
+      setTimeout(() => setToast(""), 3500);
+      return;
+    }
+    if (typeof onExportFoundToLeads !== "function") {
+      setToast("Export vers Leads indisponible.");
+      setTimeout(() => setToast(""), 3500);
+      return;
+    }
+
+    setExportBusy(true);
+    try {
+      const result = await Promise.resolve(onExportFoundToLeads(foundRows, {
+        id: run.id,
+        title: run.title,
+        createdAt: run.createdAt,
+      }));
+      const added = Number(result?.added || 0);
+      const updated = Number(result?.updated || 0);
+      const skipped = Number(result?.skipped || 0);
+      if (added > 0 || updated > 0) {
+        const parts = [];
+        if (added > 0) parts.push(`${added} nouveau${added > 1 ? "x" : ""}`);
+        if (updated > 0) parts.push(`${updated} enrichi${updated > 1 ? "s" : ""}`);
+        if (skipped > 0) parts.push(`${skipped} inchangé${skipped > 1 ? "s" : ""}`);
+        setToast(`✅ Leads mis à jour: ${parts.join(" · ")}`);
+        if (typeof onOpenLeads === "function") {
+          setTimeout(() => onOpenLeads(), 250);
+        }
+      } else {
+        setToast("Tous les numéros trouvés sont déjà dans Leads.");
+      }
+    } catch (err) {
+      setToast(`Export impossible: ${String(err?.message || err)}`);
+    } finally {
+      setExportBusy(false);
+      setTimeout(() => setToast(""), 5000);
+    }
   }
 
   function normalizeHeaderKey(value) {
@@ -2728,6 +2992,13 @@ function PhoneFinder() {
         /\bnom\b/,
         /\bowner\b/,
       ],
+      phone: [
+        /\btelephone\b/,
+        /\bphone\b/,
+        /\bcell\b/,
+        /\bmobile\b/,
+        /\btel\b/,
+      ],
       name: [
         /\bnom entreprise\b/,
         /\bbusiness name\b/,
@@ -2738,7 +3009,7 @@ function PhoneFinder() {
       ],
     };
 
-    for (const key of ["address", "city", "province", "postalCode", "country", "company", "leadContact", "name"]) {
+    for (const key of ["address", "city", "province", "postalCode", "country", "company", "leadContact", "phone", "name"]) {
       const found = findHeader(patterns[key]);
       if (found) map[key] = found;
     }
@@ -2791,6 +3062,7 @@ function PhoneFinder() {
           const companyName = src.company || "";
           const leadContact = src.leadContact || "";
           const fallbackName = src.rawName || src.name || "";
+          const inputPhones = mergePhoneLists(src.inputPhones, rowResult.inputPhones);
           return {
             ...rowResult,
             inputName: companyName || rowResult.inputName || fallbackName,
@@ -2798,9 +3070,10 @@ function PhoneFinder() {
             buildingAddress: buildingAddress || "",
             companyName,
             leadContact,
+            inputPhones,
           };
         });
-        const found = chunk.filter(r => r.phone);
+        const found = chunk.filter(rowHasAnyPhone);
         runRows = [...runRows, ...chunk];
         setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
         done += batch.length;
@@ -2833,12 +3106,11 @@ function PhoneFinder() {
 
   async function searchCSV() {
     if (!csvFile?.rows?.length) return;
-    const hasLookupInputs = Boolean(colMap.address || colMap.name || colMap.company || colMap.leadContact);
-    if (!hasLookupInputs) { setApiError("Mappez au moins une colonne utile (adresse, entreprise, nom ou contact)."); setShowColMap(true); return; }
     const rows = csvFile.rows.map(r => {
       const rawName = pickMappedValue(r, colMap.name);
       const company = pickMappedValue(r, colMap.company);
       const leadContact = pickMappedValue(r, colMap.leadContact);
+      const mappedPhone = pickMappedValue(r, colMap.phone);
       const address = pickMappedValue(r, colMap.address);
       const city = pickMappedValue(r, colMap.city);
       const province = pickMappedValue(r, colMap.province);
@@ -2861,9 +3133,11 @@ function PhoneFinder() {
         postalCode,
         country,
         buildingAddress,
+        inputPhones: mergePhoneLists(mappedPhone, extractPhonesFromRow(r)),
+        rawRow: r,
       };
-    }).filter(r => r.name || r.address || r.buildingAddress);
-    if (!rows.length) { setApiError("Aucune ligne exploitable. Vérifiez le mappage (adresse/entreprise/contact)."); return; }
+    }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
+    if (!rows.length) { setApiError("Aucune ligne exploitable dans ce fichier."); return; }
     await doLookupBatched(rows, "csv");
   }
 
@@ -2884,7 +3158,7 @@ function PhoneFinder() {
       }
       setCsvFile(parsed);
       setColMap(autoDetectCols(parsed.headers || []));
-      setShowColMap(true);
+      setShowColMap(false);
     } catch (err) {
       setApiError(`Import impossible: ${String(err?.message || err)}`);
     }
@@ -2900,13 +3174,13 @@ function PhoneFinder() {
 
   function exportCSV() {
     if (!activeRun) return;
-    const headers = ["Entreprise", "Contact", "Bâtiment", "Nom saisi", "Adresse saisie", "Nom trouvé", "Adresse trouvée", "Téléphone", "Site web", "Source", "Confiance %", "Statut", "Date"];
+    const headers = ["Entreprise", "Contact", "Bâtiment", "Nom saisi", "Adresse saisie", "Nom trouvé", "Adresse trouvée", "Téléphone trouvé", "Téléphones fichier", "Site web", "Source", "Confiance %", "Statut", "Date"];
     const body = filteredResults.map(r => [
       r.companyName || "",
       r.leadContact || "",
       r.buildingAddress || r.inputAddress || "",
       r.inputName, r.inputAddress, r.matchedName, r.matchedAddress,
-      r.phone, r.website, r.source, r.confidence, r.status, r.searchedAt,
+      r.phone, (r.inputPhones || []).join(" | "), r.website, r.source, r.confidence, r.status, r.searchedAt,
     ]);
     const csv = [headers, ...body].map(row => row.map(c => `"${String(c ?? "").replace(/"/g, "\"\"")}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
@@ -2922,7 +3196,7 @@ function PhoneFinder() {
     if (filter.search) {
       const q = filter.search.toLowerCase();
       r = r.filter(x => (
-        `${x.inputName || ""} ${x.inputAddress || ""} ${x.companyName || ""} ${x.leadContact || ""} ${x.buildingAddress || ""} ${x.matchedName || ""} ${x.phone || ""} ${x.website || ""}`
+        `${x.inputName || ""} ${x.inputAddress || ""} ${x.companyName || ""} ${x.leadContact || ""} ${x.buildingAddress || ""} ${x.matchedName || ""} ${x.phone || ""} ${(x.inputPhones || []).join(" ")} ${x.website || ""}`
       ).toLowerCase().includes(q));
     }
     return r;
@@ -2933,6 +3207,7 @@ function PhoneFinder() {
     name:"Nom de recherche",
     company:"Entreprise / Organisation",
     leadContact:"Contact / Propriétaire",
+    phone:"Téléphone (déjà connu)",
     address:"Adresse immeuble",
     city:"Ville",
     province:"Province",
@@ -2943,6 +3218,7 @@ function PhoneFinder() {
     name:"optionnel, utilisé pour la recherche Places",
     company:"optionnel, prioritaire pour la recherche si présent",
     leadContact:"optionnel, conservé pour savoir qui appeler",
+    phone:"optionnel, ajouté au lead à l'export",
     address:"très recommandé",
     city:"optionnel",
     province:"optionnel",
@@ -3033,6 +3309,13 @@ function PhoneFinder() {
           </div>
           {activeRun && (
             <div style={{display:"flex",gap:8}}>
+              <button
+                className="btn btn-sm btn-gold"
+                onClick={() => exportRunToLeads(activeRun)}
+                disabled={exportBusy || !(activeRun.foundCount > 0)}
+              >
+                {exportBusy ? "Export…" : `⇢ Leads (${activeRun.foundCount || 0})`}
+              </button>
               {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>Voir résultats</button>}
               <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
               <button className="btn btn-danger btn-sm" onClick={clearAllRuns}>Vider</button>
@@ -3118,10 +3401,10 @@ function PhoneFinder() {
                   <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                     <div style={{fontSize:12,color:"var(--text2)"}}>
                       <strong>{csvFile.rows.length}</strong> lignes •{" "}
-                      <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes mappées
-                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>modifier le mappage</button>)
+                      <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes détectées automatiquement
+                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>mappage avancé (optionnel)</button>)
                     </div>
-                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.filter(r => pickMappedValue(r, colMap.address) || pickMappedValue(r, colMap.name) || pickMappedValue(r, colMap.company) || pickMappedValue(r, colMap.leadContact)).length} lignes`}</button>
+                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.length} lignes`}</button>
                   </div>
                 )}
                 {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
@@ -3195,6 +3478,13 @@ function PhoneFinder() {
                       </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <button
+                        className="btn btn-sm btn-gold"
+                        onClick={() => exportRunToLeads(activeRun)}
+                        disabled={exportBusy || !(activeRun.foundCount > 0)}
+                      >
+                        {exportBusy ? "Export…" : `⇢ Exporter ${activeRun.foundCount || 0} vers Leads`}
+                      </button>
                       <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>✎ Renommer</button>
                       <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
                     </div>
@@ -3245,6 +3535,9 @@ function PhoneFinder() {
                                     {(r.companyName || r.inputName) && <div className="pf-cell-name">{r.companyName || r.inputName}</div>}
                                     {(r.buildingAddress || r.inputAddress) && <div className="pf-cell-addr">🏢 {r.buildingAddress || r.inputAddress}</div>}
                                     {r.leadContact && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {r.leadContact}</div>}
+                                    {Array.isArray(r.inputPhones) && r.inputPhones.length > 0 && (
+                                      <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>📇 {r.inputPhones.join(" · ")}</div>
+                                    )}
                                     {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
                                   </td>
                                   <td className="pf-match-col">
@@ -3255,7 +3548,9 @@ function PhoneFinder() {
                                   <td>
                                     {r.phone
                                       ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
-                                      : <span style={{color:"var(--text3)"}}>—</span>}
+                                      : (Array.isArray(r.inputPhones) && r.inputPhones.length > 0
+                                        ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.inputPhones.join(" / "))} title="Copier">📇 {r.inputPhones[0]}</span>
+                                        : <span style={{color:"var(--text3)"}}>—</span>)}
                                   </td>
                                   <td className="pf-web-col">
                                     {r.website
@@ -3269,7 +3564,15 @@ function PhoneFinder() {
                                   <td>
                                     <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
                                       {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
-                                      {r.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📋</button>}
+                                      {(r.phone || (Array.isArray(r.inputPhones) && r.inputPhones.length > 0)) && (
+                                        <button
+                                          className="btn btn-sm"
+                                          onClick={() => navigator.clipboard?.writeText(mergePhoneLists(r.phone, r.inputPhones).join(" / "))}
+                                          title="Copier"
+                                        >
+                                          📋
+                                        </button>
+                                      )}
                                       <button className="btn btn-sm btn-danger" onClick={() => updateActiveRunRows(prev => prev.filter(x => x.id !== r.id))}>✕</button>
                                     </div>
                                   </td>

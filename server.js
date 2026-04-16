@@ -3934,6 +3934,174 @@ async function gPlaceDetails(placeId) {
   return d?.result || {};
 }
 
+function normalizeLookupKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function cleanLookupValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return "";
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const cleaned = cleanLookupValue(value);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function looksLikePostalCode(value) {
+  const txt = cleanLookupValue(value);
+  if (!txt) return false;
+  return /[a-z]\d[a-z][ -]?\d[a-z]\d/i.test(txt) || /\b\d{5}(?:-\d{4})?\b/.test(txt);
+}
+
+function looksLikeAddress(value) {
+  const txt = cleanLookupValue(value);
+  if (!txt) return false;
+  return /\d/.test(txt) && /(rue|street|st\b|avenue|av\b|boulevard|blvd|road|rd\b|chemin|route|lane|ln\b|drive|dr\b|suite|bureau|unit|apt|appartement)/i.test(txt);
+}
+
+function looksLikePhone(value) {
+  return /\+?\d[\d\s().-]{6,}\d/.test(cleanLookupValue(value));
+}
+
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanLookupValue(value));
+}
+
+function inferLookupFields(rawRow = {}) {
+  const entries = Object.entries(rawRow || {})
+    .map(([key, value]) => ({
+      key,
+      normKey: normalizeLookupKey(key),
+      value: cleanLookupValue(value)
+    }))
+    .filter(entry => entry.value);
+
+  const findByPatterns = (patterns) => {
+    const hit = entries.find(entry => patterns.some(rx => rx.test(entry.normKey)));
+    return hit ? hit.value : "";
+  };
+  const isContactKey = normKey => /\b(contact|proprietaire|owner|nom complet|full name|personne|prenom)\b/.test(normKey);
+
+  const byKey = {
+    address: findByPatterns([
+      /\badresse immeuble\b/,
+      /\badresse postale\b/,
+      /\badresse\b/,
+      /\baddress\b/,
+      /\bstreet\b/,
+      /\brue\b/,
+      /\bbuilding\b/,
+      /\bimmeuble\b/,
+    ]),
+    city: findByPatterns([/\bville\b/, /\bcity\b/, /\bmunicipalite\b/, /\bmunicipality\b/, /\btown\b/]),
+    province: findByPatterns([/\bprovince\b/, /\betat\b/, /\bstate\b/, /\bregion\b/]),
+    postalCode: findByPatterns([/\bcode postal\b/, /\bpostal\b/, /\bzip\b/, /\bzipcode\b/, /\bcp\b/]),
+    country: findByPatterns([/\bpays\b/, /\bcountry\b/]),
+    companyName: findByPatterns([
+      /\bcompany\b/,
+      /\bcompagnie\b/,
+      /\bentreprise\b/,
+      /\borganisation\b/,
+      /\braison sociale\b/,
+      /\bsociete\b/,
+      /\bbusiness\b/,
+      /\bnom entreprise\b/,
+      /\bnom compagnie\b/,
+    ]),
+    contactName: findByPatterns([
+      /\bcontact\b/,
+      /\bproprietaire\b/,
+      /\bowner\b/,
+      /\bnom complet\b/,
+      /\bfull name\b/,
+      /\bpersonne\b/,
+      /\bprenom\b/,
+      /\bnom\b/,
+    ]),
+    genericName: findByPatterns([/\bname\b/, /\bnom\b/, /\btitre\b/]),
+  };
+
+  if (!byKey.address) {
+    const guessedAddress = entries.find(entry => looksLikeAddress(entry.value));
+    byKey.address = guessedAddress ? guessedAddress.value : "";
+  }
+
+  if (!byKey.postalCode) {
+    const guessedPostal = entries.find(entry => looksLikePostalCode(entry.value));
+    byKey.postalCode = guessedPostal ? guessedPostal.value : "";
+  }
+
+  if (!byKey.companyName && !byKey.contactName && byKey.genericName && !looksLikeAddress(byKey.genericName)) {
+    byKey.companyName = byKey.genericName;
+  }
+
+  if (!byKey.companyName) {
+    const candidate = entries.find(entry => (
+      !isContactKey(entry.normKey) &&
+      !looksLikeAddress(entry.value) &&
+      !looksLikePostalCode(entry.value) &&
+      !looksLikePhone(entry.value) &&
+      !looksLikeEmail(entry.value) &&
+      entry.value.length >= 3 &&
+      entry.value.length <= 140
+    ));
+    byKey.companyName = candidate ? candidate.value : "";
+  }
+
+  return byKey;
+}
+
+function normalizeLookupRow(row = {}) {
+  const safeRow = row && typeof row === "object" ? row : {};
+  const rawRow = safeRow.rawRow && typeof safeRow.rawRow === "object" ? safeRow.rawRow : safeRow;
+  const inferred = inferLookupFields(rawRow);
+
+  const address = firstNonEmpty(safeRow.address, safeRow.buildingAddress, inferred.address);
+  const city = firstNonEmpty(safeRow.city, inferred.city);
+  const province = firstNonEmpty(safeRow.province, inferred.province);
+  const postalCode = firstNonEmpty(safeRow.postalCode, inferred.postalCode);
+  const country = firstNonEmpty(safeRow.country, inferred.country, "Canada");
+  const companyName = firstNonEmpty(safeRow.company, safeRow.companyName, inferred.companyName);
+  const contactName = firstNonEmpty(safeRow.contactName, safeRow.leadContact, inferred.contactName);
+  const name = firstNonEmpty(
+    safeRow.name,
+    safeRow.lookupName,
+    safeRow.rawName,
+    companyName,
+    address ? "" : contactName
+  );
+  const inputAddress = firstNonEmpty(
+    safeRow.inputAddress,
+    safeRow.buildingAddress,
+    [address, city, province, postalCode].filter(Boolean).join(", ")
+  );
+  const inputName = firstNonEmpty(
+    safeRow.inputName,
+    safeRow.rawName,
+    companyName,
+    name,
+    contactName
+  );
+
+  return {
+    lookup: { name, address, city, province, postalCode, country },
+    inputName,
+    inputAddress,
+    companyName,
+    contactName,
+  };
+}
+
 async function phoneLookupOne({ name, address, city, province, postalCode, country }) {
   const queryParts = [name, address, city, province, postalCode, country || "Canada"].filter(Boolean);
   const query = queryParts.join(", ");
@@ -3982,11 +4150,32 @@ app.post("/api/phone-lookup", async (req, res) => {
   const results = [];
   for (const row of rows.slice(0, 50)) {
     const id = `pl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const normalized = normalizeLookupRow(row);
     try {
-      const r = await phoneLookupOne(row);
-      results.push({ id, inputName: row.name || "", inputAddress: [row.address, row.city, row.province].filter(Boolean).join(", "), ...r, searchedAt: new Date().toISOString() });
+      const r = await phoneLookupOne(normalized.lookup);
+      results.push({
+        id,
+        inputName: normalized.inputName,
+        inputAddress: normalized.inputAddress,
+        ...r,
+        searchedAt: new Date().toISOString()
+      });
     } catch (err) {
-      results.push({ id, inputName: row.name || "", inputAddress: row.address || "", matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[], error: String(err?.message || err), searchedAt: new Date().toISOString() });
+      results.push({
+        id,
+        inputName: normalized.inputName,
+        inputAddress: normalized.inputAddress,
+        matchedName:"",
+        matchedAddress:"",
+        phone:"",
+        website:"",
+        source:"google_places",
+        confidence:0,
+        status:"not_found",
+        candidates:[],
+        error: String(err?.message || err),
+        searchedAt: new Date().toISOString()
+      });
     }
     if (rows.length > 1) await new Promise(resolve => setTimeout(resolve, 100));
   }
