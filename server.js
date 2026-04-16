@@ -3873,23 +3873,87 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+function splitToIdeaChunks(value) {
+  return String(value || "")
+    .replace(/\r/g, "\n")
+    .replace(/[•●▪◦]/g, "\n- ")
+    .replace(/\n\s*\d+[).]\s+/g, "\n- ")
+    .split("\n")
+    .flatMap((rawLine) => {
+      const line = String(rawLine || "")
+        .trim()
+        .replace(/^[-*]\s*/, "")
+        .replace(/^(\d+[).]\s*)+/, "")
+        .replace(/^`|`$/g, "")
+        .replace(/\*\*/g, "")
+        .trim();
+      if (!line) return [];
+      const withoutHeading = line.replace(
+        /^(opportunit[eé]s?|risques?|recommandations?|strat[eé]gie|analyse|synth[eè]se|r[eé]sum[eé])\s*:\s*/i,
+        ""
+      ).trim();
+      if (!withoutHeading) return [];
+      return withoutHeading
+        .split(/(?<=[.;!?])\s+(?=[A-ZÀ-ÖØ-Ý0-9])/)
+        .map(part => part.trim())
+        .filter(Boolean);
+    });
+}
+
+function formatAsCrmBulletNotes(modelText, sourceText = "") {
+  const bannedStandalone = /^(opportunit[eé]s?|risques?|recommandations?|strat[eé]gie|analyse|synth[eè]se|r[eé]sum[eé])$/i;
+  const seen = new Set();
+  const bullets = [];
+  for (const chunk of splitToIdeaChunks(modelText)) {
+    const line = String(chunk || "").replace(/\s+/g, " ").trim();
+    if (!line || bannedStandalone.test(line)) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bullets.push(`- ${line}`);
+  }
+  if (bullets.length > 0) return bullets.join("\n");
+
+  const fallback = splitToIdeaChunks(sourceText)
+    .slice(0, 14)
+    .map(line => `- ${line}`);
+  return fallback.length ? fallback.join("\n") : "- (aucune note exploitable)";
+}
+
 app.post("/api/ai/summarize", async (req, res) => {
   const type = String(req.body?.type || "deal").trim();
   const text = String(req.body?.text || "").trim();
   if (!text) return res.status(400).json({ ok: false, error: "Texte manquant." });
   if (!openai) return res.status(503).json({ ok: false, error: "OPENAI_API_KEY non configurée." });
-
-  const prompt = type === "vendeur"
-    ? `Expert en négociation immobilière au Québec. Résume ces notes sur le vendeur en 3-5 points clés. Identifie motivation, contraintes et stratégies de négociation suggérées.\n\n${text}`
-    : `Expert en acquisition immobilière au Québec. Résume ces notes de deal en 3-5 points clés. Identifie opportunités et risques.\n\n${text}`;
+  const contextLabel = type === "vendeur" ? "Notes vendeur" : "Notes deal acquisition";
+  const systemPrompt = [
+    "Tu es un assistant administratif CRM pour une équipe d'acquisition immobilière.",
+    "Tu NE FAIS PAS d'analyse stratégique et tu NE DONNES PAS de recommandations.",
+    "Objectif unique: reformater les notes brutes en notes CRM internes claires.",
+    "Règles strictes:",
+    "- Sortie uniquement en bullet points commençant par '- '",
+    "- Une idée par bullet, jamais de paragraphe",
+    "- Conserver les nuances/incertitudes présentes (ex: semble, je pense, possiblement)",
+    "- Préserver au maximum les mots et le sens d'origine",
+    "- Enlever fillers, hésitations et répétitions inutiles",
+    "- Interdiction de créer sections 'opportunités/risques/stratégie'",
+    "- Interdiction d'ajouter des interprétations non explicites dans les notes",
+    "- Interdiction d'analyse psychologique",
+  ].join("\n");
+  const userPrompt = `${contextLabel}\n\nTransforme ces notes en format CRM interne:\n${text}`;
 
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
+      temperature: 0.1,
       max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }]
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ]
     });
-    const summary = completion.choices?.[0]?.message?.content?.trim() || "Aucun résumé retourné.";
+    const rawSummary = completion.choices?.[0]?.message?.content?.trim() || "";
+    const summary = formatAsCrmBulletNotes(rawSummary, text);
     res.json({ ok: true, summary });
   } catch (err) {
     res.status(502).json({ ok: false, error: err?.message || "Erreur API OpenAI." });

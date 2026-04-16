@@ -981,7 +981,7 @@ export default function App() {
   const aiSummarize = async (type) => {
     if (!current) return;
     const text = type === "deal" ? current.notesDeal : current.notesVendeur;
-    if (!text?.trim()) { alert("Ajoutez des notes avant de résumer."); return; }
+    if (!text?.trim()) { alert("Ajoutez des notes avant de formater."); return; }
     type === "deal" ? setAiLoadD(true) : setAiLoadV(true);
     try {
       const res = await fetch("/api/ai/summarize", {
@@ -1707,19 +1707,19 @@ export default function App() {
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                           <div className="f-title" style={{marginBottom:0}}>Notes deal</div>
-                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?"Analyse...":"✦ IA"}</button>
+                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?"Formatage...":"✦ Formater"}</button>
                         </div>
                         <textarea value={current.notesDeal || ""} onChange={e => upd(current.id,d => ({ ...d, notesDeal:e.target.value }))} placeholder="Prix demandé, état général, potentiel, quartier, historique, stratégie…" />
-                        {current.aiDeal && <div className="ai-box"><div className="ai-box-lbl">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiDeal:"" }))}>Effacer</button></div>}
+                        {current.aiDeal && <div className="ai-box"><div className="ai-box-lbl">✦ Notes CRM formatées</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiDeal:"" }))}>Effacer</button></div>}
                       </div>
 
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                           <div className="f-title" style={{marginBottom:0}}>Notes vendeur</div>
-                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?"Analyse...":"✦ IA"}</button>
+                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?"Formatage...":"✦ Formater"}</button>
                         </div>
                         <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id,d => ({ ...d, notesVendeur:e.target.value }))} placeholder="Motivation du vendeur, délai, flexibilité prix, points sensibles, style de négociation…" />
-                        {current.aiVendeur && <div className="ai-box"><div className="ai-box-lbl">✦ Résumé IA</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiVendeur:"" }))}>Effacer</button></div>}
+                        {current.aiVendeur && <div className="ai-box"><div className="ai-box-lbl">✦ Notes CRM formatées</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiVendeur:"" }))}>Effacer</button></div>}
                       </div>
                     </div>
                   )}
