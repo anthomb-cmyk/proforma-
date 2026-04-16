@@ -449,6 +449,53 @@ function normalizeTextKey(value) {
     .trim();
 }
 
+const COMPANY_NAME_HINT_RE = /\b(?:inc|ltee|ltd|llc|corp|corporation|compagnie|company|co|groupe|group|entreprise|business|service|services|renovation|construction|immobilier|realty|property|properties|holdings|restaurant|cafe|garage|atelier|clinic|clinique|pharmacie|hotel|motel|association|centre|center|studio|consulting|solution|solutions|tech|technologie|technologies|bureau|cabinet|banque|bank|insurance|assurance)\b/;
+const PERSON_JOINER_WORDS = new Set(["de", "du", "des", "la", "le", "les", "d", "st", "saint", "sainte", "van", "von"]);
+
+function looksLikeAddressText(value) {
+  const norm = normalizeTextKey(value);
+  if (!norm) return false;
+  return /\d/.test(norm) && /\b(rue|street|st|avenue|av|boulevard|blvd|road|rd|chemin|route|lane|ln|drive|dr|suite|unit|apt|appartement|immeuble)\b/.test(norm);
+}
+
+function hasCompanyNameHints(value) {
+  const norm = normalizeTextKey(value);
+  if (!norm) return false;
+  return COMPANY_NAME_HINT_RE.test(norm);
+}
+
+function isLikelyPersonalLookupName(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  if (hasCompanyNameHints(raw) || looksLikeAddressText(raw)) return false;
+  if (/[&/@]/.test(raw)) return false;
+  const norm = normalizeTextKey(raw);
+  if (!norm || /\d/.test(norm)) return false;
+  const words = norm.split(" ").filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  const meaningful = words.filter(word => !PERSON_JOINER_WORDS.has(word));
+  if (meaningful.length < 2) return false;
+  return meaningful.every(word => word.length >= 2 && word.length <= 24);
+}
+
+function sanitizeBusinessLookupName(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (looksLikeAddressText(raw)) return "";
+  if (/^[0-9\s().+-]+$/.test(raw)) return "";
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return "";
+  if (isLikelyPersonalLookupName(raw)) return "";
+  return raw;
+}
+
+function firstBusinessLookupName(...values) {
+  for (const value of values) {
+    const cleaned = sanitizeBusinessLookupName(value);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
 function normalizePhoneKey(value) {
   return String(value || "").replace(/\D+/g, "");
 }
@@ -2256,7 +2303,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const phone = pickValue(row, colMap.phone);
       const notes = pickValue(row, colMap.notes);
       const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
-      const lookupName = companyName || contactName || "";
+      const lookupName = firstBusinessLookupName(companyName);
       const inputPhones = mergePhoneLists(phone, extractPhonesFromRow(row));
       return { companyName, contactName, address, city, province, postalCode, country, email, phone, inputPhones, notes, buildingAddress, lookupName, rawRow: row };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
@@ -3397,9 +3444,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   }
 
   async function searchManual() {
-    if (!form.name && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
+    const lookupName = firstBusinessLookupName(form.name);
+    if (!lookupName && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
     setApiError("");
-    await doLookupBatched([{ ...form }], "manual");
+    await doLookupBatched([{ ...form, name: lookupName }], "manual");
   }
 
   async function searchCSV() {
@@ -3415,9 +3463,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       const postalCode = pickMappedValue(r, colMap.postalCode);
       const country = pickMappedValue(r, colMap.country) || "Canada";
 
-      // Prefer company/business label for Places; if we only have contact + address,
-      // we query mostly by address and keep contact for call context.
-      const lookupName = company || rawName || (!address ? leadContact : "");
+      // Restrict lookup terms to business names only. Personal names stay as context
+      // but are not sent as Places query terms.
+      const lookupName = firstBusinessLookupName(company, rawName);
       const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
 
       return {

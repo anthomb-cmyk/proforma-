@@ -4013,6 +4013,9 @@ function cleanLookupValue(value) {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
+const COMPANY_NAME_HINT_RE = /\b(?:inc|ltee|ltd|llc|corp|corporation|compagnie|company|co|groupe|group|entreprise|business|service|services|renovation|construction|immobilier|realty|property|properties|holdings|restaurant|cafe|garage|atelier|clinic|clinique|pharmacie|hotel|motel|association|centre|center|studio|consulting|solution|solutions|tech|technologie|technologies|bureau|cabinet|banque|bank|insurance|assurance)\b/;
+const PERSON_JOINER_WORDS = new Set(["de", "du", "des", "la", "le", "les", "d", "st", "saint", "sainte", "van", "von"]);
+
 function firstNonEmpty(...values) {
   for (const value of values) {
     const cleaned = cleanLookupValue(value);
@@ -4041,6 +4044,37 @@ function looksLikeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanLookupValue(value));
 }
 
+function hasCompanyNameHints(value) {
+  const norm = normalizeLookupKey(value);
+  if (!norm) return false;
+  return COMPANY_NAME_HINT_RE.test(norm);
+}
+
+function isLikelyPersonalName(value) {
+  const txt = cleanLookupValue(value);
+  if (!txt) return false;
+  if (looksLikeAddress(txt) || looksLikePostalCode(txt) || looksLikePhone(txt) || looksLikeEmail(txt)) return false;
+  if (hasCompanyNameHints(txt) || /[&/@]/.test(txt)) return false;
+
+  const norm = normalizeLookupKey(txt);
+  if (!norm || /\d/.test(norm)) return false;
+  const words = norm.split(" ").filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  const meaningful = words.filter(word => !PERSON_JOINER_WORDS.has(word));
+  if (meaningful.length < 2) return false;
+  return meaningful.every(word => word.length >= 2 && word.length <= 24);
+}
+
+function sanitizeBusinessName(value, { allowAmbiguous = true } = {}) {
+  const txt = cleanLookupValue(value);
+  if (!txt) return "";
+  if (looksLikeAddress(txt) || looksLikePostalCode(txt) || looksLikePhone(txt) || looksLikeEmail(txt)) return "";
+  const hasHint = hasCompanyNameHints(txt);
+  if (isLikelyPersonalName(txt) && !hasHint) return "";
+  if (!allowAmbiguous && !hasHint) return "";
+  return txt;
+}
+
 function inferLookupFields(rawRow = {}) {
   const entries = Object.entries(rawRow || {})
     .map(([key, value]) => ({
@@ -4055,6 +4089,7 @@ function inferLookupFields(rawRow = {}) {
     return hit ? hit.value : "";
   };
   const isContactKey = normKey => /\b(contact|proprietaire|owner|nom complet|full name|personne|prenom)\b/.test(normKey);
+  const isCompanyKey = normKey => /\b(company|compagnie|entreprise|organisation|raison sociale|societe|business|trade)\b/.test(normKey);
 
   const byKey = {
     address: findByPatterns([
@@ -4105,8 +4140,24 @@ function inferLookupFields(rawRow = {}) {
     byKey.postalCode = guessedPostal ? guessedPostal.value : "";
   }
 
-  if (!byKey.companyName && !byKey.contactName && byKey.genericName && !looksLikeAddress(byKey.genericName)) {
-    byKey.companyName = byKey.genericName;
+  byKey.companyName = sanitizeBusinessName(byKey.companyName);
+
+  if (!byKey.companyName && !byKey.contactName && byKey.genericName) {
+    byKey.companyName = sanitizeBusinessName(byKey.genericName);
+  }
+
+  if (!byKey.companyName) {
+    const explicitBusiness = entries.find(entry => isCompanyKey(entry.normKey) && sanitizeBusinessName(entry.value));
+    byKey.companyName = explicitBusiness ? sanitizeBusinessName(explicitBusiness.value) : "";
+  }
+
+  if (!byKey.companyName) {
+    const hintedBusiness = entries.find(entry => (
+      !isContactKey(entry.normKey) &&
+      hasCompanyNameHints(entry.value) &&
+      sanitizeBusinessName(entry.value)
+    ));
+    byKey.companyName = hintedBusiness ? sanitizeBusinessName(hintedBusiness.value) : "";
   }
 
   if (!byKey.companyName) {
@@ -4116,10 +4167,11 @@ function inferLookupFields(rawRow = {}) {
       !looksLikePostalCode(entry.value) &&
       !looksLikePhone(entry.value) &&
       !looksLikeEmail(entry.value) &&
+      !isLikelyPersonalName(entry.value) &&
       entry.value.length >= 3 &&
       entry.value.length <= 140
     ));
-    byKey.companyName = candidate ? candidate.value : "";
+    byKey.companyName = candidate ? sanitizeBusinessName(candidate.value) : "";
   }
 
   return byKey;
@@ -4135,15 +4187,16 @@ function normalizeLookupRow(row = {}) {
   const province = firstNonEmpty(safeRow.province, inferred.province);
   const postalCode = firstNonEmpty(safeRow.postalCode, inferred.postalCode);
   const country = firstNonEmpty(safeRow.country, inferred.country, "Canada");
-  const companyName = firstNonEmpty(safeRow.company, safeRow.companyName, inferred.companyName);
-  const contactName = firstNonEmpty(safeRow.contactName, safeRow.leadContact, inferred.contactName);
-  const name = firstNonEmpty(
-    safeRow.name,
-    safeRow.lookupName,
-    safeRow.rawName,
-    companyName,
-    address ? "" : contactName
+  const companyName = firstNonEmpty(
+    sanitizeBusinessName(safeRow.company),
+    sanitizeBusinessName(safeRow.companyName),
+    sanitizeBusinessName(safeRow.name),
+    sanitizeBusinessName(safeRow.lookupName),
+    sanitizeBusinessName(safeRow.rawName),
+    sanitizeBusinessName(inferred.companyName)
   );
+  const contactName = firstNonEmpty(safeRow.contactName, safeRow.leadContact, inferred.contactName);
+  const name = companyName;
   const inputAddress = firstNonEmpty(
     safeRow.inputAddress,
     safeRow.buildingAddress,
@@ -4167,7 +4220,18 @@ function normalizeLookupRow(row = {}) {
 }
 
 async function phoneLookupOne({ name, address, city, province, postalCode, country }) {
-  const queryParts = [name, address, city, province, postalCode, country || "Canada"].filter(Boolean);
+  const lookupName = sanitizeBusinessName(name);
+  const lookupAddress = cleanLookupValue(address);
+  const lookupCity = cleanLookupValue(city);
+  const lookupProvince = cleanLookupValue(province);
+  const lookupPostalCode = cleanLookupValue(postalCode);
+  const lookupCountry = cleanLookupValue(country) || "Canada";
+
+  if (!lookupName && !lookupAddress) {
+    return { matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
+  }
+
+  const queryParts = [lookupName, lookupAddress, lookupCity, lookupProvince, lookupPostalCode, lookupCountry].filter(Boolean);
   const query = queryParts.join(", ");
   const results = await gPlacesSearch(query);
   if (!results.length) {
@@ -4178,8 +4242,8 @@ async function phoneLookupOne({ name, address, city, province, postalCode, count
     try { d = await gPlaceDetails(r.place_id); } catch {}
     const rName = d.name || r.name || "";
     const rAddr = d.formatted_address || r.formatted_address || "";
-    const nameSim = name ? strSim(name, rName) : null;
-    const addrSim = address ? strSim(address, rAddr) : null;
+    const nameSim = lookupName ? strSim(lookupName, rName) : null;
+    const addrSim = lookupAddress ? strSim(lookupAddress, rAddr) : null;
     let confidence;
     if (nameSim !== null && addrSim !== null) confidence = Math.round((nameSim * 0.6 + addrSim * 0.4) * 100);
     else if (nameSim !== null) confidence = Math.round(nameSim * 100);
