@@ -3029,7 +3029,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         if (added > 0) parts.push(`${added} nouveau${added > 1 ? "x" : ""}`);
         if (updated > 0) parts.push(`${updated} enrichi${updated > 1 ? "s" : ""}`);
         if (skipped > 0) parts.push(`${skipped} inchangé${skipped > 1 ? "s" : ""}`);
-        setToast(`✅ Leads mis à jour: ${parts.join(" · ")}`);
+        setToast(`✅ Leads mis à jour: ${parts.join(" · ")} · aucune donnée supprimée`);
         if (typeof onOpenLeads === "function") {
           setTimeout(() => onOpenLeads(), 250);
         }
@@ -3389,14 +3389,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     return r;
   }, [results, filter]);
 
-  const exportStatusRows = useMemo(() => {
-    const byStatus = filter.status === "all" ? results : results.filter(r => r.status === filter.status);
-    return byStatus.filter(rowHasAnyPhone);
-  }, [results, filter.status]);
+  const exportFoundRows = useMemo(() => (
+    filteredResults.filter(r => r.status === "found" && rowHasAnyPhone(r))
+  ), [filteredResults]);
 
-  const exportStatusLabel = filter.status === "all"
-    ? "Tous les statuts"
-    : (STATUS_CFG[filter.status]?.label || filter.status);
+  const exportStatusLabel = "Trouvé uniquement (filtre affiché)";
 
   const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
   const FIELD_LABELS = {
@@ -3507,10 +3504,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             <div style={{display:"flex",gap:8}}>
               <button
                 className="btn btn-sm btn-gold"
-                onClick={() => exportRunToLeads({ ...activeRun, rows: exportStatusRows })}
-                disabled={exportBusy || exportStatusRows.length === 0}
+                onClick={() => exportRunToLeads({ ...activeRun, rows: exportFoundRows })}
+                disabled={exportBusy || exportFoundRows.length === 0}
               >
-                {exportBusy ? "Export…" : `⇢ Leads (${exportStatusRows.length})`}
+                {exportBusy ? "Export…" : `⇢ Leads trouvés (${exportFoundRows.length})`}
               </button>
               {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>Voir résultats</button>}
               <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
@@ -3673,16 +3670,16 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                         {formatRunDate(activeRun.createdAt)} · {activeRun.totalRows || 0} lignes · {activeRun.foundCount || 0} numéros trouvés
                       </div>
                       <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>
-                        Export vers Leads selon statut: <strong style={{color:"var(--text2)"}}>{exportStatusLabel}</strong> ({exportStatusRows.length})
+                        Export vers Leads: <strong style={{color:"var(--text2)"}}>{exportStatusLabel}</strong> ({exportFoundRows.length})
                       </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
                       <button
                         className="btn btn-sm btn-gold"
-                        onClick={() => exportRunToLeads({ ...activeRun, rows: exportStatusRows })}
-                        disabled={exportBusy || exportStatusRows.length === 0}
+                        onClick={() => exportRunToLeads({ ...activeRun, rows: exportFoundRows })}
+                        disabled={exportBusy || exportFoundRows.length === 0}
                       >
-                        {exportBusy ? "Export…" : `⇢ Exporter ${exportStatusRows.length} vers Leads`}
+                        {exportBusy ? "Export…" : `⇢ Exporter ${exportFoundRows.length} leads trouvés`}
                       </button>
                       <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>✎ Renommer</button>
                       <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
@@ -4041,17 +4038,62 @@ function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh -
 
 function ActivityLogger({ dealId, onLog }) {
   const [text, setText] = useState("");
+  const [formatLoading, setFormatLoading] = useState(false);
+  const [formatError, setFormatError] = useState("");
   const QUICK = ["📞 Appel effectué","📧 Email envoyé","🤝 Rencontre faite","💰 Offre déposée","📋 Documents reçus","🔍 Inspection faite","🏦 Dossier financier soumis","✅ Condition levée"];
+
+  function splitActivityLines(value) {
+    return String(value || "")
+      .split(/\r?\n/)
+      .map(line => line.trim().replace(/^[-•*]\s*/, "").trim())
+      .filter(Boolean);
+  }
+
+  function logCurrentText() {
+    const lines = splitActivityLines(text);
+    if (!lines.length) return;
+    lines.forEach(line => onLog(dealId, line));
+    setText("");
+    setFormatError("");
+  }
+
+  async function formatActivityText() {
+    if (!text.trim()) return;
+    setFormatLoading(true);
+    setFormatError("");
+    try {
+      const res = await fetch("/api/ai/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "deal", text }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || `Erreur ${res.status}`);
+      }
+      setText(String(data.summary || "").trim());
+    } catch (err) {
+      setFormatError(String(err?.message || "Formatage impossible."));
+    } finally {
+      setFormatLoading(false);
+    }
+  }
 
   return (
     <div>
       <div className="qa-wrap">
         {QUICK.map(q => <button key={q} className="qa-btn" onClick={() => onLog(dealId, q)}>{q}</button>)}
       </div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
+        <button className={`ai-btn${formatLoading ? " loading" : ""}`} onClick={formatActivityText}>
+          {formatLoading ? "Formatage..." : "✦ Formater la note"}
+        </button>
+        {formatError && <span style={{fontSize:11,color:"var(--red)"}}>{formatError}</span>}
+      </div>
       <div style={{display:"flex",gap:8}}>
         <input value={text} onChange={e => setText(e.target.value)} placeholder="Note personnalisée…"
-          onKeyDown={e => { if (e.key === "Enter" && text.trim()) { onLog(dealId,text.trim()); setText(""); } }} />
-        <button className="btn btn-gold" onClick={() => { if (text.trim()) { onLog(dealId,text.trim()); setText(""); } }}>Log</button>
+          onKeyDown={e => { if (e.key === "Enter" && text.trim()) { logCurrentText(); } }} />
+        <button className="btn btn-gold" onClick={logCurrentText}>Log</button>
       </div>
     </div>
   );
