@@ -71,7 +71,7 @@ a{color:inherit}
 .bell-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;border-radius:999px;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
 .tb-user{font-size:12px;font-weight:600;color:var(--text2)}
 
-.content{padding:22px;overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:14px}
+.content{flex:1;padding:22px;overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:14px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 
 .btn{border:1px solid var(--border);background:#fff;color:var(--text2);padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer}
@@ -2848,7 +2848,12 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         return stored
           .map((run, idx) => {
             if (!run || typeof run !== "object") return null;
-            const rows = Array.isArray(run.rows) ? run.rows : [];
+            const rows = Array.isArray(run.rows)
+              ? run.rows.map(row => ({
+                  ...row,
+                  status: mergePhoneLists(row?.phone, row?.inputPhones).length > 0 ? "found" : (row?.status || "not_found"),
+                }))
+              : [];
             const createdAt = run.createdAt || new Date().toISOString();
             const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
             return {
@@ -2868,15 +2873,19 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     try {
       const legacy = JSON.parse(localStorage.getItem("pf_results") || "[]");
       if (Array.isArray(legacy) && legacy.length) {
+        const rows = legacy.map(row => ({
+          ...row,
+          status: mergePhoneLists(row?.phone, row?.inputPhones).length > 0 ? "found" : (row?.status || "not_found"),
+        }));
         const createdAt = new Date().toISOString();
         return [{
           id: `pf_run_legacy_${Date.now()}`,
           title: `Historique importé · ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`,
           source: "legacy",
           createdAt,
-          totalRows: legacy.length,
-          foundCount: legacy.filter(rowHasAnyPhone).length,
-          rows: legacy,
+          totalRows: rows.length,
+          foundCount: rows.filter(rowHasAnyPhone).length,
+          rows,
         }];
       }
     } catch {}
@@ -3250,6 +3259,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           const leadContact = src.leadContact || "";
           const fallbackName = src.rawName || src.name || "";
           const inputPhones = mergePhoneLists(src.inputPhones, rowResult.inputPhones);
+          const allPhones = mergePhoneLists(rowResult.phone, inputPhones);
+          const status = allPhones.length > 0 ? "found" : rowResult.status;
           return {
             ...rowResult,
             inputName: companyName || rowResult.inputName || fallbackName,
@@ -3258,6 +3269,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             companyName,
             leadContact,
             inputPhones,
+            status,
           };
         });
         const found = chunk.filter(rowHasAnyPhone);
