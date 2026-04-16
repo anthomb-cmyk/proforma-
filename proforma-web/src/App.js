@@ -2054,7 +2054,8 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [importProgress, setImportProgress] = useState(null);
   const [importError, setImportError] = useState("");
   const [toast, setToast] = useState("");
-  const [filter, setFilter] = useState({ status:"all", search:"" });
+  const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all" });
+  const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [page, setPage] = useState(1);
 
   const STAGE_CFG = {
@@ -2066,7 +2067,16 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     lost: { label:"Fermé", cls:"not_found" },
   };
 
-  useEffect(() => { setPage(1); }, [filter.status, filter.search, leads.length]);
+  const CALL_STATUS_CFG = {
+    none: "Non appelé",
+    tried: "Tentative",
+    voicemail: "Boîte vocale",
+    reached: "Contact établi",
+    callback: "Rappeler",
+    invalid: "Numéro invalide",
+  };
+
+  useEffect(() => { setPage(1); }, [filter.status, filter.search, filter.phone, filter.source, filter.linked, filter.call, leads.length]);
 
   function normalizeHeader(value) {
     return String(value || "")
@@ -2392,13 +2402,50 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     setLeads(prev => prev.map(lead => lead.id === id ? { ...lead, ...patch, updatedAt: Date.now() } : lead));
   }
 
+  function leadSourceType(lead) {
+    const src = String(lead?.sourceFile || "").toLowerCase();
+    if (!src) return "manual";
+    if (src.includes("recherche t") || src.includes("phonefinder")) return "phonefinder";
+    return "import_file";
+  }
+
+  function toDateTimeLocal(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    return `${y}-${m}-${d}T${hh}:${mm}`;
+  }
+
+  function markCallNow(lead) {
+    if (!lead?.id) return;
+    const now = new Date();
+    const stamp = now.toISOString();
+    const line = `[${now.toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}] Appel effectué.`;
+    const existing = String(lead.callNotes || "").trim();
+    updateLead(lead.id, {
+      lastCallAt: stamp,
+      callStatus: lead.callStatus && lead.callStatus !== "none" ? lead.callStatus : "tried",
+      stage: (lead.stage === "new" || lead.stage === "to_call") ? "contacted" : lead.stage,
+      callNotes: existing ? `${existing}\n${line}` : line,
+    });
+    setToast("✅ Appel noté dans le lead.");
+    setTimeout(() => setToast(""), 2800);
+  }
+
   function removeLead(id) {
     setLeads(prev => prev.filter(lead => lead.id !== id));
+    setSelectedLeadId(prev => (prev === id ? null : prev));
   }
 
   function clearLeads() {
     if (!window.confirm("Effacer tous les leads importés ?")) return;
     setLeads([]);
+    setSelectedLeadId(null);
   }
 
   function exportLeads() {
@@ -2430,14 +2477,43 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const filteredLeads = useMemo(() => {
     let list = leads;
     if (filter.status !== "all") list = list.filter(lead => (lead.stage || "new") === filter.status);
+    if (filter.phone === "with") list = list.filter(lead => getLeadPhones(lead).length > 0);
+    if (filter.phone === "without") list = list.filter(lead => getLeadPhones(lead).length === 0);
+    if (filter.source !== "all") list = list.filter(lead => leadSourceType(lead) === filter.source);
+    if (filter.linked === "linked") list = list.filter(lead => Boolean(lead.linkedDealId));
+    if (filter.linked === "unlinked") list = list.filter(lead => !lead.linkedDealId);
+    if (filter.call === "due") {
+      const now = Date.now();
+      list = list.filter(lead => {
+        if (!lead.nextCallAt) return false;
+        const t = new Date(lead.nextCallAt).getTime();
+        return Number.isFinite(t) && t <= now;
+      });
+    } else if (filter.call !== "all") {
+      list = list.filter(lead => (lead.callStatus || "none") === filter.call);
+    }
     if (filter.search) {
       const q = filter.search.toLowerCase();
       list = list.filter(lead => (
-        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""}`
+        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""} ${lead.callNotes || ""}`
       ).toLowerCase().includes(q));
     }
     return list;
   }, [leads, filter]);
+
+  useEffect(() => {
+    if (!filteredLeads.length) {
+      if (selectedLeadId) setSelectedLeadId(null);
+      return;
+    }
+    if (!selectedLeadId || !filteredLeads.some(lead => lead.id === selectedLeadId)) {
+      setSelectedLeadId(filteredLeads[0].id);
+    }
+  }, [filteredLeads, selectedLeadId]);
+
+  const selectedLead = useMemo(() => (
+    leads.find(lead => lead.id === selectedLeadId) || null
+  ), [leads, selectedLeadId]);
 
   const pagedLeads = filteredLeads.slice(0, page * LEAD_PAGE_SIZE);
 
@@ -2541,6 +2617,27 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
             <option value="all">Tous les statuts</option>
             {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
           </select>
+          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
+            <option value="all">Téléphone: tous</option>
+            <option value="with">Téléphone: avec</option>
+            <option value="without">Téléphone: sans</option>
+          </select>
+          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.source} onChange={e => setFilter(prev => ({ ...prev, source:e.target.value }))}>
+            <option value="all">Source: toutes</option>
+            <option value="phonefinder">Source: Recherche Tél.</option>
+            <option value="import_file">Source: import fichier</option>
+            <option value="manual">Source: manuelle</option>
+          </select>
+          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
+            <option value="all">Appel: tous</option>
+            <option value="due">Appel: rappel dû</option>
+            {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>Appel: {label}</option>)}
+          </select>
+          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.linked} onChange={e => setFilter(prev => ({ ...prev, linked:e.target.value }))}>
+            <option value="all">Liens: tous</option>
+            <option value="linked">Liens: deal lié</option>
+            <option value="unlinked">Liens: pas de deal</option>
+          </select>
           <button className="btn btn-sm" onClick={exportLeads}>⬇ Exporter</button>
           <button className="btn btn-sm btn-danger" onClick={clearLeads}>Vider</button>
           <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
@@ -2574,8 +2671,13 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                   {pagedLeads.map((lead, i) => {
                     const stage = STAGE_CFG[lead.stage] || STAGE_CFG.new;
                     const leadPhones = getLeadPhones(lead);
+                    const isSelected = selectedLeadId === lead.id;
                     return (
-                      <tr key={lead.id || i}>
+                      <tr
+                        key={lead.id || i}
+                        onClick={() => setSelectedLeadId(lead.id)}
+                        style={{cursor:"pointer", background:isSelected ? "#FFFBF1" : undefined}}
+                      >
                         <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i + 1}</td>
                         <td className="pf-input-col">
                           {(lead.companyName || lead.contactName) && <div className="pf-cell-name">{lead.companyName || lead.contactName}</div>}
@@ -2601,17 +2703,18 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                         <td>
                           <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-start"}}>
                             <span className={`pf-status ${stage.cls}`}>{stage.label}</span>
-                            <select style={{width:130,padding:"5px 7px",fontSize:11}} value={lead.stage || "new"} onChange={e => updateLead(lead.id, { stage: e.target.value })}>
+                            <select style={{width:130,padding:"5px 7px",fontSize:11}} value={lead.stage || "new"} onClick={e => e.stopPropagation()} onChange={e => updateLead(lead.id, { stage: e.target.value })}>
                               {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
                             </select>
                           </div>
                         </td>
                         <td>
                           <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                            {leadPhones.length > 0 && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))}>📋</button>}
-                            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(lead)}>Créer deal</button>}
+                            <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setSelectedLeadId(lead.id); }}>Ouvrir</button>
+                            {leadPhones.length > 0 && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(leadPhones.join(" / ")); }}>📋</button>}
+                            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={(e) => { e.stopPropagation(); onCreateDealFromLead?.(lead); }}>Créer deal</button>}
                             {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F"}}>Deal lié</span>}
-                            <button className="btn btn-sm btn-danger" onClick={() => removeLead(lead.id)}>✕</button>
+                            <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeLead(lead.id); }}>✕</button>
                           </div>
                         </td>
                       </tr>
@@ -2627,6 +2730,90 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                 </button>
               </div>
             )}
+          </>
+        )}
+      </div>
+
+      <div className="card f-card">
+        <div className="f-title">Fiche lead (section Leads)</div>
+        {!selectedLead ? (
+          <div className="status-note">Sélectionnez un lead dans la liste pour gérer les notes d'appel et le suivi.</div>
+        ) : (
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:700,color:"var(--text)"}}>{selectedLead.companyName || selectedLead.contactName || "Lead"}</div>
+                {selectedLead.buildingAddress && <div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>🏢 {selectedLead.buildingAddress}</div>}
+                <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>
+                  Source: {selectedLead.sourceFile || "manuelle"}{selectedLead.createdAt ? ` · importé le ${new Date(selectedLead.createdAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}` : ""}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {getLeadPhones(selectedLead).length > 0 && (
+                  <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(getLeadPhones(selectedLead).join(" / "))}>📋 Copier numéros</button>
+                )}
+                {!selectedLead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(selectedLead)}>Créer deal</button>}
+              </div>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
+              <div className="f-row">
+                <div className="f-lbl">Statut lead</div>
+                <select value={selectedLead.stage || "new"} onChange={e => updateLead(selectedLead.id, { stage: e.target.value })}>
+                  {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
+                </select>
+              </div>
+              <div className="f-row">
+                <div className="f-lbl">Statut d'appel</div>
+                <select value={selectedLead.callStatus || "none"} onChange={e => updateLead(selectedLead.id, { callStatus: e.target.value })}>
+                  {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+              </div>
+              <div className="f-row">
+                <div className="f-lbl">Prochain rappel</div>
+                <input
+                  type="datetime-local"
+                  value={toDateTimeLocal(selectedLead.nextCallAt)}
+                  onChange={e => updateLead(selectedLead.id, { nextCallAt: e.target.value ? new Date(e.target.value).toISOString() : "" })}
+                />
+              </div>
+            </div>
+
+            <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+              <button className="btn btn-sm btn-gold" onClick={() => markCallNow(selectedLead)}>📞 Marquer appel maintenant</button>
+              {selectedLead.lastCallAt && (
+                <span style={{fontSize:11,color:"var(--text2)"}}>
+                  Dernier appel: {new Date(selectedLead.lastCallAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}
+                </span>
+              )}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:10,marginTop:10}}>
+              <div className="f-row" style={{marginBottom:0}}>
+                <div className="f-lbl">Notes générales</div>
+                <textarea
+                  style={{minHeight:110}}
+                  placeholder="Infos utiles sur ce lead (proprio, contexte, objections...)"
+                  value={selectedLead.notes || ""}
+                  onChange={e => updateLead(selectedLead.id, { notes: e.target.value })}
+                />
+              </div>
+              <div className="f-row" style={{marginBottom:0}}>
+                <div className="f-lbl">Notes d'appel</div>
+                <textarea
+                  style={{minHeight:110}}
+                  placeholder="Script, suivi d'appel, réponse obtenue..."
+                  value={selectedLead.callNotes || ""}
+                  onChange={e => updateLead(selectedLead.id, { callNotes: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div style={{marginTop:10,fontSize:12,color:"var(--text2)"}}>
+              <strong>Contacts:</strong>{" "}
+              {getLeadPhones(selectedLead).length > 0 ? getLeadPhones(selectedLead).join(" · ") : "Aucun numéro"}
+              {selectedLead.email ? ` · ${selectedLead.email}` : ""}
+            </div>
           </>
         )}
       </div>
@@ -2815,8 +3002,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
   async function exportRunToLeads(run = activeRun) {
     if (!run) return;
-    const foundRows = (run.rows || []).filter(rowHasAnyPhone);
-    if (!foundRows.length) {
+    const rowsToExport = (run.rows || []).filter(rowHasAnyPhone);
+    if (!rowsToExport.length) {
       setToast("Aucun numéro trouvé à exporter.");
       setTimeout(() => setToast(""), 3500);
       return;
@@ -2829,7 +3016,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
     setExportBusy(true);
     try {
-      const result = await Promise.resolve(onExportFoundToLeads(foundRows, {
+      const result = await Promise.resolve(onExportFoundToLeads(rowsToExport, {
         id: run.id,
         title: run.title,
         createdAt: run.createdAt,
@@ -3202,6 +3389,15 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     return r;
   }, [results, filter]);
 
+  const exportStatusRows = useMemo(() => {
+    const byStatus = filter.status === "all" ? results : results.filter(r => r.status === filter.status);
+    return byStatus.filter(rowHasAnyPhone);
+  }, [results, filter.status]);
+
+  const exportStatusLabel = filter.status === "all"
+    ? "Tous les statuts"
+    : (STATUS_CFG[filter.status]?.label || filter.status);
+
   const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
   const FIELD_LABELS = {
     name:"Nom de recherche",
@@ -3311,10 +3507,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             <div style={{display:"flex",gap:8}}>
               <button
                 className="btn btn-sm btn-gold"
-                onClick={() => exportRunToLeads(activeRun)}
-                disabled={exportBusy || !(activeRun.foundCount > 0)}
+                onClick={() => exportRunToLeads({ ...activeRun, rows: exportStatusRows })}
+                disabled={exportBusy || exportStatusRows.length === 0}
               >
-                {exportBusy ? "Export…" : `⇢ Leads (${activeRun.foundCount || 0})`}
+                {exportBusy ? "Export…" : `⇢ Leads (${exportStatusRows.length})`}
               </button>
               {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>Voir résultats</button>}
               <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
@@ -3476,14 +3672,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                       <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>
                         {formatRunDate(activeRun.createdAt)} · {activeRun.totalRows || 0} lignes · {activeRun.foundCount || 0} numéros trouvés
                       </div>
+                      <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>
+                        Export vers Leads selon statut: <strong style={{color:"var(--text2)"}}>{exportStatusLabel}</strong> ({exportStatusRows.length})
+                      </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
                       <button
                         className="btn btn-sm btn-gold"
-                        onClick={() => exportRunToLeads(activeRun)}
-                        disabled={exportBusy || !(activeRun.foundCount > 0)}
+                        onClick={() => exportRunToLeads({ ...activeRun, rows: exportStatusRows })}
+                        disabled={exportBusy || exportStatusRows.length === 0}
                       >
-                        {exportBusy ? "Export…" : `⇢ Exporter ${activeRun.foundCount || 0} vers Leads`}
+                        {exportBusy ? "Export…" : `⇢ Exporter ${exportStatusRows.length} vers Leads`}
                       </button>
                       <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>✎ Renommer</button>
                       <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
