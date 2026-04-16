@@ -525,6 +525,7 @@ function NavIcon({ id }) {
   if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
   if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
   if (id === "followups") return <svg {...common}><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>;
+  if (id === "leads") return <svg {...common}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
   if (id === "phonefinder") return <svg {...common}><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 11.39 19a19.45 19.45 0 0 1-5.07-5.07A19.79 19.79 0 0 1 3.08 4.18 2 2 0 0 1 5.06 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L9.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
   return <svg {...common}><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/></svg>;
 }
@@ -551,6 +552,7 @@ function Topbar({ title, subtitle, overdue }) {
 export default function App() {
   const stored = load();
   const [deals, setDeals]         = useState((stored?.deals || []).map(normalizeDeal));
+  const [leads, setLeads]         = useState(Array.isArray(stored?.leads) ? stored.leads : []);
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
   const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
   const [gcalEvents, setGcalEvents] = useState([]);
@@ -581,7 +583,7 @@ export default function App() {
   const [newUnits, setNewUnits] = useState("");
   const [newAskingPrice, setNewAskingPrice] = useState("");
 
-  useEffect(() => { persist({ deals, currentId, gcalOk }); }, [deals, currentId, gcalOk]);
+  useEffect(() => { persist({ deals, leads, currentId, gcalOk }); }, [deals, leads, currentId, gcalOk]);
 
   const current = useMemo(() => deals.find(d => d.id === currentId) || null, [deals, currentId]);
   const currentCalls = useMemo(() => {
@@ -702,6 +704,30 @@ export default function App() {
     setView("workspace");
     setTab("crm");
   };
+
+  const createDealFromLead = useCallback((lead) => {
+    if (!lead) return null;
+    const title = (lead.companyName || lead.contactName || lead.buildingAddress || "Lead importé").trim();
+    const address = (lead.buildingAddress || lead.address || "").trim();
+    const nextDeal = {
+      ...createDeal(title, address, null, "", ""),
+      contact: {
+        name: lead.contactName || "",
+        phone: lead.phone || "",
+        email: lead.email || "",
+        company: lead.companyName || "",
+        role: "Lead",
+      },
+      notesDeal: lead.notes || "",
+      activities: [{ id: Date.now(), text: "Lead converti en deal", time: Date.now() }],
+    };
+    setDeals(prev => [nextDeal, ...prev]);
+    setCurrentId(nextDeal.id);
+    setView("workspace");
+    setTab("crm");
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, stage: "converted", linkedDealId: nextDeal.id, updatedAt: Date.now() } : l));
+    return nextDeal.id;
+  }, []);
 
   const deleteDeal = (id) => {
     if (!window.confirm("Supprimer ce deal ?")) return;
@@ -990,6 +1016,7 @@ export default function App() {
               { id:"map", label:"Carte" },
               { id:"followups", label:"Follow-ups" },
               { id:"calendar", label:"Calendrier" },
+              { id:"leads", label:"Leads" },
               { id:"phonefinder", label:"Recherche Tél." },
             ].map(item => (
               <button key={item.id} className={`nav-item${view===item.id?" active":""}`} onClick={() => setView(item.id)}>
@@ -1321,6 +1348,15 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              </div>
+            </>
+          )}
+
+          {view === "leads" && (
+            <>
+              <Topbar title="Leads" subtitle="Importez, enrichissez et gérez vos prospects propriétaires" overdue={stats.overdue} />
+              <div className="content">
+                <LeadsManager leads={leads} setLeads={setLeads} onCreateDealFromLead={createDealFromLead} />
               </div>
             </>
           )}
@@ -1856,6 +1892,539 @@ function XlsxViewer({ dataUrl }) {
   );
 }
 
+const LEAD_BATCH_SIZE = 10;
+const LEAD_PAGE_SIZE = 120;
+
+function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
+  const [importFile, setImportFile] = useState(null);
+  const [colMap, setColMap] = useState({});
+  const [showColMap, setShowColMap] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importProgress, setImportProgress] = useState(null);
+  const [importError, setImportError] = useState("");
+  const [toast, setToast] = useState("");
+  const [filter, setFilter] = useState({ status:"all", search:"" });
+  const [page, setPage] = useState(1);
+
+  const STAGE_CFG = {
+    new: { label:"Nouveau", cls:"multiple_matches" },
+    to_call: { label:"À appeler", cls:"needs_review" },
+    contacted: { label:"Contacté", cls:"found" },
+    qualified: { label:"Qualifié", cls:"found" },
+    converted: { label:"Converti", cls:"found" },
+    lost: { label:"Fermé", cls:"not_found" },
+  };
+
+  useEffect(() => { setPage(1); }, [filter.status, filter.search, leads.length]);
+
+  function normalizeHeader(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function parseCSV(text) {
+    const lines = String(text || "").trim().split(/\r?\n/);
+    if (!lines.length) return { headers:[], rows:[] };
+    const first = lines[0];
+    const counts = { ",": (first.match(/,/g)||[]).length, ";": (first.match(/;/g)||[]).length, "\t": (first.match(/\t/g)||[]).length };
+    const delim = counts[";"] >= counts[","] && counts[";"] >= counts["\t"] ? ";"
+                : counts["\t"] >= counts[","] ? "\t"
+                : ",";
+    const parseLine = line => {
+      const res = []; let cur = ""; let inQ = false;
+      for (const c of line) {
+        if (c === "\"") { inQ = !inQ; continue; }
+        if (c === delim && !inQ) { res.push(cur.trim()); cur = ""; continue; }
+        cur += c;
+      }
+      res.push(cur.trim());
+      return res;
+    };
+    const headers = parseLine(lines[0]);
+    const rows = lines.slice(1)
+      .filter(l => l.trim())
+      .map(l => {
+        const vals = parseLine(l);
+        return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
+      });
+    return { headers, rows, delim };
+  }
+
+  function parseSpreadsheet(file) {
+    return new Promise((resolve, reject) => {
+      const XLSX = window.XLSX;
+      if (!XLSX) { reject(new Error("Module Excel non chargé.")); return; }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Impossible de lire le fichier."));
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: "array" });
+          const firstSheet = wb.SheetNames[0];
+          if (!firstSheet) throw new Error("Aucune feuille trouvée.");
+          const matrix = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" });
+          if (!Array.isArray(matrix) || !matrix.length) throw new Error("Le fichier est vide.");
+          const rawHeaders = Array.isArray(matrix[0]) ? matrix[0] : [];
+          const dedupe = {};
+          const headers = rawHeaders.map((h, i) => {
+            let base = String(h || `Colonne ${i + 1}`).trim();
+            if (!base) base = `Colonne ${i + 1}`;
+            const seen = dedupe[base] || 0;
+            dedupe[base] = seen + 1;
+            return seen ? `${base} (${seen + 1})` : base;
+          });
+          const rows = matrix
+            .slice(1)
+            .map(vals => Object.fromEntries(headers.map((h, i) => [h, String(vals?.[i] ?? "").trim()])))
+            .filter(row => Object.values(row).some(v => String(v).trim()));
+          resolve({ headers, rows, delim: `XLSX · ${firstSheet}` });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function isSpreadsheetFile(file) {
+    const name = String(file?.name || "").toLowerCase();
+    const type = String(file?.type || "").toLowerCase();
+    return /\.xlsx?$/.test(name) || type.includes("spreadsheetml") || type.includes("excel");
+  }
+
+  function pickValue(row, col) {
+    if (!col) return "";
+    return String(row?.[col] || "").trim();
+  }
+
+  function autoDetectCols(headers) {
+    const map = {};
+    const normalized = headers.map(h => ({ raw: h, norm: normalizeHeader(h) }));
+    const used = new Set();
+    const findHeader = (patterns) => {
+      const match = normalized.find(({ raw, norm }) => !used.has(raw) && patterns.some(rx => rx.test(norm)));
+      if (!match) return "";
+      used.add(match.raw);
+      return match.raw;
+    };
+    const patterns = {
+      buildingAddress: [/\badresse immeuble\b/, /\badresse\b/, /\baddress\b/, /\bstreet\b/, /\brue\b/],
+      city: [/\bville immeuble\b/, /\bville\b/, /\bcity\b/],
+      province: [/\bprovince\b/, /\betat\b/, /\bstate\b/],
+      postalCode: [/\bcode postal immeuble\b/, /\bcode postal\b/, /\bpostal\b/, /\bzip\b/],
+      country: [/\bpays\b/, /\bcountry\b/],
+      companyName: [/\bcompany\b/, /\bentreprise\b/, /\bcompagnie\b/, /\borganisation\b/, /\braison sociale\b/],
+      contactName: [/\bnom complet\b/, /\bproprietaire\b/, /\bcontact\b/, /\bnom\b/, /\bowner\b/],
+      email: [/\bemail\b/, /\bcourriel\b/, /\bmail\b/],
+      phone: [/\btelephone\b/, /\bphone\b/, /\bcell\b/, /\bmobile\b/],
+      notes: [/\bnotes?\b/, /\bcomment\b/, /\bremarque\b/],
+    };
+    for (const key of ["buildingAddress", "city", "province", "postalCode", "country", "companyName", "contactName", "email", "phone", "notes"]) {
+      const found = findHeader(patterns[key]);
+      if (found) map[key] = found;
+    }
+    return map;
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    setImportError("");
+    try {
+      let parsed;
+      if (isSpreadsheetFile(file)) {
+        parsed = await parseSpreadsheet(file);
+      } else {
+        const text = await file.text();
+        parsed = parseCSV(text);
+      }
+      if (!parsed?.rows?.length) {
+        setImportError("Le fichier ne contient pas de lignes importables.");
+        return;
+      }
+      setImportFile({ ...parsed, fileName: file.name });
+      setColMap(autoDetectCols(parsed.headers || []));
+      setShowColMap(true);
+    } catch (err) {
+      setImportError(`Import impossible: ${String(err?.message || err)}`);
+    }
+  }
+
+  function pickImportFile() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
+    input.onchange = e => { if (e.target.files[0]) handleImportFile(e.target.files[0]); };
+    input.click();
+  }
+
+  async function importLeads() {
+    if (!importFile?.rows?.length) return;
+    const hasInputs = Boolean(colMap.buildingAddress || colMap.companyName || colMap.contactName);
+    if (!hasInputs) {
+      setImportError("Mappez au moins adresse immeuble, entreprise ou contact.");
+      setShowColMap(true);
+      return;
+    }
+
+    const prepared = importFile.rows.map(row => {
+      const companyName = pickValue(row, colMap.companyName);
+      const contactName = pickValue(row, colMap.contactName);
+      const address = pickValue(row, colMap.buildingAddress);
+      const city = pickValue(row, colMap.city);
+      const province = pickValue(row, colMap.province);
+      const postalCode = pickValue(row, colMap.postalCode);
+      const country = pickValue(row, colMap.country) || "Canada";
+      const email = pickValue(row, colMap.email);
+      const phone = pickValue(row, colMap.phone);
+      const notes = pickValue(row, colMap.notes);
+      const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
+      const lookupName = companyName || contactName || "";
+      return { companyName, contactName, address, city, province, postalCode, country, email, phone, notes, buildingAddress, lookupName };
+    }).filter(row => row.buildingAddress || row.lookupName);
+
+    if (!prepared.length) {
+      setImportError("Aucune ligne exploitable après mappage.");
+      return;
+    }
+
+    setImportBusy(true);
+    setImportError("");
+    setImportProgress({ done: 0, total: prepared.length });
+
+    let imported = [];
+    let done = 0;
+    let lookupErrorShown = false;
+
+    for (let i = 0; i < prepared.length; i += LEAD_BATCH_SIZE) {
+      const batch = prepared.slice(i, i + LEAD_BATCH_SIZE);
+      let lookupResults = [];
+      try {
+        const lookupRows = batch.map(item => ({
+          name: item.lookupName,
+          address: item.address,
+          city: item.city,
+          province: item.province,
+          postalCode: item.postalCode,
+          country: item.country || "Canada",
+        }));
+        const resp = await fetch("/api/phone-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: lookupRows }),
+        });
+        const data = await resp.json();
+        if (data?.ok && Array.isArray(data.results)) {
+          lookupResults = data.results;
+        } else if (!lookupErrorShown) {
+          lookupErrorShown = true;
+          setImportError(data?.error ? `Enrichissement partiel: ${data.error}` : "Enrichissement partiel: service indisponible.");
+        }
+      } catch {
+        if (!lookupErrorShown) {
+          lookupErrorShown = true;
+          setImportError("Enrichissement partiel: impossible de joindre le service de lookup.");
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const mapped = batch.map((item, idx) => {
+        const looked = lookupResults[idx] || {};
+        const resolvedPhone = item.phone || looked.phone || "";
+        const linkedStatus = looked.status || (resolvedPhone ? "found" : "not_found");
+        return {
+          id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: nowIso,
+          updatedAt: Date.now(),
+          stage: resolvedPhone ? "to_call" : "new",
+          companyName: item.companyName || "",
+          contactName: item.contactName || "",
+          buildingAddress: item.buildingAddress || "",
+          city: item.city || "",
+          province: item.province || "",
+          postalCode: item.postalCode || "",
+          country: item.country || "Canada",
+          email: item.email || "",
+          phone: resolvedPhone,
+          originalPhone: item.phone || "",
+          notes: item.notes || "",
+          sourceFile: importFile.fileName || "",
+          matchedName: looked.matchedName || "",
+          matchedAddress: looked.matchedAddress || "",
+          confidence: Number(looked.confidence || 0),
+          lookupStatus: linkedStatus,
+          website: looked.website || "",
+          linkedDealId: "",
+        };
+      });
+
+      imported = [...imported, ...mapped];
+      done += batch.length;
+      setImportProgress({ done, total: prepared.length });
+    }
+
+    setImportBusy(false);
+    setImportProgress(null);
+
+    if (!imported.length) {
+      setImportError("Aucun lead n'a été importé.");
+      return;
+    }
+
+    setLeads(prev => [...imported, ...prev].slice(0, 6000));
+    setToast(`✅ ${imported.length} lead${imported.length > 1 ? "s" : ""} importé${imported.length > 1 ? "s" : ""}.`);
+    setTimeout(() => setToast(""), 5000);
+    setImportFile(null);
+    setColMap({});
+    setShowColMap(false);
+  }
+
+  function updateLead(id, patch) {
+    setLeads(prev => prev.map(lead => lead.id === id ? { ...lead, ...patch, updatedAt: Date.now() } : lead));
+  }
+
+  function removeLead(id) {
+    setLeads(prev => prev.filter(lead => lead.id !== id));
+  }
+
+  function clearLeads() {
+    if (!window.confirm("Effacer tous les leads importés ?")) return;
+    setLeads([]);
+  }
+
+  function exportLeads() {
+    const headers = ["Entreprise", "Contact", "Adresse Immeuble", "Téléphone", "Email", "Statut", "Source", "Nom trouvé", "Adresse trouvée", "Confiance", "Site", "Date import"];
+    const rows = filteredLeads.map(lead => [
+      lead.companyName || "",
+      lead.contactName || "",
+      lead.buildingAddress || "",
+      lead.phone || "",
+      lead.email || "",
+      STAGE_CFG[lead.stage]?.label || lead.stage || "Nouveau",
+      lead.sourceFile || "",
+      lead.matchedName || "",
+      lead.matchedAddress || "",
+      lead.confidence || 0,
+      lead.website || "",
+      lead.createdAt || "",
+    ]);
+    const csv = [headers, ...rows].map(row => row.map(c => `"${String(c ?? "").replace(/"/g, "\"\"")}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const filteredLeads = useMemo(() => {
+    let list = leads;
+    if (filter.status !== "all") list = list.filter(lead => (lead.stage || "new") === filter.status);
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      list = list.filter(lead => (
+        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${lead.phone || ""} ${lead.email || ""} ${lead.notes || ""}`
+      ).toLowerCase().includes(q));
+    }
+    return list;
+  }, [leads, filter]);
+
+  const pagedLeads = filteredLeads.slice(0, page * LEAD_PAGE_SIZE);
+
+  const FIELD_LABELS = {
+    buildingAddress: "Adresse immeuble",
+    city: "Ville",
+    province: "Province",
+    postalCode: "Code postal",
+    country: "Pays",
+    companyName: "Entreprise",
+    contactName: "Contact / Propriétaire",
+    email: "Courriel",
+    phone: "Téléphone",
+    notes: "Notes",
+  };
+
+  const FIELD_HINTS = {
+    buildingAddress: "recommandé",
+    city: "optionnel",
+    province: "optionnel",
+    postalCode: "optionnel",
+    country: "optionnel",
+    companyName: "utilisé pour la recherche",
+    contactName: "utile pour qui appeler",
+    email: "optionnel",
+    phone: "si déjà disponible",
+    notes: "optionnel",
+  };
+
+  return (
+    <>
+      {showColMap && importFile && (
+        <div className="mo">
+          <div className="mo-box" style={{maxWidth:560,maxHeight:"85vh",overflow:"auto"}}>
+            <div className="mo-title">Mapper les colonnes leads</div>
+            <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
+              <strong>{importFile.rows.length}</strong> lignes · <strong>{importFile.headers.length}</strong> colonnes détectées ({importFile.delim || "fichier"})<br/>
+              Assignez les champs clés pour garder le lien entre immeuble, entreprise et contact.
+            </div>
+            {Object.entries(FIELD_LABELS).map(([field, label]) => (
+              <div className="f-row" key={field}>
+                <div className="f-lbl">{label} <span style={{color:"var(--text3)",fontWeight:400}}>— {FIELD_HINTS[field]}</span></div>
+                <select value={colMap[field] || ""} onChange={e => setColMap(prev => ({ ...prev, [field]: e.target.value }))}>
+                  <option value="">— Ignorer —</option>
+                  {importFile.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+            ))}
+            <div className="mo-foot">
+              <button className="btn" onClick={() => setShowColMap(false)}>Fermer</button>
+              <button className="btn btn-gold" onClick={() => setShowColMap(false)}>Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card f-card">
+        <div className="f-title">Importer des leads (CSV / XLSX)</div>
+        <div className="pf-drop"
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
+          onClick={pickImportFile}
+        >
+          <div style={{fontSize:32,marginBottom:8}}>📂</div>
+          {importFile
+            ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
+            : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
+          <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Formats: CSV, XLSX · Colonnes recommandées: adresse immeuble, nom complet, entreprise</div>
+        </div>
+        {importFile && (
+          <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <div style={{fontSize:12,color:"var(--text2)"}}>
+              <strong>{importFile.rows.length}</strong> lignes prêtes ·{" "}
+              <button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>
+                modifier le mappage
+              </button>
+            </div>
+            <button className="btn btn-gold" onClick={importLeads} disabled={importBusy}>
+              {importBusy ? "Import en cours…" : "Importer dans Leads"}
+            </button>
+          </div>
+        )}
+        {importError && <div className="status-note error" style={{marginTop:10}}>{importError}</div>}
+      </div>
+
+      {importBusy && importProgress && (
+        <div className="card" style={{padding:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>⏳ {importProgress.done} / {importProgress.total} lignes importées</div>
+          </div>
+          <div style={{height:8,background:"#F0E8D8",borderRadius:999,overflow:"hidden"}}>
+            <div style={{height:"100%",background:"var(--gold)",borderRadius:999,width:`${Math.round((importProgress.done/importProgress.total)*100)}%`,transition:"width .3s"}} />
+          </div>
+        </div>
+      )}
+
+      <div className="card" style={{overflow:"hidden"}}>
+        <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <input className="tb-search" style={{width:260}} placeholder="Rechercher un lead…" value={filter.search} onChange={e => setFilter(prev => ({ ...prev, search:e.target.value }))} />
+          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
+            <option value="all">Tous les statuts</option>
+            {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
+          </select>
+          <button className="btn btn-sm" onClick={exportLeads}>⬇ Exporter</button>
+          <button className="btn btn-sm btn-danger" onClick={clearLeads}>Vider</button>
+          <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
+            {pagedLeads.length < filteredLeads.length
+              ? `${pagedLeads.length} affichés sur ${filteredLeads.length}`
+              : `${filteredLeads.length} lead${filteredLeads.length !== 1 ? "s" : ""}`}
+          </span>
+        </div>
+
+        {filteredLeads.length === 0 ? (
+          <div className="empty" style={{minHeight:220}}>
+            <div className="empty-ico">🎯</div>
+            <div className="empty-title">Aucun lead</div>
+            <div className="empty-sub">Importez un fichier pour créer votre base d'appels avec immeuble + contact + téléphone.</div>
+          </div>
+        ) : (
+          <>
+            <div style={{overflowX:"auto"}}>
+              <table className="pf-tbl">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Immeuble / Cible</th>
+                    <th>Coordonnées</th>
+                    <th>Lookup</th>
+                    <th>Statut</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedLeads.map((lead, i) => {
+                    const stage = STAGE_CFG[lead.stage] || STAGE_CFG.new;
+                    return (
+                      <tr key={lead.id || i}>
+                        <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i + 1}</td>
+                        <td className="pf-input-col">
+                          {(lead.companyName || lead.contactName) && <div className="pf-cell-name">{lead.companyName || lead.contactName}</div>}
+                          {lead.buildingAddress && <div className="pf-cell-addr">🏢 {lead.buildingAddress}</div>}
+                          {lead.contactName && lead.companyName && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {lead.contactName}</div>}
+                        </td>
+                        <td>
+                          {lead.phone ? <div className="pf-phone">📞 {lead.phone}</div> : <span style={{color:"var(--text3)"}}>—</span>}
+                          {lead.email && <div style={{fontSize:11,color:"var(--text2)",marginTop:2}}>{lead.email}</div>}
+                        </td>
+                        <td className="pf-match-col">
+                          {lead.matchedName && <div className="pf-cell-name">{lead.matchedName}</div>}
+                          {lead.matchedAddress && <div className="pf-cell-addr">{lead.matchedAddress}</div>}
+                          {!lead.matchedName && !lead.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
+                        </td>
+                        <td>
+                          <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-start"}}>
+                            <span className={`pf-status ${stage.cls}`}>{stage.label}</span>
+                            <select style={{width:130,padding:"5px 7px",fontSize:11}} value={lead.stage || "new"} onChange={e => updateLead(lead.id, { stage: e.target.value })}>
+                              {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
+                            </select>
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                            {lead.phone && <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(lead.phone)}>📋</button>}
+                            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(lead)}>Créer deal</button>}
+                            {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F"}}>Deal lié</span>}
+                            <button className="btn btn-sm btn-danger" onClick={() => removeLead(lead.id)}>✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {pagedLeads.length < filteredLeads.length && (
+              <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
+                <button className="btn" onClick={() => setPage(p => p + 1)}>
+                  Afficher {Math.min(LEAD_PAGE_SIZE, filteredLeads.length - pagedLeads.length)} de plus ({filteredLeads.length - pagedLeads.length} restants)
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {toast && (
+        <div style={{position:"fixed",bottom:24,right:24,background:"#1A7A3F",color:"#fff",padding:"12px 18px",borderRadius:10,fontWeight:700,fontSize:13,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>
+          {toast}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
 const BATCH_SIZE = 10; // rows per API call to avoid proxy timeouts
 const PF_RUNS_KEY = "pf_runs";
@@ -1996,6 +2565,24 @@ function PhoneFinder() {
     setReviewRow(null);
   }
 
+  function renameRun(runId, nextTitle) {
+    const cleaned = String(nextTitle || "").trim();
+    if (!cleaned) return false;
+    setResultRuns(prev => prev.map(run => run.id === runId ? { ...run, title: cleaned.slice(0, 120) } : run));
+    return true;
+  }
+
+  function askRenameRun(run) {
+    if (!run) return;
+    const next = window.prompt("Nouveau titre pour cet import :", run.title || "");
+    if (next === null) return;
+    const ok = renameRun(run.id, next);
+    if (!ok) {
+      setToast("Le titre ne peut pas être vide.");
+      setTimeout(() => setToast(""), 3500);
+    }
+  }
+
   function clearAllRuns() {
     if (!window.confirm("Effacer tous les imports sauvegardés ?")) return;
     setResultRuns([]);
@@ -2004,6 +2591,15 @@ function PhoneFinder() {
     setFilter({ status:"all", search:"" });
     setPage(1);
     setPfPage("search");
+  }
+
+  function normalizeHeaderKey(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
   }
 
   function parseCSV(text) {
@@ -2033,19 +2629,118 @@ function PhoneFinder() {
     return { headers, rows, delim };
   }
 
+  function parseSpreadsheet(file) {
+    return new Promise((resolve, reject) => {
+      const XLSX = window.XLSX;
+      if (!XLSX) { reject(new Error("Module Excel non chargé.")); return; }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Impossible de lire le fichier."));
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: "array" });
+          const firstSheet = wb.SheetNames[0];
+          if (!firstSheet) throw new Error("Aucune feuille trouvée.");
+          const matrix = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" });
+          if (!Array.isArray(matrix) || !matrix.length) throw new Error("Le fichier est vide.");
+          const rawHeaders = Array.isArray(matrix[0]) ? matrix[0] : [];
+          const dedupe = {};
+          const headers = rawHeaders.map((h, i) => {
+            let base = String(h || `Colonne ${i + 1}`).trim();
+            if (!base) base = `Colonne ${i + 1}`;
+            const seen = dedupe[base] || 0;
+            dedupe[base] = seen + 1;
+            return seen ? `${base} (${seen + 1})` : base;
+          });
+          const rows = matrix
+            .slice(1)
+            .map(vals => Object.fromEntries(headers.map((h, i) => [h, String(vals?.[i] ?? "").trim()])))
+            .filter(row => Object.values(row).some(v => String(v).trim()));
+          resolve({ headers, rows, delim: `XLSX · ${firstSheet}` });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function isSpreadsheetFile(file) {
+    const name = String(file?.name || "").toLowerCase();
+    const type = String(file?.type || "").toLowerCase();
+    return /\.xlsx?$/.test(name) || type.includes("spreadsheetml") || type.includes("excel");
+  }
+
+  function pickMappedValue(row, columnName) {
+    if (!columnName) return "";
+    return String(row?.[columnName] || "").trim();
+  }
+
   function autoDetectCols(headers) {
     const map = {};
-    const matchers = {
-      name:       /^(nom|name|company|compagnie|entreprise)/i,
-      address:    /^(adresse|address|rue|street)/i,
-      city:       /^(ville|city)/i,
-      province:   /^(province|etat|état|state)/i,
-      postalCode: /^(postal|zip|code.?postal)/i,
-      country:    /^(pays|country)/i,
+    const normalized = headers.map(h => ({ raw: h, norm: normalizeHeaderKey(h) }));
+    const used = new Set();
+    const findHeader = (patterns) => {
+      const match = normalized.find(({ raw, norm }) => !used.has(raw) && patterns.some(rx => rx.test(norm)));
+      if (!match) return "";
+      used.add(match.raw);
+      return match.raw;
     };
-    for (const [f, rx] of Object.entries(matchers)) {
-      const m = headers.find(h => rx.test(h.trim()));
-      if (m && !map[f]) map[f] = m;
+    const patterns = {
+      address: [
+        /\badresse immeuble\b/,
+        /\badresse\b/,
+        /\baddress\b/,
+        /\brue\b/,
+        /\bstreet\b/,
+      ],
+      city: [
+        /\bville immeuble\b/,
+        /\bville\b/,
+        /\bcity\b/,
+      ],
+      province: [
+        /\bprovince\b/,
+        /\betat\b/,
+        /\bstate\b/,
+      ],
+      postalCode: [
+        /\bcode postal immeuble\b/,
+        /\bcode postal\b/,
+        /\bpostal\b/,
+        /\bzip\b/,
+      ],
+      country: [
+        /\bpays\b/,
+        /\bcountry\b/,
+      ],
+      company: [
+        /\bcompany\b/,
+        /\bcompagnie\b/,
+        /\bentreprise\b/,
+        /\braison sociale\b/,
+        /\borganisation\b/,
+      ],
+      leadContact: [
+        /\bnom complet\b/,
+        /\bproprietaire\b/,
+        /\bcontact\b/,
+        /\bprenom\b/,
+        /\bnom\b/,
+        /\bowner\b/,
+      ],
+      name: [
+        /\bnom entreprise\b/,
+        /\bbusiness name\b/,
+        /\bname\b/,
+        /\bnom\b/,
+        /\bcompany\b/,
+        /\bentreprise\b/,
+      ],
+    };
+
+    for (const key of ["address", "city", "province", "postalCode", "country", "company", "leadContact", "name"]) {
+      const found = findHeader(patterns[key]);
+      if (found) map[key] = found;
     }
     return map;
   }
@@ -2089,7 +2784,22 @@ function PhoneFinder() {
         });
         const data = await resp.json();
         if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
-        const chunk = Array.isArray(data.results) ? data.results : [];
+        const rawChunk = Array.isArray(data.results) ? data.results : [];
+        const chunk = rawChunk.map((rowResult, idx) => {
+          const src = batch[idx] || {};
+          const buildingAddress = src.buildingAddress || [src.address, src.city, src.province, src.postalCode].filter(Boolean).join(", ");
+          const companyName = src.company || "";
+          const leadContact = src.leadContact || "";
+          const fallbackName = src.rawName || src.name || "";
+          return {
+            ...rowResult,
+            inputName: companyName || rowResult.inputName || fallbackName,
+            inputAddress: buildingAddress || rowResult.inputAddress || "",
+            buildingAddress: buildingAddress || "",
+            companyName,
+            leadContact,
+          };
+        });
         const found = chunk.filter(r => r.phone);
         runRows = [...runRows, ...chunk];
         setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
@@ -2123,41 +2833,78 @@ function PhoneFinder() {
 
   async function searchCSV() {
     if (!csvFile?.rows?.length) return;
-    if (!Object.values(colMap).some(Boolean)) { setApiError("Configurez le mappage des colonnes d'abord."); setShowColMap(true); return; }
-    const rows = csvFile.rows.map(r => ({
-      name:       colMap.name       ? (r[colMap.name]?.trim()       || "") : "",
-      address:    colMap.address    ? (r[colMap.address]?.trim()    || "") : "",
-      city:       colMap.city       ? (r[colMap.city]?.trim()       || "") : "",
-      province:   colMap.province   ? (r[colMap.province]?.trim()   || "") : "",
-      postalCode: colMap.postalCode ? (r[colMap.postalCode]?.trim() || "") : "",
-      country:    colMap.country    ? (r[colMap.country]?.trim()    || "") : "Canada",
-    })).filter(r => r.name || r.address);
-    if (!rows.length) { setApiError("Aucune ligne avec un nom ou une adresse. Vérifiez le mappage des colonnes."); return; }
+    const hasLookupInputs = Boolean(colMap.address || colMap.name || colMap.company || colMap.leadContact);
+    if (!hasLookupInputs) { setApiError("Mappez au moins une colonne utile (adresse, entreprise, nom ou contact)."); setShowColMap(true); return; }
+    const rows = csvFile.rows.map(r => {
+      const rawName = pickMappedValue(r, colMap.name);
+      const company = pickMappedValue(r, colMap.company);
+      const leadContact = pickMappedValue(r, colMap.leadContact);
+      const address = pickMappedValue(r, colMap.address);
+      const city = pickMappedValue(r, colMap.city);
+      const province = pickMappedValue(r, colMap.province);
+      const postalCode = pickMappedValue(r, colMap.postalCode);
+      const country = pickMappedValue(r, colMap.country) || "Canada";
+
+      // Prefer company/business label for Places; if we only have contact + address,
+      // we query mostly by address and keep contact for call context.
+      const lookupName = company || rawName || (!address ? leadContact : "");
+      const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
+
+      return {
+        name: lookupName,
+        rawName,
+        company,
+        leadContact,
+        address,
+        city,
+        province,
+        postalCode,
+        country,
+        buildingAddress,
+      };
+    }).filter(r => r.name || r.address || r.buildingAddress);
+    if (!rows.length) { setApiError("Aucune ligne exploitable. Vérifiez le mappage (adresse/entreprise/contact)."); return; }
     await doLookupBatched(rows, "csv");
   }
 
-  function handleCSVDrop(file) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const parsed = parseCSV(e.target.result);
+  async function handleCSVDrop(file) {
+    if (!file) return;
+    setApiError("");
+    try {
+      let parsed;
+      if (isSpreadsheetFile(file)) {
+        parsed = await parseSpreadsheet(file);
+      } else {
+        const text = await file.text();
+        parsed = parseCSV(text);
+      }
+      if (!parsed?.rows?.length) {
+        setApiError("Le fichier ne contient pas de lignes importables.");
+        return;
+      }
       setCsvFile(parsed);
-      setColMap(autoDetectCols(parsed.headers));
+      setColMap(autoDetectCols(parsed.headers || []));
       setShowColMap(true);
-    };
-    reader.readAsText(file, "UTF-8");
+    } catch (err) {
+      setApiError(`Import impossible: ${String(err?.message || err)}`);
+    }
   }
 
   function pickCSVFile() {
     const inp = document.createElement("input");
-    inp.type = "file"; inp.accept = ".csv,text/csv";
+    inp.type = "file";
+    inp.accept = ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
     inp.onchange = e => { if (e.target.files[0]) handleCSVDrop(e.target.files[0]); };
     inp.click();
   }
 
   function exportCSV() {
     if (!activeRun) return;
-    const headers = ["Nom saisi","Adresse saisie","Nom trouvé","Adresse trouvée","Téléphone","Site web","Source","Confiance %","Statut","Date"];
+    const headers = ["Entreprise", "Contact", "Bâtiment", "Nom saisi", "Adresse saisie", "Nom trouvé", "Adresse trouvée", "Téléphone", "Site web", "Source", "Confiance %", "Statut", "Date"];
     const body = filteredResults.map(r => [
+      r.companyName || "",
+      r.leadContact || "",
+      r.buildingAddress || r.inputAddress || "",
       r.inputName, r.inputAddress, r.matchedName, r.matchedAddress,
       r.phone, r.website, r.source, r.confidence, r.status, r.searchedAt,
     ]);
@@ -2174,14 +2921,34 @@ function PhoneFinder() {
     if (filter.status !== "all") r = r.filter(x => x.status === filter.status);
     if (filter.search) {
       const q = filter.search.toLowerCase();
-      r = r.filter(x => (x.inputName + x.inputAddress + x.matchedName + x.phone + x.website).toLowerCase().includes(q));
+      r = r.filter(x => (
+        `${x.inputName || ""} ${x.inputAddress || ""} ${x.companyName || ""} ${x.leadContact || ""} ${x.buildingAddress || ""} ${x.matchedName || ""} ${x.phone || ""} ${x.website || ""}`
+      ).toLowerCase().includes(q));
     }
     return r;
   }, [results, filter]);
 
   const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
-  const FIELD_LABELS = { name:"Nom / Entreprise", address:"Adresse", city:"Ville", province:"Province", postalCode:"Code postal", country:"Pays" };
-  const FIELD_HINTS  = { name:"si l'adresse est vide, requis", address:"si le nom est vide, requis", city:"optionnel", province:"optionnel", postalCode:"optionnel", country:"optionnel" };
+  const FIELD_LABELS = {
+    name:"Nom de recherche",
+    company:"Entreprise / Organisation",
+    leadContact:"Contact / Propriétaire",
+    address:"Adresse immeuble",
+    city:"Ville",
+    province:"Province",
+    postalCode:"Code postal",
+    country:"Pays",
+  };
+  const FIELD_HINTS  = {
+    name:"optionnel, utilisé pour la recherche Places",
+    company:"optionnel, prioritaire pour la recherche si présent",
+    leadContact:"optionnel, conservé pour savoir qui appeler",
+    address:"très recommandé",
+    city:"optionnel",
+    province:"optionnel",
+    postalCode:"optionnel",
+    country:"optionnel",
+  };
 
   function confClass(n) { return n >= 80 ? "hi" : n >= 60 ? "mid" : n >= 40 ? "lo" : "zero"; }
 
@@ -2234,11 +3001,11 @@ function PhoneFinder() {
       {/* ── Column Mapping Modal ──────────────────────────────────────── */}
       {showColMap && csvFile && (
         <div className="mo">
-          <div className="mo-box" style={{maxWidth:520,maxHeight:"85vh",overflow:"auto"}}>
-            <div className="mo-title">Mapper les colonnes CSV</div>
+            <div className="mo-box" style={{maxWidth:520,maxHeight:"85vh",overflow:"auto"}}>
+            <div className="mo-title">Mapper les colonnes d'import</div>
             <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
               <strong>{csvFile.rows.length}</strong> lignes · <strong>{csvFile.headers.length}</strong> colonnes détectées (séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code>)<br/>
-              Assignez chaque colonne CSV à son champ. Au moins <strong>Nom</strong> ou <strong>Adresse</strong> est requis.
+              Assignez vos colonnes (adresse, entreprise, contact). L'adresse immeuble est recommandée pour une recherche fiable.
             </div>
             {Object.entries(FIELD_LABELS).map(([f, lbl]) => (
               <div className="f-row" key={f}>
@@ -2306,7 +3073,7 @@ function PhoneFinder() {
           <>
             <div className="tabs" style={{paddingLeft:2}}>
               <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>🔍 Recherche manuelle</button>
-              <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV</button>
+              <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV / XLSX</button>
             </div>
 
             {pfTab === "manual" && (
@@ -2336,7 +3103,7 @@ function PhoneFinder() {
 
             {pfTab === "csv" && (
               <div className="card f-card">
-                <div className="f-title">Import CSV</div>
+                <div className="f-title">Import CSV / XLSX</div>
                 <div className="pf-drop"
                   onDragOver={e => e.preventDefault()}
                   onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
@@ -2344,8 +3111,8 @@ function PhoneFinder() {
                   <div style={{fontSize:32,marginBottom:8}}>📂</div>
                   {csvFile
                     ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes · {csvFile.headers.length} colonnes · séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code></div>
-                    : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier CSV ou cliquez pour choisir</div>}
-                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes acceptées : nom, adresse, ville, province, code postal, pays</div>
+                    : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un CSV/XLSX ou cliquez pour choisir</div>}
+                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes utiles : adresse immeuble, entreprise, nom complet, ville, province, code postal</div>
                 </div>
                 {csvFile && (
                   <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
@@ -2354,7 +3121,7 @@ function PhoneFinder() {
                       <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes mappées
                       {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>modifier le mappage</button>)
                     </div>
-                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.filter(r => (colMap.name && r[colMap.name]) || (colMap.address && r[colMap.address])).length} lignes`}</button>
+                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.filter(r => pickMappedValue(r, colMap.address) || pickMappedValue(r, colMap.name) || pickMappedValue(r, colMap.company) || pickMappedValue(r, colMap.leadContact)).length} lignes`}</button>
                   </div>
                 )}
                 {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
@@ -2410,6 +3177,7 @@ function PhoneFinder() {
                             {run.totalRows || 0} lignes · {run.foundCount || 0} trouvés
                           </div>
                         </button>
+                        <button className="btn btn-sm" title="Renommer" onClick={() => askRenameRun(run)}>✎</button>
                         <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm("Supprimer cet import sauvegardé ?")) removeRun(run.id); }}>✕</button>
                       </div>
                     );
@@ -2426,7 +3194,10 @@ function PhoneFinder() {
                         {formatRunDate(activeRun.createdAt)} · {activeRun.totalRows || 0} lignes · {activeRun.foundCount || 0} numéros trouvés
                       </div>
                     </div>
-                    <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>✎ Renommer</button>
+                      <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
+                    </div>
                   </div>
                 )}
 
@@ -2471,8 +3242,9 @@ function PhoneFinder() {
                                 <tr key={r.id || i}>
                                   <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
                                   <td className="pf-input-col">
-                                    {r.inputName    && <div className="pf-cell-name">{r.inputName}</div>}
-                                    {r.inputAddress && <div className="pf-cell-addr">{r.inputAddress}</div>}
+                                    {(r.companyName || r.inputName) && <div className="pf-cell-name">{r.companyName || r.inputName}</div>}
+                                    {(r.buildingAddress || r.inputAddress) && <div className="pf-cell-addr">🏢 {r.buildingAddress || r.inputAddress}</div>}
+                                    {r.leadContact && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {r.leadContact}</div>}
                                     {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
                                   </td>
                                   <td className="pf-match-col">
