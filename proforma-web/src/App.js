@@ -545,6 +545,7 @@ function mergePhoneLists(...sources) {
 
 function extractPhonesFromRow(row) {
   if (!row || typeof row !== "object") return [];
+  const allValues = Object.values(row || {});
   const phoneKeyValues = Object.entries(row)
     .filter(([key]) => {
       const norm = normalizeTextKey(key);
@@ -553,7 +554,7 @@ function extractPhonesFromRow(row) {
       return hasPhoneHint && !hasAddressHint;
     })
     .map(([, value]) => value);
-  return phoneKeyValues.length ? mergePhoneLists(phoneKeyValues) : [];
+  return mergePhoneLists(phoneKeyValues, allValues);
 }
 
 function getLeadPhones(lead) {
@@ -2359,7 +2360,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const nowIso = new Date().toISOString();
       const mapped = batch.map((item, idx) => {
         const looked = lookupResults[idx] || {};
-        const mergedPhones = mergePhoneLists(item.inputPhones, looked.phone);
+        const mergedPhones = mergePhoneLists(item.inputPhones, looked.inputPhones, looked.phone);
         const resolvedPhone = mergedPhones[0] || "";
         const linkedStatus = looked.status || (mergedPhones.length ? "found" : "not_found");
         return {

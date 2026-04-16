@@ -4075,6 +4075,78 @@ function sanitizeBusinessName(value, { allowAmbiguous = true } = {}) {
   return txt;
 }
 
+function normalizeLookupPhoneKey(value) {
+  const digits = String(value || "").replace(/\D+/g, "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return digits;
+}
+
+function mergeLookupPhones(...sources) {
+  const merged = [];
+  const seen = new Set();
+  const addOne = (value) => {
+    const txt = cleanLookupValue(value);
+    if (!txt) return;
+    const key = normalizeLookupPhoneKey(txt);
+    if (!key || key.length < 7 || seen.has(key)) return;
+    seen.add(key);
+    merged.push(txt);
+  };
+  for (const source of sources) {
+    if (Array.isArray(source)) source.forEach(addOne);
+    else addOne(source);
+  }
+  return merged;
+}
+
+function candidateIdentityKey(candidate = {}) {
+  const byPlaceId = cleanLookupValue(candidate.placeId);
+  if (byPlaceId) return `pid:${byPlaceId}`;
+  const byName = normalizeLookupKey(candidate.name);
+  const byAddress = normalizeLookupKey(candidate.address);
+  const byPhone = normalizeLookupPhoneKey(candidate.phone);
+  return `txt:${byName}|${byAddress}|${byPhone}`;
+}
+
+async function runPlacesQuery({ query, expectedName = "", expectedAddress = "", queryType = "generic" }) {
+  const cleanQuery = cleanLookupValue(query);
+  if (!cleanQuery) return [];
+  const baseResults = await gPlacesSearch(cleanQuery);
+  if (!Array.isArray(baseResults) || !baseResults.length) return [];
+
+  const candidates = await Promise.all(baseResults.slice(0, 3).map(async result => {
+    let details = {};
+    try { details = await gPlaceDetails(result.place_id); } catch {}
+    const placeName = cleanLookupValue(details.name || result.name);
+    const placeAddress = cleanLookupValue(details.formatted_address || result.formatted_address);
+    const phone = cleanLookupValue(details.formatted_phone_number || details.international_phone_number);
+    const website = cleanLookupValue(details.website);
+
+    const nameSim = expectedName ? strSim(expectedName, placeName) : null;
+    const addrSim = expectedAddress ? strSim(expectedAddress, placeAddress) : null;
+    let confidence;
+    if (nameSim !== null && addrSim !== null) confidence = Math.round((nameSim * 0.6 + addrSim * 0.4) * 100);
+    else if (nameSim !== null) confidence = Math.round(nameSim * 100);
+    else if (addrSim !== null) confidence = Math.round(addrSim * 100);
+    else confidence = 65;
+
+    return {
+      placeId: cleanLookupValue(result.place_id),
+      name: placeName,
+      address: placeAddress,
+      phone,
+      website,
+      confidence,
+      queryType
+    };
+  }));
+
+  return candidates
+    .filter(candidate => candidate.name || candidate.address || candidate.phone)
+    .sort((a, b) => b.confidence - a.confidence);
+}
+
 function inferLookupFields(rawRow = {}) {
   const entries = Object.entries(rawRow || {})
     .map(([key, value]) => ({
@@ -4227,45 +4299,69 @@ async function phoneLookupOne({ name, address, city, province, postalCode, count
   const lookupPostalCode = cleanLookupValue(postalCode);
   const lookupCountry = cleanLookupValue(country) || "Canada";
 
-  if (!lookupName && !lookupAddress) {
-    return { matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
+  const addressQuery = [lookupAddress, lookupCity, lookupProvince, lookupPostalCode, lookupCountry].filter(Boolean).join(", ");
+  const companyQuery = [lookupName, lookupCity, lookupProvince, lookupPostalCode, lookupCountry].filter(Boolean).join(", ");
+
+  if (!addressQuery && !companyQuery) {
+    return { matchedName:"", matchedAddress:"", phone:"", inputPhones:[], website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
   }
 
-  const queryParts = [lookupName, lookupAddress, lookupCity, lookupProvince, lookupPostalCode, lookupCountry].filter(Boolean);
-  const query = queryParts.join(", ");
-  const results = await gPlacesSearch(query);
-  if (!results.length) {
-    return { matchedName:"", matchedAddress:"", phone:"", website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
+  const lookups = [];
+  if (addressQuery) {
+    lookups.push(runPlacesQuery({
+      query: addressQuery,
+      expectedName: "",
+      expectedAddress: lookupAddress,
+      queryType: "address"
+    }));
   }
-  const candidates = await Promise.all(results.slice(0, 3).map(async r => {
-    let d = {};
-    try { d = await gPlaceDetails(r.place_id); } catch {}
-    const rName = d.name || r.name || "";
-    const rAddr = d.formatted_address || r.formatted_address || "";
-    const nameSim = lookupName ? strSim(lookupName, rName) : null;
-    const addrSim = lookupAddress ? strSim(lookupAddress, rAddr) : null;
-    let confidence;
-    if (nameSim !== null && addrSim !== null) confidence = Math.round((nameSim * 0.6 + addrSim * 0.4) * 100);
-    else if (nameSim !== null) confidence = Math.round(nameSim * 100);
-    else if (addrSim !== null) confidence = Math.round(addrSim * 100);
-    else confidence = 65;
-    return { name: rName, address: rAddr, phone: d.formatted_phone_number || d.international_phone_number || "", website: d.website || "", confidence };
-  }));
-  candidates.sort((a, b) => b.confidence - a.confidence);
-  const best = candidates[0];
-  let status;
-  if (best.phone) status = "found";
-  else if (best.confidence >= 50) status = "needs_review";
-  else status = "not_found";
+  if (companyQuery) {
+    lookups.push(runPlacesQuery({
+      query: companyQuery,
+      expectedName: lookupName,
+      expectedAddress: lookupAddress,
+      queryType: "company"
+    }));
+  }
+
+  const rawCandidates = (await Promise.all(lookups)).flat();
+  if (!rawCandidates.length) {
+    return { matchedName:"", matchedAddress:"", phone:"", inputPhones:[], website:"", source:"google_places", confidence:0, status:"not_found", candidates:[] };
+  }
+
+  const uniqueCandidates = [];
+  const seenCandidates = new Set();
+  for (const candidate of rawCandidates.sort((a, b) => b.confidence - a.confidence)) {
+    const key = candidateIdentityKey(candidate);
+    if (!key || seenCandidates.has(key)) continue;
+    seenCandidates.add(key);
+    uniqueCandidates.push(candidate);
+  }
+
+  const candidatesWithPhone = uniqueCandidates.filter(candidate => normalizeLookupPhoneKey(candidate.phone));
+  const allPhones = mergeLookupPhones(candidatesWithPhone.map(candidate => candidate.phone));
+  const best = candidatesWithPhone[0] || uniqueCandidates[0] || null;
+  const bestKey = best ? candidateIdentityKey(best) : "";
+
   return {
-    matchedName: best.name,
-    matchedAddress: best.address,
-    phone: best.phone,
-    website: best.website,
+    matchedName: best?.name || "",
+    matchedAddress: best?.address || "",
+    phone: allPhones[0] || "",
+    inputPhones: allPhones,
+    website: best?.website || "",
     source: "google_places",
-    confidence: best.confidence,
-    status,
-    candidates: candidates.slice(1),
+    confidence: Number(best?.confidence || 0),
+    status: allPhones.length ? "found" : "not_found",
+    candidates: uniqueCandidates
+      .filter(candidate => candidateIdentityKey(candidate) !== bestKey)
+      .map(candidate => ({
+        name: candidate.name,
+        address: candidate.address,
+        phone: candidate.phone,
+        website: candidate.website,
+        confidence: candidate.confidence,
+      }))
+      .slice(0, 4),
   };
 }
 
