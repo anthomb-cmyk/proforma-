@@ -458,7 +458,10 @@ function extractPhonesFromText(value) {
   const matches = txt.match(/\+?\d[\d\s().-]{6,}\d/g) || [];
   return matches.filter(raw => {
     const digits = normalizePhoneKey(raw);
-    return digits.length >= 7 && digits.length <= 15;
+    if (digits.length < 10 || digits.length > 15) return false;
+    // Reject short numeric ranges commonly found in civic addresses (ex: 105-1043).
+    if (/^\s*\d{1,5}\s*-\s*\d{1,5}\s*$/.test(String(raw || ""))) return false;
+    return true;
   }).map(raw => String(raw).trim());
 }
 
@@ -485,7 +488,15 @@ function mergePhoneLists(...sources) {
 
 function extractPhonesFromRow(row) {
   if (!row || typeof row !== "object") return [];
-  return mergePhoneLists(Object.values(row));
+  const phoneKeyValues = Object.entries(row)
+    .filter(([key]) => {
+      const norm = normalizeTextKey(key);
+      const hasPhoneHint = /\b(phone|telephone|tel|mobile|cell|fax|numero|number)\b/.test(norm);
+      const hasAddressHint = /\b(address|adresse|postal|zip|city|ville|province|state|suite|apt|unit|immeuble)\b/.test(norm);
+      return hasPhoneHint && !hasAddressHint;
+    })
+    .map(([, value]) => value);
+  return phoneKeyValues.length ? mergePhoneLists(phoneKeyValues) : [];
 }
 
 function getLeadPhones(lead) {
