@@ -2845,6 +2845,19 @@ const PF_ACTIVE_RUN_KEY = "pf_active_run";
 const MAX_PHONE_RUNS = 40;
 
 function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
+  function normalizeResultRowPhones(row = {}) {
+    const validPhones = mergePhoneLists(row?.phone, row?.inputPhones);
+    const status = validPhones.length > 0
+      ? "found"
+      : (row?.status === "found" ? "not_found" : (row?.status || "not_found"));
+    return {
+      ...row,
+      phone: validPhones[0] || "",
+      inputPhones: validPhones,
+      status,
+    };
+  }
+
   function rowHasAnyPhone(row) {
     return mergePhoneLists(row?.phone, row?.inputPhones).length > 0;
   }
@@ -2859,12 +2872,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         return stored
           .map((run, idx) => {
             if (!run || typeof run !== "object") return null;
-            const rows = Array.isArray(run.rows)
-              ? run.rows.map(row => ({
-                  ...row,
-                  status: mergePhoneLists(row?.phone, row?.inputPhones).length > 0 ? "found" : (row?.status || "not_found"),
-                }))
-              : [];
+            const rows = Array.isArray(run.rows) ? run.rows.map(normalizeResultRowPhones) : [];
             const createdAt = run.createdAt || new Date().toISOString();
             const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
             return {
@@ -2884,10 +2892,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     try {
       const legacy = JSON.parse(localStorage.getItem("pf_results") || "[]");
       if (Array.isArray(legacy) && legacy.length) {
-        const rows = legacy.map(row => ({
-          ...row,
-          status: mergePhoneLists(row?.phone, row?.inputPhones).length > 0 ? "found" : (row?.status || "not_found"),
-        }));
+        const rows = legacy.map(normalizeResultRowPhones);
         const createdAt = new Date().toISOString();
         return [{
           id: `pf_run_legacy_${Date.now()}`,
@@ -3270,8 +3275,6 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           const leadContact = src.leadContact || "";
           const fallbackName = src.rawName || src.name || "";
           const inputPhones = mergePhoneLists(src.inputPhones, rowResult.inputPhones);
-          const allPhones = mergePhoneLists(rowResult.phone, inputPhones);
-          const status = allPhones.length > 0 ? "found" : rowResult.status;
           return {
             ...rowResult,
             inputName: companyName || rowResult.inputName || fallbackName,
@@ -3280,11 +3283,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             companyName,
             leadContact,
             inputPhones,
-            status,
           };
         });
-        const found = chunk.filter(rowHasAnyPhone);
-        runRows = [...runRows, ...chunk];
+        const normalizedChunk = chunk.map(normalizeResultRowPhones);
+        const found = normalizedChunk.filter(rowHasAnyPhone);
+        runRows = [...runRows, ...normalizedChunk];
         setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
         done += batch.length;
         added += found.length;
