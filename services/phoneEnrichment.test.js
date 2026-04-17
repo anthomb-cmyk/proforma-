@@ -940,3 +940,59 @@ test("runPhoneLookupBatch: progressive radius fires 150m when 50m finds nothing"
   assert.ok(radiusCalls.includes(150), "should have widened to 150m");
   assert.equal(results[0].status, "found");
 });
+
+test("runPhoneLookupBatch: 411.ca fires concurrently with Pages Jaunes when Places finds nothing", async () => {
+  const c411Html = `<html><body><a href="tel:+18195550198">(819) 555-0198</a></body></html>`;
+  const calls = [];
+  const fetchImpl = stubFetch(
+    () => placesTextSearch([]),
+    (url) => {
+      if (url.includes("pagesjaunes")) { calls.push("pj"); return ""; }
+      if (url.includes("411.ca")) { calls.push("411"); return c411Html; }
+      return "";
+    }
+  );
+  const rows = [{
+    "adresses immeubles clean": "45 Rue Laurier, Arthabaska",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Gestion Arthabaska Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Ville2": "Arthabaska",
+  }];
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.ok(calls.includes("411"), "411.ca should have been called");
+  assert.equal(results[0].status, "found");
+  assert.ok(results[0].c411DirectoryPhones.length > 0, "c411DirectoryPhones should have the result");
+  assert.ok(results[0].trace.some(t => t.startsWith("411ca:")));
+});
+
+test("runPhoneLookupBatch: query cache avoids duplicate text search for Logement rows with same owner", async () => {
+  let textSearchCalls = 0;
+  const fetchImpl = stubFetch((url) => {
+    if (url.includes("textsearch")) textSearchCalls++;
+    return placesTextSearch([]);
+  });
+  // Two Logement rows owned by the same Morale company in the same city.
+  // Logement rows use a city-only business query (no building address), so the
+  // query string "GESTION DUPONT INC., Victoriaville, Qc" is identical for both.
+  // The second row should get a cache hit and not re-fire the Places API.
+  const sharedRow = {
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "GESTION DUPONT INC.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Ville2": "Victoriaville",
+  };
+  const rows = [
+    { ...sharedRow, "adresses immeubles clean": "10 Rue A, Victoriaville" },
+    { ...sharedRow, "adresses immeubles clean": "20 Rue B, Victoriaville" },
+  ];
+  await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  // Both rows share an identical business query → only 1 text search call total.
+  assert.equal(textSearchCalls, 1, `expected 1 cached text search; got ${textSearchCalls}`);
+});

@@ -639,6 +639,23 @@ export function createPlacesClient({ apiKey, fetchImpl = globalThis.fetch } = {}
     return d?.result || {};
   }
 
+  // Shared helper: extract NANP-validated phones from tel: href anchors in HTML.
+  // Used by both Pages Jaunes and 411.ca scrapers.
+  function extractTelPhones(html, limit = 5) {
+    const phones = [];
+    const seen = new Set();
+    const telRe = /href="tel:([+\d\s.()\-]{7,20})"/g;
+    let m;
+    while ((m = telRe.exec(html)) !== null) {
+      const key = normalizePhoneKey(m[1].replace(/\s+/g, ""));
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      phones.push(formatPhone(key));
+      if (phones.length >= limit) break;
+    }
+    return phones;
+  }
+
   // Pages Jaunes directory search — scrapes pagesjaunes.ca for the company name
   // in the given city. Used as a fallback when Google Places finds no phone.
   // Returns validated NANP phone strings, or [] on any error / blocked response.
@@ -658,27 +675,39 @@ export function createPlacesClient({ apiKey, fetchImpl = globalThis.fetch } = {}
             "Chrome/124.0.0.0 Safari/537.36",
         },
       });
-      const html = await resp.text();
-      // Extract phone numbers from tel: anchor hrefs (standard pattern on pagesjaunes.ca).
-      // We cap at 5 to avoid pulling in the whole page.
-      const phones = [];
-      const seen = new Set();
-      const telRe = /href="tel:([+\d\s.()\-]{7,20})"/g;
-      let m;
-      while ((m = telRe.exec(html)) !== null) {
-        const key = normalizePhoneKey(m[1].replace(/\s+/g, ""));
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        phones.push(formatPhone(key));
-        if (phones.length >= 5) break;
-      }
-      return phones;
+      return extractTelPhones(await resp.text());
     } catch {
       return []; // graceful degradation — never let directory errors block the pipeline
     }
   }
 
-  return { textSearch, nearbySearch, details, searchPagesJaunes };
+  // 411.ca directory search — separate Canadian directory with a different listing
+  // database than Pages Jaunes. Fired concurrently with Pages Jaunes so both
+  // resolve in parallel; whichever finds a phone wins (results are merged).
+  // Returns validated NANP phone strings, or [] on any error / blocked response.
+  async function search411ca({ name, city, province = "QC" } = {}) {
+    if (!name || !city) return [];
+    try {
+      const what = encodeURIComponent(cleanText(name));
+      const where = encodeURIComponent(`${cleanText(city)} ${province}`);
+      const url = `https://411.ca/business/search?what=${what}&where=${where}`;
+      const resp = await fetchImpl(url, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "fr-CA,fr;q=0.9,en-CA;q=0.8",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/124.0.0.0 Safari/537.36",
+        },
+      });
+      return extractTelPhones(await resp.text());
+    } catch {
+      return []; // graceful degradation — never let directory errors block the pipeline
+    }
+  }
+
+  return { textSearch, nearbySearch, details, searchPagesJaunes, search411ca };
 }
 
 /* ========================================================================== *
@@ -884,7 +913,7 @@ export function applyGlobalPhoneCap(results, cap) {
   });
 }
 
-async function lookupOneRow({ rawRow, client, opts, idFactory }) {
+async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new Map() }) {
   const id = idFactory();
   const norm = normalizeRow(rawRow);
   const trace = [];
@@ -928,8 +957,12 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
       try {
         if (q.type === "nearby") {
           results = await client.nearbySearch({ lat: q.lat, lng: q.lng });
+        } else if (queryCache.has(q.query)) {
+          results = queryCache.get(q.query);
+          trace.push(`cache_hit:${q.query.slice(0, 50)}`);
         } else {
           results = await client.textSearch(q.query);
+          queryCache.set(q.query, results);
         }
       } catch (err) {
         trace.push(`error[${q.type}]:${err.message || String(err)}`);
@@ -1007,11 +1040,12 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
   const best = online[0] || ranked[0] || null;
   const onlinePhones = mergePhoneLists(online.map((c) => c.phone));
 
-  // ── Pages Jaunes fallback ────────────────────────────────────────────────────
+  // ── Directory fallback: Pages Jaunes + 411.ca (concurrent) ─────────────────
   // Only fires when BOTH Google Places AND file columns returned no phone.
-  // Scraped from pagesjaunes.ca — uses the company name + city as the query.
-  // Fails gracefully (returns []) if the site blocks or uses JS rendering.
-  let directoryPhones = [];
+  // Both directories are queried in parallel to minimise latency; results are
+  // merged and deduped. Each scraper fails gracefully (returns []) on any error.
+  let pjDirectoryPhones = [];
+  let c411DirectoryPhones = [];
   if (
     client &&
     !onlinePhones.length &&
@@ -1020,18 +1054,20 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
     norm.city
   ) {
     for (const name of norm.businessNames) {
-      try {
-        const found = await client.searchPagesJaunes({ name, city: norm.city });
-        if (found.length) {
-          directoryPhones = mergePhoneLists(directoryPhones, found);
-          trace.push(`pages_jaunes:${found.length} phone(s) for "${name.slice(0, 40)}"`);
-          break; // one successful name lookup is enough
-        }
-      } catch (err) {
-        trace.push(`pages_jaunes_error:${err.message || String(err)}`);
-      }
+      const [pjPhones, c411Phones] = await Promise.all([
+        client.searchPagesJaunes({ name, city: norm.city }).catch(() => []),
+        client.search411ca({ name, city: norm.city }).catch(() => []),
+      ]);
+      if (pjPhones.length)
+        trace.push(`pages_jaunes:${pjPhones.length} phone(s) for "${name.slice(0, 40)}"`);
+      if (c411Phones.length)
+        trace.push(`411ca:${c411Phones.length} phone(s) for "${name.slice(0, 40)}"`);
+      pjDirectoryPhones = mergePhoneLists(pjDirectoryPhones, pjPhones);
+      c411DirectoryPhones = mergePhoneLists(c411DirectoryPhones, c411Phones);
+      if (pjDirectoryPhones.length || c411DirectoryPhones.length) break; // one name is enough
     }
   }
+  const directoryPhones = mergePhoneLists(pjDirectoryPhones, c411DirectoryPhones);
 
   const allPhones = mergePhoneLists(fileInputPhones, onlinePhones, directoryPhones);
   const status = allPhones.length ? "found" : "not_found";
@@ -1039,7 +1075,8 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
   // Source label: reflect which systems contributed phones.
   const sourceParts = [];
   if (onlinePhones.length) sourceParts.push("google_places");
-  if (directoryPhones.length) sourceParts.push("pages_jaunes");
+  if (pjDirectoryPhones.length) sourceParts.push("pages_jaunes");
+  if (c411DirectoryPhones.length) sourceParts.push("411ca");
   if (!sourceParts.length) sourceParts.push("file");
   const source = sourceParts.join(",");
 
@@ -1053,7 +1090,9 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
     phone: allPhones[0] || "",
     inputPhones: allPhones,
     onlinePhones,
-    directoryPhones,    // phones found via Pages Jaunes
+    directoryPhones,      // merged phones from all directory sources
+    pjDirectoryPhones,    // phones found specifically via Pages Jaunes
+    c411DirectoryPhones,  // phones found specifically via 411.ca
     fileInputPhones,
     filePhoneColumns,   // { normalizedKey → columnName } for UI source labels
     website: online.length ? best?.website || "" : "",
@@ -1112,9 +1151,14 @@ export async function runPhoneLookupBatch({
     : createPlacesClient({ apiKey, fetchImpl: opts.fetchImpl });
 
   const idFactory = defaultIdFactory();
+  // Shared cache for text search results within this batch. If the same query
+  // string appears on multiple rows (e.g. the same LLC owns several properties),
+  // we hit the Places API once and reuse the raw results for subsequent rows.
+  // Nearby searches are NOT cached since each property has unique GPS coords.
+  const queryCache = new Map();
   const results = [];
   for (const rawRow of capped) {
-    const r = await lookupOneRow({ rawRow, client, opts, idFactory });
+    const r = await lookupOneRow({ rawRow, client, opts, idFactory, queryCache });
     results.push(r);
     if (opts.perRowDelayMs > 0 && client) {
       await new Promise((resolve) => setTimeout(resolve, opts.perRowDelayMs));

@@ -4099,7 +4099,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                               const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
                               const filePhoneKeys = new Set(mergePhoneLists(r.fileInputPhones).map(normalizePhoneKey).filter(Boolean));
                               const onlinePhoneKeys = new Set(mergePhoneLists(r.onlinePhones).map(normalizePhoneKey).filter(Boolean));
-                              const directoryPhoneKeys = new Set(mergePhoneLists(r.directoryPhones).map(normalizePhoneKey).filter(Boolean));
+                              const pjPhoneKeys = new Set(mergePhoneLists(r.pjDirectoryPhones || r.directoryPhones).map(normalizePhoneKey).filter(Boolean));
+                              const c411PhoneKeys = new Set(mergePhoneLists(r.c411DirectoryPhones || []).map(normalizePhoneKey).filter(Boolean));
                               // filePhoneColumns is a { normalizedKey → rawColumnName } map sent by
                               // the server. When present, show the exact Excel column (e.g.
                               // "Propriétaire2_Téléphone"). Fall back to "fichier" for old results.
@@ -4122,7 +4123,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                                   sources.push("fichier");
                                 }
                                 if (onlinePhoneKeys.has(key)) sources.push("Google Places");
-                                if (directoryPhoneKeys.has(key)) sources.push("Pages Jaunes");
+                                if (pjPhoneKeys.has(key)) sources.push("Pages Jaunes");
+                                if (c411PhoneKeys.has(key)) sources.push("411.ca");
                                 return sources.join(" + ");
                               };
                               const listedPhones = mergePhoneLists(r.inputPhones);
