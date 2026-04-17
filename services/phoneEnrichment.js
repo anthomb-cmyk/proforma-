@@ -71,23 +71,59 @@ export function stringSim(a, b) {
  *  Phone normalization + extraction
  * ========================================================================== */
 
-// Matches NANP-style phone numbers (Canada/US). Rejects obvious false positives
-// by requiring the area code to start with 2-9 and forbidding runs that are
-// clearly part of a postal code or id (those are filtered at a higher level).
+// Matches NANP-style phone numbers in free text. Deliberately broad — we parse
+// candidates here and then let isValidNanpPhone decide which are real. That's
+// simpler than trying to encode every rule in the regex.
 const PHONE_RE =
-  /(?:\+?1[\s.\-]?)?\(?([2-9][0-8]\d)\)?[\s.\-]?([2-9]\d{2})[\s.\-]?(\d{4})\b/g;
+  /(?:\+?1[\s.\-]?)?\(?(\d{3})\)?[\s.\-]?(\d{3})[\s.\-]?(\d{4})\b/g;
+
+// NANP service codes / fictional ranges that a real subscriber line can never
+// use. The spec is in ATIS-0300051; the short version:
+//   - Area code (NPA): first digit 2-9, NOT N11 (211/311/…/911 are services)
+//   - Central office code (NXX): first digit 2-9, NOT N11, and the range 555
+//     is reserved — only 555-01XX is safe for fictional use.
+//   - Subscriber (XXXX): anything, but pure padding (0000, 9999) on top of a
+//     garbage exchange reveals a non-phone.
+//
+// We also catch the common "this isn't a phone" tells: ≥7 identical digits in
+// a row, or the whole number being a single repeated digit.
+
+const N11_SUFFIX = new Set(["211", "311", "411", "511", "611", "711", "811", "911"]);
+// NXX codes that the NANP reserves or never assigns to subscribers. We keep
+// this narrow on purpose — real working area codes like 450/514/819 often have
+// exchanges that look "round" (e.g. 222). The ones below are the exchanges
+// that the NANPA specifically reserves for internal signalling / testing.
+const RESERVED_NXX = new Set(["000", "999", "958", "959"]);
+
+export function isValidNanpPhone(digits10) {
+  if (!/^\d{10}$/.test(digits10)) return false;
+  const npa = digits10.slice(0, 3);
+  const nxx = digits10.slice(3, 6);
+  const sub = digits10.slice(6, 10);
+  // NPA rules
+  if (npa[0] < "2") return false;            // area code can't start 0 or 1
+  if (N11_SUFFIX.has(npa)) return false;     // N11 codes aren't area codes
+  // NXX rules
+  if (nxx[0] < "2") return false;            // exchange can't start 0 or 1
+  if (N11_SUFFIX.has(nxx)) return false;     // 211/311/…/911 not an exchange
+  if (RESERVED_NXX.has(nxx)) return false;   // 000/999/958/959 reserved
+  if (nxx === "555" && !/^01\d\d$/.test(sub)) return false; // 555 fiction
+  // Overall shape rules
+  if (/^(\d)\1{9}$/.test(digits10)) return false;   // all same digit
+  if (/(\d)\1{6,}/.test(digits10)) return false;    // 7+ identical in a row
+  return true;
+}
 
 export function normalizePhoneKey(v) {
   const digits = String(v ?? "").replace(/\D+/g, "");
   if (!digits) return "";
   let n = digits;
-  // Strip a leading North-American country code.
+  // Strip a leading North-American country code (1).
   if (n.length >= 11 && n.startsWith("1")) n = n.slice(1);
-  // If there are trailing digits past 10 (e.g. "ext 42"), drop them.
+  // Trailing junk past 10 digits (e.g. "ext 42") gets dropped.
   if (n.length > 10) n = n.slice(0, 10);
   if (n.length !== 10) return "";
-  // Area code must begin 2-9 (NANP rule).
-  if (n[0] < "2") return "";
+  if (!isValidNanpPhone(n)) return "";
   return n;
 }
 
@@ -160,11 +196,14 @@ const HEADER_PATTERNS = {
   postalBuilding: [/\bcode postal immeuble\b/, /\bcode postal\b/, /\bpostal code\b/, /\bzip\b/],
   province: [/\bprovince\b/, /\betat\b/, /\bstate\b/],
   ownerName: [
-    /^proprietaire\d*_nom$/,
-    /\bproprietaire\d* nom\b/,
-    /\bowner\b/,
-    /\bnom proprio\b/,
-    /\bnom_proprio\b/,
+    /\bproprietaire\d+\s+nom\b/,
+    /\bowner\s+name\b/,
+    /\bnom\s+proprio\b/,
+  ],
+  ownerAddress: [
+    // "Propriétaire1_Adresse_clean" normalized = "proprietaire1 adresse clean".
+    /\bproprietaire\d+\s+adresse(?:\s+clean)?\b/,
+    /\bowner\s+address\b/,
   ],
   ownerStatus: [
     // After normalizeKey, "Propriétaire1_StatutImpositionScolaire" collapses
@@ -282,6 +321,7 @@ export function normalizeRow(rawRow = {}) {
 
   const ownerEntries = pickAll(entries, HEADER_PATTERNS.ownerName);
   const statusEntries = pickAll(entries, HEADER_PATTERNS.ownerStatus);
+  const ownerAddressEntries = pickAll(entries, HEADER_PATTERNS.ownerAddress);
 
   // Pair owners with their status column by index (1,2,3,4...) when possible.
   const statusByIdx = new Map();
@@ -350,6 +390,26 @@ export function normalizeRow(rawRow = {}) {
   }
   const finalBuildingAddress = buildingAddress || guessedAddress;
 
+  // Collect owner mailing addresses (dedupe by normalized form; skip entries
+  // that look like junk or aren't real addresses).
+  const ownerAddresses = [];
+  const seenOwnerAddr = new Set();
+  for (const e of ownerAddressEntries) {
+    const v = cleanText(e.value);
+    if (!v) continue;
+    // An address must contain at least one digit (civic number) and at least
+    // one street-word hint. Otherwise skip to avoid mailing labels that are
+    // purely a person's name.
+    if (!/\d/.test(v)) continue;
+    if (!/(rue|avenue|av|boulevard|blvd|chemin|route|street|st\b|road|rd\b|lane|ln\b|drive|dr\b)/i.test(v)) continue;
+    const key = normalizeKey(v);
+    if (!key || seenOwnerAddr.has(key)) continue;
+    // Never re-query the building address as an owner address.
+    if (key === normalizeKey(finalBuildingAddress)) continue;
+    seenOwnerAddr.add(key);
+    ownerAddresses.push(v);
+  }
+
   // Inferred phones mined from every cell.
   const inputPhones = extractRowPhones(source);
 
@@ -360,6 +420,7 @@ export function normalizeRow(rawRow = {}) {
     postal,
     country: "Canada",
     businessNames,
+    ownerAddresses,
     rejectedOwners,
     suppressed: suppressed.map((s) => ({ key: s.key, value: s.value })),
     civic: extractCivicNumber(finalBuildingAddress),
@@ -407,6 +468,19 @@ export function buildQueries(norm) {
       expectedAddress: addr,
       expectedCivic: norm.civic,
       expectedName: name,
+    });
+  }
+
+  // Owner mailing addresses — the owner's business is often listed at their
+  // own address (especially for Morale / gestion companies). We lookup each
+  // one as an address query, gated by the owner address's own civic number.
+  for (const ownerAddr of norm.ownerAddresses) {
+    queries.push({
+      type: "owner_address",
+      query: ownerAddr,
+      expectedAddress: ownerAddr,
+      expectedCivic: extractCivicNumber(ownerAddr),
+      expectedName: "",
     });
   }
 

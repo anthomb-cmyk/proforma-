@@ -496,26 +496,57 @@ function firstBusinessLookupName(...values) {
   return "";
 }
 
+// Phone validation mirrors services/phoneEnrichment.js on the server:
+// NANP rules (ATIS-0300051) reject area code / exchange shapes that real
+// subscriber numbers never use, plus the common "this is garbage" tells
+// (runs of identical digits, 555 outside the fictional 0100-0199 range).
+// Keeping both client and server strict is what prevents cadastre /
+// matricule / test numbers from sneaking back in after the network hop.
+const NANP_N11 = new Set(["211","311","411","511","611","711","811","911"]);
+const NANP_RESERVED_NXX = new Set(["000","999","958","959"]);
+
+function isValidNanpPhone(digits10) {
+  if (!/^\d{10}$/.test(digits10)) return false;
+  const npa = digits10.slice(0, 3);
+  const nxx = digits10.slice(3, 6);
+  const sub = digits10.slice(6, 10);
+  if (npa[0] < "2") return false;
+  if (NANP_N11.has(npa)) return false;
+  if (nxx[0] < "2") return false;
+  if (NANP_N11.has(nxx)) return false;
+  if (NANP_RESERVED_NXX.has(nxx)) return false;
+  if (nxx === "555" && !/^01\d\d$/.test(sub)) return false;
+  if (/^(\d)\1{9}$/.test(digits10)) return false;
+  if (/(\d)\1{6,}/.test(digits10)) return false;
+  return true;
+}
+
 function normalizePhoneKey(value) {
-  return String(value || "").replace(/\D+/g, "");
+  const digits = String(value || "").replace(/\D+/g, "");
+  if (!digits) return "";
+  let n = digits;
+  if (n.length >= 11 && n.startsWith("1")) n = n.slice(1);
+  if (n.length > 10) n = n.slice(0, 10);
+  if (n.length !== 10) return "";
+  if (!isValidNanpPhone(n)) return "";
+  return n;
 }
 
 function extractPhonesFromText(value) {
   const txt = String(value || "");
+  // Intentionally permissive regex — we rely on normalizePhoneKey /
+  // isValidNanpPhone below to reject garbage, not the pattern itself.
   const matches = [
-    ...(txt.match(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/g) || []),
-    ...(txt.match(/\b(?:1)?\d{10}\b/g) || []),
+    ...(txt.match(/(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b/g) || []),
+    ...(txt.match(/\b1?\d{10}\b/g) || []),
   ];
   const normalized = [];
   const seen = new Set();
   for (const raw of matches) {
     const trimmed = String(raw || "").trim();
     if (!trimmed) continue;
-    const digits = normalizePhoneKey(trimmed);
-    const isNanp = digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
-    if (!isNanp) continue;
-    const key = digits.length === 11 ? digits.slice(1) : digits;
-    if (seen.has(key)) continue;
+    const key = normalizePhoneKey(trimmed);
+    if (!key || seen.has(key)) continue;
     seen.add(key);
     normalized.push(trimmed);
   }

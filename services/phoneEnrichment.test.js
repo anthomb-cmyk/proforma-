@@ -16,6 +16,7 @@ import {
   normalizeKey,
   stringSim,
   normalizePhoneKey,
+  isValidNanpPhone,
   extractRowPhones,
   mergePhoneLists,
   normalizeRow,
@@ -77,20 +78,53 @@ test("normalizePhoneKey strips formatting and leading 1", () => {
   assert.equal(normalizePhoneKey("12345"), ""); // too short
 });
 
-test("extractRowPhones walks every cell and dedupes", () => {
+test("normalizePhoneKey rejects cadastre/matricule-shaped fake phones", () => {
+  // These are the exact patterns seen in production Leads:
+  assert.equal(normalizePhoneKey("(971) 999-9999"), "");   // 999 exchange
+  assert.equal(normalizePhoneKey("(446) 999-9999"), "");   // 999 exchange
+  assert.equal(normalizePhoneKey("(218) 999-9999"), "");   // 999 exchange
+  assert.equal(normalizePhoneKey("(719) 999-9999"), "");   // 999 exchange
+  assert.equal(normalizePhoneKey("0489999999"), "");       // starts with 0
+  assert.equal(normalizePhoneKey("14469999999"), "");      // 1 + 999 exchange
+  assert.equal(normalizePhoneKey("10140000001"), "");      // leading-0 NPA after stripping 1
+  assert.equal(normalizePhoneKey("18700000001"), "");      // 000 exchange
+  assert.equal(normalizePhoneKey("6100000001"), "");       // 000 exchange
+  assert.equal(normalizePhoneKey("0510000001"), "");       // leading 0
+  assert.equal(normalizePhoneKey("1111111111"), "");       // all same digit
+  assert.equal(normalizePhoneKey("9112223333"), "");       // 911 NPA reserved
+  assert.equal(normalizePhoneKey("4502221212"), "4502221212"); // valid
+});
+
+test("isValidNanpPhone enforces NANP structure", () => {
+  assert.ok(isValidNanpPhone("8197581571"));
+  assert.ok(isValidNanpPhone("4506432211"));
+  assert.ok(!isValidNanpPhone("0000000000"));
+  assert.ok(!isValidNanpPhone("1234567890")); // 123 NPA starts with 1
+  assert.ok(!isValidNanpPhone("4505551212")); // 555 exchange outside fiction
+  assert.ok(isValidNanpPhone("4505550123"));  // 555-0100..0199 is fiction-OK
+  assert.ok(!isValidNanpPhone("8194111234")); // 411 reserved exchange
+  assert.ok(!isValidNanpPhone("8199991234")); // 999 exchange
+});
+
+test("extractRowPhones walks every cell, dedupes, and rejects fake-shaped digits", () => {
   const row = {
     Ville: "VILLE DE VICTORIAVILLE",
     "Propriétaire1_Téléphone": "(819) 758-1571",
-    "Propriétaire2_Téléphone": "819-758-1571", // dupe
-    "Propriétaire3_Téléphone": "514 555 0199",
-    Cadastre: "2476185", // 7 digits — must NOT be read as phone
-    notes: "Call 514.555.0199 or 450 555 1212",
+    "Propriétaire2_Téléphone": "819-758-1571", // dupe — should collapse
+    "Propriétaire3_Téléphone": "514 555 0199", // 555-01XX fiction range — OK
+    "Propriétaire4_Téléphone": "(971) 999-9999", // fake (999 exchange)
+    Cadastre: "2476185",          // 7 digits, not a phone
+    Matricule: "9302-33-8020-2-000-0000", // not a phone
+    notes: "Call 514.555.0199 or 450 987 6543", // 2 numbers, second is real
+    junk_id: "10140000001",      // long id that used to pass — now rejected
   };
   const phones = extractRowPhones(row);
-  assert.equal(phones.length, 3);
+  assert.equal(phones.length, 3, `got: ${JSON.stringify(phones)}`);
   assert.ok(phones.includes("(819) 758-1571"));
   assert.ok(phones.includes("(514) 555-0199"));
-  assert.ok(phones.includes("(450) 555-1212"));
+  assert.ok(phones.includes("(450) 987-6543"));
+  assert.ok(!phones.some((p) => p.includes("999-9999")));
+  assert.ok(!phones.some((p) => /1014000/.test(p)));
 });
 
 test("mergePhoneLists dedupes across sources keeping first format", () => {
@@ -186,6 +220,63 @@ test("buildQueries produces NO city-only query for Physique rows", () => {
   assert.ok(/6 Rue Champagne/.test(qs[0].query));
   // And it must NOT be "VILLE DE VICTORIAVILLE, Qc" by itself.
   assert.ok(!/^VILLE DE VICTORIAVILLE,\s*Qc\b/.test(qs[0].query));
+});
+
+test("normalizeRow collects owner mailing addresses", () => {
+  const row = {
+    "adresses immeubles clean ": "6 Rue Champagne, Victoriaville",
+    "Propriétaire1_Nom": "Les Immeubles Hamel-Rivard Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Propriétaire1_Adresse_clean": "267 Rue Jette, St-Bruno-De-Montarville",
+    "Propriétaire2_Adresse": "9 rue de Cannes Victoriaville",
+    // Lookalike that must be ignored (no street word):
+    "Propriétaire3_Adresse": "Sherbrooke (Québec)",
+  };
+  const norm = normalizeRow(row);
+  assert.deepEqual(norm.ownerAddresses, [
+    "267 Rue Jette, St-Bruno-De-Montarville",
+    "9 rue de Cannes Victoriaville",
+  ]);
+});
+
+test("buildQueries fires for building, each business, and each owner address", () => {
+  const norm = normalizeRow({
+    "adresses immeubles clean ": "82-82 A Rue Saint-Jean-Baptiste, Victoriaville",
+    "Code Postal Immeuble": "G6P 4E5",
+    Ville: "VILLE DE VICTORIAVILLE",
+    Province: "Qc",
+    "Propriétaire1_Nom": "9463-3278 QUEBEC INC.", // numbered → rejected
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Propriétaire2_Nom": "Gestion ICQ Inc.",      // real
+    "Propriétaire2_StatutImpositionScolaire": "Morale",
+    "Propriétaire1_Adresse_clean": "547 rue Saint-Paul, Farnham",
+    "Propriétaire2_Adresse": "1459 rue Marcel-Marcotte Sherbrooke",
+  });
+  assert.deepEqual(norm.businessNames, ["Gestion ICQ Inc."]);
+  assert.equal(norm.ownerAddresses.length, 2);
+
+  const qs = buildQueries(norm);
+  const types = qs.map((q) => q.type);
+  assert.ok(types.includes("address"), "must include building-address query");
+  assert.ok(types.includes("business"), "must include business-name query");
+  assert.equal(
+    types.filter((t) => t === "owner_address").length,
+    2,
+    "must include one owner-address query per unique mailing address",
+  );
+});
+
+test("buildQueries dedupes an owner address equal to the building address", () => {
+  const norm = normalizeRow({
+    "adresses immeubles clean ": "6 Rue Champagne, Victoriaville",
+    "Propriétaire1_Nom": "Gestion X Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    // Owner mailing = building address, should NOT produce a duplicate query
+    "Propriétaire1_Adresse_clean": "6 Rue Champagne Victoriaville",
+  });
+  const qs = buildQueries(norm);
+  const ownerAddrQueries = qs.filter((q) => q.type === "owner_address");
+  assert.equal(ownerAddrQueries.length, 0);
 });
 
 test("buildQueries with no address and no company yields no queries", () => {
@@ -365,7 +456,7 @@ test("runPhoneLookupBatch: no queries => status=not_found but file phones surfac
       "adresses immeubles clean ": "6 Rue Champagne, Victoriaville",
       "Propriétaire1_Nom": "Bourque, Mathieu",
       "Propriétaire1_StatutImpositionScolaire": "Physique",
-      "Propriétaire1_Téléphone": "(819) 555-1234",
+      "Propriétaire1_Téléphone": "(819) 231-0445",
     },
   ];
   // No fetch should be called if the only query is "address" — but apiKey is
@@ -387,7 +478,7 @@ test("runPhoneLookupBatch: no queries => status=not_found but file phones surfac
   const r = results[0];
   assert.equal(r.status, "found", "row has a file phone, must be Trouvé");
   assert.equal(r.statusLabel, "Trouvé");
-  assert.deepEqual(r.inputPhones, ["(819) 555-1234"]);
+  assert.deepEqual(r.inputPhones, ["(819) 231-0445"]);
 });
 
 test("runPhoneLookupBatch: Hôtel-de-ville result is rejected by blocked_type", async () => {
