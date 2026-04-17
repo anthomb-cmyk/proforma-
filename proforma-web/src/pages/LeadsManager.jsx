@@ -27,6 +27,10 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [toast, setToast] = useState("");
   const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" });
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  // Tab toggle: "list" shows filters + virtualized lead list, "import" shows
+  // the CSV/XLSX dropzone. Matches the PhoneFinder tab pattern so the two
+  // pages feel consistent.
+  const [leadTab, setLeadTab] = useState("list");
 
   const STAGE_CFG = {
     new: { label:"Nouveau", cls:"multiple_matches" },
@@ -667,35 +671,53 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
-      <div className="card f-card">
-        <div className="f-title">Importer des leads (CSV / XLSX)</div>
-        <div className="pf-drop"
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
-          onClick={pickImportFile}
-        >
-          <div style={{fontSize:32,marginBottom:8}}>📂</div>
-          {importFile
-            ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
-            : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
-          <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Formats: CSV, XLSX · Colonnes recommandées: adresse immeuble, nom complet, entreprise</div>
-        </div>
-        {importFile && (
-          <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-            <div style={{fontSize:12,color:"var(--text2)"}}>
-              <strong>{importFile.rows.length}</strong> lignes prêtes ·{" "}
-              <button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>
-                mappage avancé (optionnel)
-              </button>
-            </div>
-            <button className="btn btn-gold" onClick={importLeads} disabled={importBusy}>
-              {importBusy ? "Import en cours…" : "Importer dans Leads"}
-            </button>
-          </div>
-        )}
-        {importError && <div className="status-note error" style={{marginTop:10}}>{importError}</div>}
+      {/* Liste / Importer tabs — mirrors PhoneFinder so both pages share the
+          same navigation pattern. The import dropzone used to sit above the
+          list and eat half the viewport; moving it into its own tab keeps
+          the list as the default, always-visible workspace. */}
+      <div className="tabs" style={{marginBottom:14}}>
+        <button className={`tab${leadTab==="list"?" active":""}`} onClick={() => setLeadTab("list")}>
+          📋 Liste ({leads.length})
+        </button>
+        <button className={`tab${leadTab==="import"?" active":""}`} onClick={() => setLeadTab("import")}>
+          📂 Importer CSV / XLSX
+        </button>
       </div>
 
+      {leadTab === "import" && (
+        <div className="card f-card">
+          <div className="f-title">Importer des leads (CSV / XLSX)</div>
+          <div className="pf-drop"
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
+            onClick={pickImportFile}
+          >
+            <div style={{fontSize:32,marginBottom:8}}>📂</div>
+            {importFile
+              ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
+              : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
+            <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Formats: CSV, XLSX · Colonnes recommandées: adresse immeuble, nom complet, entreprise</div>
+          </div>
+          {importFile && (
+            <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div style={{fontSize:12,color:"var(--text2)"}}>
+                <strong>{importFile.rows.length}</strong> lignes prêtes ·{" "}
+                <button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>
+                  mappage avancé (optionnel)
+                </button>
+              </div>
+              <button className="btn btn-gold" onClick={() => { importLeads(); setLeadTab("list"); }} disabled={importBusy}>
+                {importBusy ? "Import en cours…" : "Importer dans Leads"}
+              </button>
+            </div>
+          )}
+          {importError && <div className="status-note error" style={{marginTop:10}}>{importError}</div>}
+        </div>
+      )}
+
+      {/* Progress bar stays visible while an import is running even if the
+          user switches back to the list tab — otherwise the progress would
+          disappear as soon as the list-tab auto-switch fires. */}
       {importBusy && importProgress && (
         <div className="card" style={{padding:16}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -707,20 +729,25 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
+      {leadTab === "list" && (
       <div className="card" style={{padding:0,overflow:"hidden"}}>
-        {/* ── Filter bar ── */}
+        {/* ── Filter bar ──
+            The global `input,select,textarea{width:100%}` rule in App CSS
+            stretches each select to a full row by default. Inline
+            `width:"auto"` keeps them their natural size so the whole bar
+            lives on a single line instead of piling 5 filters vertically. */}
         <div style={{padding:"10px 14px 8px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           <input className="tb-search" style={{width:200,minWidth:140}} placeholder="🔍 Rechercher…" value={filter.search} onChange={e => setFilter(prev => ({ ...prev, search:e.target.value }))} />
-          <select style={{padding:"7px 9px",fontSize:12}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
+          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
             <option value="all">Tous les statuts</option>
             {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
           </select>
-          <select style={{padding:"7px 9px",fontSize:12}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
+          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
             <option value="all">📞 Tous</option>
             <option value="with">📞 Avec tél.</option>
             <option value="without">📞 Sans tél.</option>
           </select>
-          <select style={{padding:"7px 9px",fontSize:12}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
+          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
             <option value="all">🏢 Toutes tailles</option>
             <option value="1">1–2 unités</option>
             <option value="3">3–5 unités</option>
@@ -730,12 +757,12 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
             <option value="50">50+ unités</option>
           </select>
           {cityOptions.length > 0 && (
-            <select style={{padding:"7px 9px",fontSize:12}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
+            <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
               <option value="all">📍 Toutes villes</option>
               {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
-          <select style={{padding:"7px 9px",fontSize:12}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
+          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
             <option value="all">Appel: tous</option>
             <option value="due">Rappel dû</option>
             {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
@@ -762,7 +789,12 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
               <div style={{padding:32,textAlign:"center",color:"var(--text3)"}}>
                 <div style={{fontSize:28,marginBottom:8}}>🎯</div>
                 <div style={{fontWeight:700,marginBottom:4}}>{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
-                <div style={{fontSize:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
+                <div style={{fontSize:12,marginBottom:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
+                {leads.length === 0 && (
+                  <button className="btn btn-gold btn-sm" onClick={() => setLeadTab("import")}>
+                    📂 Importer un fichier
+                  </button>
+                )}
               </div>
             ) : (
               <VirtualList
@@ -801,6 +833,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           </div>
         </div>
       </div>
+      )}
 
       {toast && (
         <div style={{position:"fixed",bottom:24,right:24,background:"#1A7A3F",color:"#fff",padding:"12px 18px",borderRadius:10,fontWeight:700,fontSize:13,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>
