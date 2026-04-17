@@ -3967,6 +3967,46 @@ app.post("/api/ai/summarize", async (req, res) => {
 // errors to the same shape the UI has always consumed.
 const GOOGLE_PLACES_KEY = String(process.env.GOOGLE_PLACES_API_KEY || "").trim();
 
+// Process-wide Google Places cache. Persists across /api/phone-lookup calls
+// until the Railway dyno restarts or TTL expires. Two caches, one per API:
+//   - placesQueryCache:   textSearch results keyed by query string
+//   - placesDetailsCache: Details results keyed by place_id
+// A given Place's details rarely change within a day, so a 24h window strikes
+// a good balance between freshness and API-cost reduction.
+const PLACES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const PLACES_CACHE_MAX_ENTRIES = 20000;
+
+// TTL cache as a Map subclass so `options.queryCache instanceof Map` keeps
+// working in the service. Entries self-expire on access (no background sweep).
+class TtlMap extends Map {
+  constructor(ttlMs, maxEntries) {
+    super();
+    this._ttl = ttlMs;
+    this._max = maxEntries;
+  }
+  has(key) {
+    const entry = super.get(key);
+    if (!entry) return false;
+    if (entry.exp < Date.now()) { super.delete(key); return false; }
+    return true;
+  }
+  get(key) {
+    const entry = super.get(key);
+    if (!entry) return undefined;
+    if (entry.exp < Date.now()) { super.delete(key); return undefined; }
+    return entry.v;
+  }
+  set(key, value) {
+    if (super.size >= this._max && !super.has(key)) {
+      const oldestKey = super.keys().next().value;
+      if (oldestKey !== undefined) super.delete(oldestKey);
+    }
+    return super.set(key, { v: value, exp: Date.now() + this._ttl });
+  }
+}
+const placesQueryCache = new TtlMap(PLACES_CACHE_TTL_MS, PLACES_CACHE_MAX_ENTRIES);
+const placesDetailsCache = new TtlMap(PLACES_CACHE_TTL_MS, PLACES_CACHE_MAX_ENTRIES);
+
 app.post("/api/phone-lookup", async (req, res) => {
   if (!GOOGLE_PLACES_KEY) {
     return res.status(503).json({
@@ -3985,8 +4025,12 @@ app.post("/api/phone-lookup", async (req, res) => {
       options: {
         maxRows: 50,
         topN: 3,
-        perRowDelayMs: 100,
-        globalPhoneCap: 3
+        // perRowDelayMs defaults to 0 now (see phoneEnrichment.js). Google's
+        // rate limit is QPS-global; per-row padding was saving ~0 calls but
+        // costing ~5s per batch of 50 rows.
+        globalPhoneCap: 3,
+        queryCache: placesQueryCache,
+        detailsCache: placesDetailsCache,
       }
     });
     return res.json({ ok: true, results });
@@ -3994,6 +4038,17 @@ app.post("/api/phone-lookup", async (req, res) => {
     console.error("[phone-lookup] batch failed:", err);
     return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
+});
+
+// Lightweight observability endpoint — current cache sizes and TTL. Useful to
+// debug cost/hit-rate without redeploying. Safe to leave public (exposes sizes only).
+app.get("/api/phone-lookup/cache-stats", (_req, res) => {
+  res.json({
+    ok: true,
+    ttlMs: PLACES_CACHE_TTL_MS,
+    queryCache: { size: placesQueryCache.size },
+    detailsCache: { size: placesDetailsCache.size },
+  });
 });
 // ─────────────────────────────────────────────────────────────────────────────
 

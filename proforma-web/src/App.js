@@ -1,4 +1,45 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, lazy, Suspense } from "react";
+import { FixedSizeList as VirtualList } from "react-window";
+import {
+  isValidNanpPhone,
+  normalizePhoneKey,
+  mergePhoneLists,
+  extractPhonesFromRow,
+  normalizeTextKey,
+} from "./lib/phoneUtils.js";
+import { STAGES, PRIORITY } from "./lib/stages.js";
+import {
+  fmtSz, fileIco, initials, calDays, dayKey,
+  fmtCallDateTime, fmtDurationSeconds, esc, MONTHS, DAYS,
+} from "./lib/format.js";
+import { SK, load, isQuotaError, persist } from "./lib/storage.js";
+import {
+  looksLikeAddressText, hasCompanyNameHints, isLikelyPersonalLookupName,
+  sanitizeBusinessLookupName, firstBusinessLookupName,
+} from "./lib/businessName.js";
+import {
+  buildCL, createDeal, dealLabel, normalizeDeal,
+  stageColor, buildLeadIdentityKey, getLeadPhones,
+} from "./lib/dealHelpers.js";
+
+import NavIcon from "./components/NavIcon.jsx";
+import Topbar from "./components/Topbar.jsx";
+import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
+import ActivityLogger from "./components/ActivityLogger.jsx";
+// Heavy pages/viewers — code-split with React.lazy so their deps
+// (Leaflet via window.L, SheetJS via window.XLSX, and their local code)
+// only load when the corresponding view/modal is actually opened.
+const DealMap = lazy(() => import("./components/DealMap.jsx"));
+const XlsxViewer = lazy(() => import("./components/XlsxViewer.jsx"));
+import LeadFiche from "./components/LeadFiche.jsx";
+import LeadListRow, { LEAD_ROW_HEIGHT } from "./components/LeadListRow.jsx";
+
+// TODO: LeadsManager and PhoneFinder remain inline here. They pull a lot of
+// implicit helpers from App's closure and share the top-level deals/leads
+// state; extracting them cleanly requires lifting those helpers first. The
+// pure helpers already live under ./lib/*, and the simpler components live
+// under ./components/*. Next pass should peel off LeadsManager into
+// ./pages/Leads.jsx by making its dependencies explicit props.
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
@@ -365,353 +406,6 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 }
 `;
 
-const STAGES = [
-  { id: "prospection",   label: "Prospection",    color: "#6366f1", emoji: "🔍" },
-  { id: "analyse",       label: "Analyse",         color: "#f59e0b", emoji: "📊" },
-  { id: "offre",         label: "Offre déposée",   color: "#3b82f6", emoji: "📝" },
-  { id: "due_diligence", label: "Due diligence",   color: "#8b5cf6", emoji: "🔬" },
-  { id: "financement",   label: "Financement",     color: "#06b6d4", emoji: "🏦" },
-  { id: "closing",       label: "Closing",         color: "#22c55e", emoji: "🤝" },
-  { id: "perdu",         label: "Perdu",           color: "#ef4444", emoji: "✗"  },
-];
-
-const CHECKLISTS = {
-  prospection:   ["Identifier la propriété","Valider le zonage","Vérifier historique MLS","Premier contact vendeur/courtier","Évaluer le quartier"],
-  analyse:       ["Remplir le proforma","Valider loyers actuels","Analyser dépenses réelles","Calculer NOI et cap rate","Comparer ventes récentes"],
-  offre:         ["Rédiger la promesse d'achat","Définir les conditions","Déposer l'offre","Négocier la contre-offre","Confirmer l'acceptation"],
-  due_diligence: ["Commander l'inspection","Rapport environnemental","Vérifier les titres","Valider les baux","Inspecter la mécanique"],
-  financement:   ["Demande de prêt soumise","Évaluation bancaire reçue","Approbation conditionnelle","Approbation finale","SCHL si requis"],
-  closing:       ["Acte de vente signé","Virement de fonds","Remise des clés","Mise à jour assurances","Comptes de gestion ouverts"],
-  perdu:         ["Documenter les raisons","Archiver les documents"],
-};
-
-const PRIORITY = {
-  high:   { label: "Haute",   color: "#C0392B", tag: "CHAUD", cls: "pr-hot", score: 3 },
-  medium: { label: "Moyenne", color: "#B7791F", tag: "TIÈDE", cls: "pr-warm", score: 2 },
-  low:    { label: "Basse",   color: "#2563EB", tag: "FROID", cls: "pr-cold", score: 1 },
-};
-
-function buildCL(stageId) {
-  return (CHECKLISTS[stageId] || []).map((label, i) => ({ id: `${stageId}_${i}`, label, done: false }));
-}
-
-function createDeal(title, address = "", coords = null, units = "", askingPrice = "") {
-  const now = Date.now();
-  return {
-    id: `acq_${now}_${Math.random().toString(36).slice(2, 7)}`,
-    title: title || "Nouveau deal",
-    address: address || "",
-    coords: coords || null,
-    units: units || "",
-    askingPrice: askingPrice || "",
-    stage: "prospection", priority: "medium",
-    createdAt: now, updatedAt: now,
-    followUpDate: "", followUpNote: "", nextAction: "",
-    contact: { name: "", phone: "", email: "", company: "", role: "" },
-    notesDeal: "", notesVendeur: "",
-    aiDeal: "", aiVendeur: "",
-    files: [], activities: [], events: [],
-    checklists: { prospection: buildCL("prospection") },
-  };
-}
-
-function dealLabel(d) {
-  let label = d?.title || "Sans titre";
-  if (d?.units) label += ` • ${d.units} unités`;
-  if (d?.askingPrice) {
-    const n = Number(d.askingPrice);
-    const formatted = isNaN(n) ? d.askingPrice : n.toLocaleString("en-CA");
-    label += ` • ${formatted} $`;
-  }
-  return label;
-}
-
-const SK = "acq_crm_v4";
-function load() { try { const r = localStorage.getItem(SK); return r ? JSON.parse(r) : null; } catch { return null; } }
-function persist(s) { try { localStorage.setItem(SK, JSON.stringify(s)); } catch {} }
-
-function normalizeDeal(d) {
-  const lat = Number(d?.coords?.lat);
-  const lng = Number(d?.coords?.lng);
-  return {
-    ...d,
-    address: d?.address || "",
-    coords: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null,
-  };
-}
-
-function normalizeTextKey(value) {
-  return String(value || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-const COMPANY_NAME_HINT_RE = /\b(?:inc|ltee|ltd|llc|corp|corporation|compagnie|company|co|groupe|group|entreprise|business|service|services|renovation|construction|immobilier|realty|property|properties|holdings|restaurant|cafe|garage|atelier|clinic|clinique|pharmacie|hotel|motel|association|centre|center|studio|consulting|solution|solutions|tech|technologie|technologies|bureau|cabinet|banque|bank|insurance|assurance)\b/;
-const PERSON_JOINER_WORDS = new Set(["de", "du", "des", "la", "le", "les", "d", "st", "saint", "sainte", "van", "von"]);
-
-function looksLikeAddressText(value) {
-  const norm = normalizeTextKey(value);
-  if (!norm) return false;
-  return /\d/.test(norm) && /\b(rue|street|st|avenue|av|boulevard|blvd|road|rd|chemin|route|lane|ln|drive|dr|suite|unit|apt|appartement|immeuble)\b/.test(norm);
-}
-
-function hasCompanyNameHints(value) {
-  const norm = normalizeTextKey(value);
-  if (!norm) return false;
-  return COMPANY_NAME_HINT_RE.test(norm);
-}
-
-function isLikelyPersonalLookupName(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return false;
-  if (hasCompanyNameHints(raw) || looksLikeAddressText(raw)) return false;
-  if (/[&/@]/.test(raw)) return false;
-  const norm = normalizeTextKey(raw);
-  if (!norm || /\d/.test(norm)) return false;
-  const words = norm.split(" ").filter(Boolean);
-  if (words.length < 2 || words.length > 4) return false;
-  const meaningful = words.filter(word => !PERSON_JOINER_WORDS.has(word));
-  if (meaningful.length < 2) return false;
-  return meaningful.every(word => word.length >= 2 && word.length <= 24);
-}
-
-function sanitizeBusinessLookupName(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (looksLikeAddressText(raw)) return "";
-  if (/^[0-9\s().+-]+$/.test(raw)) return "";
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return "";
-  if (isLikelyPersonalLookupName(raw)) return "";
-  return raw;
-}
-
-function firstBusinessLookupName(...values) {
-  for (const value of values) {
-    const cleaned = sanitizeBusinessLookupName(value);
-    if (cleaned) return cleaned;
-  }
-  return "";
-}
-
-// Phone validation mirrors services/phoneEnrichment.js on the server:
-// NANP rules (ATIS-0300051) reject area code / exchange shapes that real
-// subscriber numbers never use, plus the common "this is garbage" tells
-// (runs of identical digits, 555 outside the fictional 0100-0199 range).
-// Keeping both client and server strict is what prevents cadastre /
-// matricule / test numbers from sneaking back in after the network hop.
-const NANP_N11 = new Set(["211","311","411","511","611","711","811","911"]);
-const NANP_RESERVED_NXX = new Set(["000","999","958","959"]);
-
-function isValidNanpPhone(digits10) {
-  if (!/^\d{10}$/.test(digits10)) return false;
-  const npa = digits10.slice(0, 3);
-  const nxx = digits10.slice(3, 6);
-  const sub = digits10.slice(6, 10);
-  if (npa[0] < "2") return false;
-  if (NANP_N11.has(npa)) return false;
-  if (nxx[0] < "2") return false;
-  if (NANP_N11.has(nxx)) return false;
-  if (NANP_RESERVED_NXX.has(nxx)) return false;
-  if (nxx === "555" && !/^01\d\d$/.test(sub)) return false;
-  if (/^(\d)\1{9}$/.test(digits10)) return false;
-  if (/(\d)\1{6,}/.test(digits10)) return false;
-  return true;
-}
-
-function normalizePhoneKey(value) {
-  const digits = String(value || "").replace(/\D+/g, "");
-  if (!digits) return "";
-  let n = digits;
-  if (n.length >= 11 && n.startsWith("1")) n = n.slice(1);
-  if (n.length > 10) n = n.slice(0, 10);
-  if (n.length !== 10) return "";
-  if (!isValidNanpPhone(n)) return "";
-  return n;
-}
-
-function extractPhonesFromText(value) {
-  const txt = String(value || "");
-  // Intentionally permissive regex — we rely on normalizePhoneKey /
-  // isValidNanpPhone below to reject garbage, not the pattern itself.
-  const matches = [
-    ...(txt.match(/(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}\b/g) || []),
-    ...(txt.match(/\b1?\d{10}\b/g) || []),
-  ];
-  const normalized = [];
-  const seen = new Set();
-  for (const raw of matches) {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) continue;
-    const key = normalizePhoneKey(trimmed);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(trimmed);
-  }
-  return normalized;
-}
-
-function mergePhoneLists(...sources) {
-  const merged = [];
-  const seen = new Set();
-  const pushOne = (value) => {
-    if (value === null || value === undefined) return;
-    if (Array.isArray(value)) { value.forEach(pushOne); return; }
-    const raw = String(value || "").trim();
-    if (!raw) return;
-    const candidates = extractPhonesFromText(raw);
-    if (!candidates.length) return;
-    candidates.forEach(phone => {
-      const key = normalizePhoneKey(phone);
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      merged.push(phone);
-    });
-  };
-  sources.forEach(pushOne);
-  return merged;
-}
-
-function extractPhonesFromRow(row) {
-  if (!row || typeof row !== "object") return [];
-  const allValues = Object.values(row || {});
-  const phoneKeyValues = Object.entries(row)
-    .filter(([key]) => {
-      const norm = normalizeTextKey(key);
-      const hasPhoneHint = /\b(phone|telephone|tel|mobile|cell|fax|numero|number)\b/.test(norm);
-      const hasAddressHint = /\b(address|adresse|postal|zip|city|ville|province|state|suite|apt|unit|immeuble)\b/.test(norm);
-      return hasPhoneHint && !hasAddressHint;
-    })
-    .map(([, value]) => value);
-  return mergePhoneLists(phoneKeyValues, allValues);
-}
-
-function getLeadPhones(lead) {
-  return mergePhoneLists(lead?.phones || [], lead?.phone, lead?.originalPhone);
-}
-
-function buildLeadIdentityKey(item = {}) {
-  const company = normalizeTextKey(item.companyName || item.inputName || item.matchedName || "");
-  const address = normalizeTextKey(item.buildingAddress || item.inputAddress || item.matchedAddress || item.address || "");
-  const contact = normalizeTextKey(item.contactName || item.leadContact || "");
-  if (!company && !address && !contact) {
-    const phone = normalizePhoneKey((item.phones || [])[0] || item.phone || "");
-    return phone ? `p:${phone}` : "";
-  }
-  return `c:${company}|a:${address}|ct:${contact}`;
-}
-
-function fmtSz(b) { return b < 1048576 ? `${Math.round(b/1024)} KB` : `${(b/1048576).toFixed(1)} MB`; }
-function fileIco(t) {
-  if (t?.includes("pdf")) return "📄";
-  if (t?.includes("image")) return "🖼️";
-  if (t?.includes("word") || t?.includes("document")) return "📝";
-  if (t?.includes("sheet") || t?.includes("excel")) return "📊";
-  return "📎";
-}
-function initials(name, fallback = "DL") {
-  const n = (name || "").trim();
-  if (!n) return fallback;
-  const parts = n.split(/\s+/).slice(0, 2);
-  return parts.map(p => p[0]?.toUpperCase() || "").join("") || fallback;
-}
-
-const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
-const DAYS   = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"];
-
-function calDays(y, m) {
-  const first = new Date(y, m, 1).getDay();
-  const dim   = new Date(y, m + 1, 0).getDate();
-  const dprev = new Date(y, m, 0).getDate();
-  const days  = [];
-  for (let i = first - 1; i >= 0; i--) days.push({ d: dprev - i, m: m - 1, y, other: true });
-  for (let i = 1; i <= dim; i++)        days.push({ d: i, m, y, other: false });
-  while (days.length < 42)              days.push({ d: days.length - dim - first + 1, m: m + 1, y, other: true });
-  return days;
-}
-function dayKey({ d, m, y }) {
-  return `${y}-${String(m + 1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-}
-
-function fmtCallDateTime(value) {
-  if (!value) return "Date inconnue";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Date inconnue";
-  return date.toLocaleString("fr-CA", { dateStyle: "short", timeStyle: "short" });
-}
-
-function fmtDurationSeconds(value) {
-  const seconds = Number(value || 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rem = seconds % 60;
-  return `${minutes}m${rem > 0 ? ` ${rem}s` : ""}`;
-}
-
-function esc(str = "") {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function stageColor(stageId) {
-  return STAGES.find(s => s.id === stageId)?.color || "#6B7280";
-}
-
-function clusterDeals(items, zoom) {
-  if (zoom >= 9) return items.map(item => ({ items:[item], lat:item.coords.lat, lng:item.coords.lng }));
-  const threshold = zoom <= 6 ? 1.1 : zoom === 7 ? 0.55 : 0.3;
-  const groups = [];
-  items.forEach((item) => {
-    const found = groups.find((g) => Math.hypot(g.lat - item.coords.lat, g.lng - item.coords.lng) <= threshold);
-    if (!found) {
-      groups.push({ items:[item], lat:item.coords.lat, lng:item.coords.lng });
-      return;
-    }
-    found.items.push(item);
-    const n = found.items.length;
-    found.lat = (found.lat * (n - 1) + item.coords.lat) / n;
-    found.lng = (found.lng * (n - 1) + item.coords.lng) / n;
-  });
-  return groups;
-}
-
-function NavIcon({ id }) {
-  if (id === "map") return <span style={{fontSize:14,lineHeight:1}}>📍</span>;
-  const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
-  if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
-  if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
-  if (id === "followups") return <svg {...common}><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>;
-  if (id === "leads") return <svg {...common}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
-  if (id === "phonefinder") return <svg {...common}><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 11.39 19a19.45 19.45 0 0 1-5.07-5.07A19.79 19.79 0 0 1 3.08 4.18 2 2 0 0 1 5.06 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L9.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
-  return <svg {...common}><path d="M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/></svg>;
-}
-
-function Topbar({ title, subtitle, overdue }) {
-  return (
-    <div className="topbar">
-      <div>
-        <div className="tb-title">{title}</div>
-        {subtitle ? <div className="tb-sub">{subtitle}</div> : null}
-      </div>
-      <div className="tb-right">
-        <input className="tb-search" placeholder="Rechercher un deal, contact..." />
-        <div className="bell" title="Notifications">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
-          {overdue > 0 && <span className="bell-badge">{overdue}</span>}
-        </div>
-        <span className="tb-user">Anthony Makeen</span>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const stored = load();
   const [deals, setDeals]         = useState((stored?.deals || []).map(normalizeDeal));
@@ -745,8 +439,39 @@ export default function App() {
   const [newAddrCoords, setNewAddrCoords] = useState(null);
   const [newUnits, setNewUnits] = useState("");
   const [newAskingPrice, setNewAskingPrice] = useState("");
+  // App-level toast for persist/quota errors (rare but user-visible when it happens).
+  const [appToast, setAppToast] = useState("");
+  const persistTimerRef = useRef(null);
 
-  useEffect(() => { persist({ deals, leads, currentId, gcalOk }); }, [deals, leads, currentId, gcalOk]);
+  // Debounce writes to localStorage: state changes during typing/drag were
+  // triggering a full JSON.stringify of the whole CRM on every keystroke.
+  // 500ms is a comfortable tradeoff — short enough that refreshes rarely
+  // lose the latest edit, long enough to coalesce bursts of updates.
+  useEffect(() => {
+    clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = setTimeout(() => {
+      persist({ deals, leads, currentId, gcalOk }, (err) => {
+        if (isQuotaError(err)) {
+          setAppToast("⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.");
+          setTimeout(() => setAppToast(""), 8000);
+        }
+      });
+    }, 500);
+    return () => clearTimeout(persistTimerRef.current);
+  }, [deals, leads, currentId, gcalOk]);
+
+  // Make sure a pending write is flushed before the tab closes.
+  useEffect(() => {
+    const flush = () => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+        persist({ deals, leads, currentId, gcalOk });
+      }
+    };
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  }, [deals, leads, currentId, gcalOk]);
 
   const current = useMemo(() => deals.find(d => d.id === currentId) || null, [deals, currentId]);
   const currentCalls = useMemo(() => {
@@ -1361,7 +1086,9 @@ export default function App() {
                       </div>
                       <div>
                         <div className="map-wrap">
-                          <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
+                          <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>Chargement de la carte…</div>}>
+                            <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
+                          </Suspense>
                         </div>
                         <div className="map-mini-foot">
                           <button className="btn btn-sm" onClick={() => setView("map")}>Voir la carte complète</button>
@@ -1485,7 +1212,9 @@ export default function App() {
               <div className="content">
                 <div className="map-layout">
                   <div className="map-wrap">
-                    <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
+                    <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>Chargement de la carte…</div>}>
+                      <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
+                    </Suspense>
                     <div className="map-overlay legend">
                       <h4>Étapes</h4>
                       {STAGES.map((stage) => (
@@ -1854,7 +1583,9 @@ export default function App() {
                               : viewing.type?.includes("image")
                               ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:"100%",display:"block",margin:"auto",objectFit:"contain",padding:16}} />
                               : (viewing.type?.includes("spreadsheet") || viewing.name?.match(/\.xlsx?$/i))
-                              ? <XlsxViewer dataUrl={viewing.dataUrl} />
+                              ? <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement du tableur…</div>}>
+                                  <XlsxViewer dataUrl={viewing.dataUrl} />
+                                </Suspense>
                               : <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
                             }
                           </div>
@@ -2020,252 +1751,35 @@ export default function App() {
           </div>
         </div>
       )}
-    </>
-  );
-}
-
-function XlsxViewer({ dataUrl }) {
-  const [sheets, setSheets] = useState(null);
-  const [activeSheet, setActiveSheet] = useState(0);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const XLSX = window.XLSX;
-    if (!XLSX) { setError("SheetJS non chargé."); return; }
-    try {
-      const base64 = dataUrl.split(",")[1];
-      const wb = XLSX.read(base64, { type: "base64", cellStyles: true });
-      const parsed = wb.SheetNames.map(name => ({
-        name,
-        rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "" }),
-        ws: wb.Sheets[name],
-      }));
-      setSheets(parsed);
-    } catch { setError("Impossible de lire le fichier Excel."); }
-  }, [dataUrl]);
-
-  if (error) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{error}</div>;
-  if (!sheets) return <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement…</div>;
-
-  const { rows, ws } = sheets[activeSheet];
-  const XLSX = window.XLSX;
-
-  // Fixed 3-panel layout matching the proforma format:
-  // Col A (idx 0) = spacer | B-E (1-4) = left | F-I (5-8) = center | J (9) = spacer | K-M (10-12) = right
-  const PANELS = [[1,2,3,4], [5,6,7,8], [10,11,12]];
-  const allPanelCols = PANELS.flat();
-
-  const encCell = (r, c) => { try { return XLSX.utils.encode_cell({ r, c }); } catch { return ""; } };
-  const getCell = (r, c) => { try { return ws[encCell(r,c)]; } catch { return undefined; } };
-  const isBold = (r, c) => { try { return getCell(r,c)?.s?.font?.bold === true; } catch { return false; } };
-  const isPercent = (r, c) => { try { const f = getCell(r,c)?.z || ""; return f.includes("%"); } catch { return false; } };
-  const cellVal = (r, c) => rows[r]?.[c] ?? "";
-  const cellStr = (r, c) => String(cellVal(r,c)).trim();
-
-  function isNum(v) {
-    if (v === "" || v == null) return false;
-    if (typeof v === "number") return true;
-    const s = String(v).replace(/[$,%\s]/g, "");
-    return s !== "" && !isNaN(Number(s));
-  }
-
-  function fmt(v, ri, c) {
-    if (v === "" || v == null) return "";
-    const n = typeof v === "number" ? v : Number(String(v).replace(/[$,%\s]/g, ""));
-    if (isNaN(n)) return String(v).trim();
-    if (isPercent(ri, c)) {
-      return (n * 100).toFixed(1).replace(/\.0$/, "") + "%";
-    }
-    if (Number.isInteger(n)) return n.toLocaleString("en-CA");
-    return n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-
-  // Classify each row: "ph" (main header), "psh" (sub-header), "spacer", or "data"
-  function rowType(ri) {
-    if (allPanelCols.every(c => cellStr(ri, c) === "")) return "spacer";
-    const b1 = PANELS[0][0]; // col B = index 1
-    const v = cellStr(ri, b1);
-    if (!v) return "data";
-    const bold = isBold(ri, b1);
-    const allCaps = v.length > 2 && v === v.toUpperCase() && /[A-Z]/.test(v);
-    if (bold && allCaps) return "ph";
-    if (bold) return "psh";
-    return "data";
-  }
-
-  // Find last meaningful row
-  let lastRow = 0;
-  for (let ri = 0; ri < rows.length; ri++) {
-    if (allPanelCols.some(c => cellStr(ri, c) !== "")) lastRow = ri;
-  }
-  const rowIndices = Array.from({ length: lastRow + 1 }, (_, i) => i);
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      {sheets.length > 1 && (
-        <div className="xlsx-tabs">
-          {sheets.map((s, i) => (
-            <button key={i} className={`btn btn-sm${i===activeSheet?" btn-gold":""}`} onClick={() => setActiveSheet(i)}>{s.name}</button>
-          ))}
+      {appToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            right: 24,
+            maxWidth: 360,
+            padding: "12px 16px",
+            background: "#1A1A1A",
+            color: "#fff",
+            borderRadius: 10,
+            boxShadow: "0 6px 24px rgba(0,0,0,0.18)",
+            fontSize: 13,
+            zIndex: 10000,
+          }}
+        >
+          {appToast}
         </div>
       )}
-      <div className="pf-wrap">
-        {PANELS.map((pcols, pi) => {
-          const hasData = rowIndices.some(ri => pcols.some(c => cellStr(ri, c) !== ""));
-          if (!hasData) return null;
-          return (
-            <div key={pi} className="pf-panel">
-              <table>
-                <tbody>
-                  {rowIndices.map(ri => {
-                    const rt = rowType(ri);
-                    if (rt === "spacer") {
-                      return <tr key={ri} className="pspacer"><td colSpan={pcols.length}></td></tr>;
-                    }
-                    if (rt === "ph" || rt === "psh") {
-                      // Show the header text from this panel, falling back to Panel 1's text
-                      const headerText = pcols.map(c => cellStr(ri, c)).find(s => s !== "") || cellStr(ri, PANELS[0][0]);
-                      return (
-                        <tr key={ri}>
-                          <td className={rt} colSpan={pcols.length}>{headerText}</td>
-                        </tr>
-                      );
-                    }
-                    return (
-                      <tr key={ri}>
-                        {pcols.map((c, ci) => {
-                          const v = cellVal(ri, c);
-                          const bold = isBold(ri, c);
-                          const cls = (ci === 0 ? "plbl" : isNum(v) ? "pnum" : "") + (bold ? " pbold" : "");
-                          return (
-                            <td key={c} className={cls.trim()}>
-                              {isNum(v) ? fmt(v, ri, c) : String(v ?? "").trim()}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </>
   );
 }
 
 const LEAD_BATCH_SIZE = 10;
 
-function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onRemove, onCreateDeal, onMarkCall, toDateTimeLocal, getPhones }) {
-  const leadPhones = getPhones(lead);
-  const fmtAssessment = (v) => {
-    if (!v) return "";
-    const n = parseFloat(String(v).replace(/[^\d.]/g, ""));
-    if (!Number.isFinite(n) || n === 0) return v;
-    return n >= 1000 ? `${(n / 1000).toFixed(0)} k$` : `${n} $`;
-  };
-  return (
-    <>
-      {/* Property card */}
-      <div style={{background:"var(--surface,#FFFDF7)",border:"1.5px solid var(--gold,#C9A84C)",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:800,color:"var(--text)",lineHeight:1.3}}>
-              🏢 {lead.buildingAddress || lead.address || <span style={{color:"var(--text3)"}}>Adresse non renseignée</span>}
-            </div>
-            {(lead.city || lead.province || lead.postalCode) && (
-              <div style={{fontSize:11,color:"var(--text2)",marginTop:3}}>
-                📍 {[lead.city, lead.province, lead.postalCode].filter(Boolean).join("  ·  ")}
-              </div>
-            )}
-          </div>
-          <div style={{display:"flex",gap:5,flexShrink:0}}>
-            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDeal?.(lead)}>Créer deal</button>}
-            {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F",fontSize:10}}>Deal lié</span>}
-            <button className="btn btn-sm btn-danger" onClick={() => onRemove(lead.id)}>✕</button>
-          </div>
-        </div>
-
-        {/* Chips */}
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
-          {lead.utilisation && <span style={{background:"#EEF2FF",color:"#3730A3",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>{lead.utilisation}</span>}
-          {lead.units > 0 && <span style={{background:"#FFF7ED",color:"#C2410C",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>{lead.units} unité{lead.units > 1 ? "s" : ""}</span>}
-          {lead.yearBuilt && <span style={{background:"#F0FDF4",color:"#166534",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>Construit {lead.yearBuilt}</span>}
-          {lead.assessment && <span style={{background:"#FFF8F0",color:"#92400E",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>Éval. {fmtAssessment(lead.assessment)}</span>}
-          {lead.lotArea && <span style={{background:"#F0F9FF",color:"#075985",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:600}}>Terrain {lead.lotArea}</span>}
-        </div>
-
-        {/* Owner / contact */}
-        <div style={{marginTop:8,borderTop:"1px solid var(--border)",paddingTop:6,display:"flex",gap:12,flexWrap:"wrap"}}>
-          {lead.companyName && <div style={{fontSize:12}}><span style={{color:"var(--text3)"}}>Propriétaire: </span><strong>{lead.companyName}</strong></div>}
-          {lead.contactName && <div style={{fontSize:12}}><span style={{color:"var(--text3)"}}>Contact: </span><strong>{lead.contactName}</strong></div>}
-          {lead.website && <a href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`} target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--blue)"}}>🌐 {lead.website.replace(/^https?:\/\//, "").split("/")[0]}</a>}
-          {lead.matchedName && lead.matchedName !== lead.companyName && <div style={{fontSize:11,color:"var(--text3)"}}>Google: {lead.matchedName}{lead.confidence > 0 ? ` · ${Math.round(lead.confidence * 100)}%` : ""}</div>}
-        </div>
-
-        {/* Phones */}
-        <div style={{marginTop:8,borderTop:"1px solid var(--border)",paddingTop:6,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          {leadPhones.length > 0 ? (
-            <>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",flex:1}}>
-                {leadPhones.map((ph, idx) => (
-                  <span key={idx} style={{background:idx===0?"var(--gold,#C9A84C)":"#F5F0E8",color:idx===0?"#fff":"var(--text)",fontWeight:700,fontSize:13,borderRadius:7,padding:"4px 10px",letterSpacing:"0.5px"}}>
-                    📞 {ph}
-                  </span>
-                ))}
-              </div>
-              <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))}>📋</button>
-            </>
-          ) : <span style={{color:"var(--text3)",fontSize:12}}>Aucun numéro</span>}
-          {lead.email && <span style={{fontSize:12,color:"var(--text2)"}}>✉ {lead.email}</span>}
-        </div>
-      </div>
-
-      {/* Call controls */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
-        <div className="f-row">
-          <div className="f-lbl">Statut lead</div>
-          <select value={lead.stage || "new"} onChange={e => onUpdate(lead.id, { stage: e.target.value })}>
-            {Object.entries(stageCfg).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
-          </select>
-        </div>
-        <div className="f-row">
-          <div className="f-lbl">Statut d'appel</div>
-          <select value={lead.callStatus || "none"} onChange={e => onUpdate(lead.id, { callStatus: e.target.value })}>
-            {Object.entries(callStatusCfg).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-          </select>
-        </div>
-        <div className="f-row">
-          <div className="f-lbl">Prochain rappel</div>
-          <input type="datetime-local" value={toDateTimeLocal(lead.nextCallAt)} onChange={e => onUpdate(lead.id, { nextCallAt: e.target.value ? new Date(e.target.value).toISOString() : "" })} />
-        </div>
-      </div>
-
-      <div style={{marginBottom:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-        <button className="btn btn-sm btn-gold" onClick={() => onMarkCall(lead)}>📞 Marquer appel maintenant</button>
-        {lead.lastCallAt && <span style={{fontSize:11,color:"var(--text2)"}}>Dernier appel: {new Date(lead.lastCallAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}</span>}
-      </div>
-
-      {/* Notes */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:8}}>
-        <div className="f-row" style={{marginBottom:0}}>
-          <div className="f-lbl">Notes générales</div>
-          <textarea style={{minHeight:90}} placeholder="Infos utiles sur ce lead…" value={lead.notes || ""} onChange={e => onUpdate(lead.id, { notes: e.target.value })} />
-        </div>
-        <div className="f-row" style={{marginBottom:0}}>
-          <div className="f-lbl">Notes d'appel</div>
-          <textarea style={{minHeight:90}} placeholder="Script, suivi d'appel, réponse obtenue…" value={lead.callNotes || ""} onChange={e => onUpdate(lead.id, { callNotes: e.target.value })} />
-        </div>
-      </div>
-      <div style={{marginTop:8,fontSize:10,color:"var(--text3)"}}>
-        Source: {lead.sourceFile || "manuelle"}{lead.createdAt ? ` · importé le ${new Date(lead.createdAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}` : ""}
-      </div>
-    </>
-  );
-}
-const LEAD_PAGE_SIZE = 120;
+// XlsxViewer, LeadFiche, LeadListRow, LEAD_ROW_HEIGHT moved to ./components/*.jsx
+// (imported at the top of this file).
 
 function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [importFile, setImportFile] = useState(null);
@@ -2277,7 +1791,6 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [toast, setToast] = useState("");
   const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" });
   const [selectedLeadId, setSelectedLeadId] = useState(null);
-  const [page, setPage] = useState(1);
 
   const STAGE_CFG = {
     new: { label:"Nouveau", cls:"multiple_matches" },
@@ -2297,7 +1810,9 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     invalid: "Numéro invalide",
   };
 
-  useEffect(() => { setPage(1); }, [filter.status, filter.search, filter.phone, filter.source, filter.linked, filter.call, filter.city, filter.units, leads.length]);
+  // Page-reset effect was needed when we did client-side pagination with a
+  // "+ de plus" button. The virtualized list renders the full filter result,
+  // so there's no page cursor to reset.
 
   function normalizeHeader(value) {
     return String(value || "")
@@ -2853,8 +2368,6 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     leads.find(lead => lead.id === selectedLeadId) || null
   ), [leads, selectedLeadId]);
 
-  const pagedLeads = filteredLeads.slice(0, page * LEAD_PAGE_SIZE);
-
   const FIELD_LABELS = {
     buildingAddress: "Adresse immeuble",
     city: "Ville",
@@ -3007,8 +2520,8 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         {/* ── Two-column body: list LEFT · fiche RIGHT ── */}
         <div style={{display:"flex",height:600,minHeight:400}}>
 
-          {/* LEFT: lead list */}
-          <div style={{width:320,minWidth:240,flexShrink:0,borderRight:"1px solid var(--border)",overflowY:"auto",background:"var(--bg,#FAF6EF)"}}>
+          {/* LEFT: lead list (virtualized so thousands of imported leads render in O(viewport)) */}
+          <div style={{width:320,minWidth:240,flexShrink:0,borderRight:"1px solid var(--border)",background:"var(--bg,#FAF6EF)"}}>
             {filteredLeads.length === 0 ? (
               <div style={{padding:32,textAlign:"center",color:"var(--text3)"}}>
                 <div style={{fontSize:28,marginBottom:8}}>🎯</div>
@@ -3016,51 +2529,15 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                 <div style={{fontSize:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
               </div>
             ) : (
-              <>
-                {pagedLeads.map((lead, i) => {
-                  const stage = STAGE_CFG[lead.stage] || STAGE_CFG.new;
-                  const lPhones = getLeadPhones(lead);
-                  const isSel = selectedLeadId === lead.id;
-                  return (
-                    <div
-                      key={lead.id || i}
-                      onClick={() => setSelectedLeadId(lead.id)}
-                      style={{
-                        padding:"9px 12px",
-                        borderBottom:"1px solid var(--border)",
-                        cursor:"pointer",
-                        background: isSel ? "#FFFBF1" : "transparent",
-                        borderLeft: isSel ? "3px solid var(--gold,#C9A84C)" : "3px solid transparent",
-                      }}
-                    >
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                        <div style={{fontWeight:700,fontSize:13,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
-                          {lead.companyName || lead.contactName || "—"}
-                        </div>
-                        <span className={"pf-status " + stage.cls} style={{fontSize:10,flexShrink:0}}>{stage.label}</span>
-                      </div>
-                      <div style={{fontSize:11,color:"var(--text2)",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        🏢 {lead.buildingAddress || "—"}
-                      </div>
-                      <div style={{display:"flex",gap:8,marginTop:3,alignItems:"center"}}>
-                        {lead.city && <span style={{fontSize:10,color:"var(--text3)"}}>📍 {lead.city}</span>}
-                        {lead.units > 0 && <span style={{fontSize:10,color:"var(--text3)"}}>{lead.units} u.</span>}
-                        {lPhones.length > 0
-                          ? <span style={{fontSize:10,color:"#166534",fontWeight:600,marginLeft:"auto"}}>📞 {lPhones[0]}</span>
-                          : <span style={{fontSize:10,color:"var(--text3)",marginLeft:"auto"}}>sans tél.</span>
-                        }
-                      </div>
-                    </div>
-                  );
-                })}
-                {pagedLeads.length < filteredLeads.length && (
-                  <div style={{padding:"10px 12px",textAlign:"center"}}>
-                    <button className="btn btn-sm" onClick={() => setPage(p => p + 1)} style={{width:"100%",fontSize:11}}>
-                      + {Math.min(LEAD_PAGE_SIZE, filteredLeads.length - pagedLeads.length)} de plus
-                    </button>
-                  </div>
-                )}
-              </>
+              <VirtualList
+                height={600}
+                width={320}
+                itemCount={filteredLeads.length}
+                itemSize={LEAD_ROW_HEIGHT}
+                itemData={{ leads: filteredLeads, selectedLeadId, onSelect: setSelectedLeadId }}
+              >
+                {LeadListRow}
+              </VirtualList>
             )}
           </div>
 
@@ -3182,6 +2659,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const [toast, setToast] = useState("");
   const [exportBusy, setExportBusy] = useState(false);
   const stopRef = useRef(false);
+  // AbortController for the current phone-lookup batch fetch so the Stop
+  // button cancels the in-flight network request instead of only stopping
+  // the next batch iteration.
+  const lookupAbortRef = useRef(null);
   const PAGE_SIZE = 100;
 
   const activeRun = useMemo(() => resultRuns.find(run => run.id === activeRunId) || null, [resultRuns, activeRunId]);
@@ -3681,11 +3162,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
       if (stopRef.current) break;
       const batch = allRows.slice(i, i + BATCH_SIZE);
+      const controller = new AbortController();
+      lookupAbortRef.current = controller;
       try {
         const resp = await fetch("/api/phone-lookup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ rows: batch }),
+          signal: controller.signal,
         });
         const data = await resp.json();
         if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
@@ -3716,8 +3200,12 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         added += found.length;
         setProgress({ done, total: allRows.length });
       } catch (err) {
+        // AbortError fires when the user clicks Stop — exit the loop silently.
+        if (err?.name === "AbortError") break;
         setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
         break;
+      } finally {
+        if (lookupAbortRef.current === controller) lookupAbortRef.current = null;
       }
     }
 
@@ -3988,7 +3476,18 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
               <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
                 ⏳ {progress.done} / {progress.total} lignes traitées
               </div>
-              <button className="btn btn-danger btn-sm" onClick={() => { stopRef.current = true; }}>⏹ Arrêter</button>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => {
+                  stopRef.current = true;
+                  // Also abort the current in-flight fetch so the stop is
+                  // immediate instead of waiting for the current batch to
+                  // finish.
+                  if (lookupAbortRef.current) lookupAbortRef.current.abort();
+                }}
+              >
+                ⏹ Arrêter
+              </button>
             </div>
             <div style={{height:8,background:"#F0E8D8",borderRadius:999,overflow:"hidden"}}>
               <div style={{height:"100%",background:"var(--gold)",borderRadius:999,width:`${Math.round((progress.done/progress.total)*100)}%`,transition:"width .3s"}} />
@@ -4330,292 +3829,6 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     </div>
   );
 }
-// ─────────────────────────────────────────────────────────────────────────────
 
-function AddressAutocomplete({ value, onChange, onSelect, placeholder, style }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const [dropRect, setDropRect] = useState(null);
-  const inputRef = useRef(null);
-  const debounceRef = useRef(null);
-
-  const fetchSuggestions = useCallback(async (query) => {
-    if (!query || query.length < 3) { setSuggestions([]); return; }
-    const q = encodeURIComponent(query);
-    try {
-      // Photon: autocomplete engine on OSM data, biased toward Quebec (Montreal coords)
-      const res = await fetch(
-        `https://photon.komoot.io/api/?q=${q}&lat=45.5088&lon=-73.5878&limit=6&lang=fr`,
-        { headers: { Accept: "application/json" } }
-      );
-      if (!res.ok) { setSuggestions([]); return; }
-      const data = await res.json();
-      const features = data?.features;
-      if (!Array.isArray(features) || features.length === 0) { setSuggestions([]); return; }
-      const results = features
-        .filter(f => {
-          // Keep only Canadian results
-          const country = f.properties?.country || "";
-          return /canada/i.test(country);
-        })
-        .map(f => {
-          const p = f.properties || {};
-          const parts = [
-            p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street || p.name || "",
-            p.city || p.town || p.village || p.county || "",
-            p.state || ""
-          ].filter(Boolean);
-          const label = parts.join(", ");
-          const [lng, lat] = f.geometry?.coordinates || [null, null];
-          return { label, lat: Number(lat), lng: Number(lng) };
-        })
-        .filter(r => r.label && Number.isFinite(r.lat));
-      setSuggestions(results);
-      if (inputRef.current && results.length > 0) {
-        const rect = inputRef.current.getBoundingClientRect();
-        setDropRect({ top: rect.bottom, left: rect.left, width: rect.width });
-      }
-    } catch {
-      setSuggestions([]);
-    }
-  }, []);
-
-  useEffect(() => () => clearTimeout(debounceRef.current), []);
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={e => {
-          onChange(e.target.value);
-          clearTimeout(debounceRef.current);
-          debounceRef.current = setTimeout(() => fetchSuggestions(e.target.value), 400);
-        }}
-        onBlur={() => setTimeout(() => setSuggestions([]), 200)}
-        placeholder={placeholder}
-        style={style}
-      />
-      {suggestions.length > 0 && dropRect && (
-        <div style={{
-          position:"fixed", top:dropRect.top, left:dropRect.left, width:dropRect.width,
-          background:"#fff", border:"1px solid #e0d9cc", borderRadius:6,
-          boxShadow:"0 4px 16px rgba(0,0,0,0.13)", zIndex:9999,
-          maxHeight:220, overflowY:"auto"
-        }}>
-          {suggestions.map((s, i) => (
-            <div key={i}
-              style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
-              onMouseDown={() => { onSelect(s); setSuggestions([]); }}
-            >
-              {s.label}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh - 140px)" }) {
-  const mapElRef = useRef(null);
-  const mapRef = useRef(null);
-  const markerLayerRef = useRef(null);
-  const fittedRef = useRef(false);
-  const [zoom, setZoom] = useState(7);
-
-  useEffect(() => {
-    const L = window.L;
-    if (!L || !mapElRef.current || mapRef.current) return;
-
-    const map = L.map(mapElRef.current, {
-      zoomControl: interactive,
-      scrollWheelZoom: interactive,
-      dragging: interactive,
-      doubleClickZoom: interactive,
-      boxZoom: interactive,
-      keyboard: interactive,
-      touchZoom: interactive,
-      attributionControl: true,
-    });
-    map.setView([46.8139, -71.2080], 7);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-      maxZoom: 19,
-    }).addTo(map);
-
-    markerLayerRef.current = L.layerGroup().addTo(map);
-    mapRef.current = map;
-    setZoom(map.getZoom());
-
-    setTimeout(() => map.invalidateSize(), 0);
-
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      markerLayerRef.current = null;
-    };
-  }, [interactive]);
-
-  useEffect(() => {
-    if (!interactive || !mapRef.current) return;
-    const map = mapRef.current;
-    const onZoom = () => setZoom(map.getZoom());
-    map.on("zoomend", onZoom);
-    return () => map.off("zoomend", onZoom);
-  }, [interactive]);
-
-  useEffect(() => {
-    const L = window.L;
-    const map = mapRef.current;
-    const layer = markerLayerRef.current;
-    if (!L || !map || !layer) return;
-
-    layer.clearLayers();
-    const safeDeals = (deals || []).filter((deal) => Number.isFinite(Number(deal?.coords?.lat)) && Number.isFinite(Number(deal?.coords?.lng)));
-    const clusters = clusterDeals(safeDeals, interactive ? zoom : 7);
-
-    clusters.forEach((group) => {
-      if (group.items.length === 1) {
-        const deal = group.items[0];
-        const color = stageColor(deal.stage);
-        const priority = PRIORITY[deal.priority || "medium"] || PRIORITY.medium;
-        const icon = L.divIcon({
-          className: "",
-          html: `<div class="map-pin" style="background:${color}"></div>`,
-          iconSize: [14, 14],
-          iconAnchor: [7, 7],
-          popupAnchor: [0, -8],
-        });
-        const marker = L.marker([group.lat, group.lng], { icon }).addTo(layer);
-        marker.bindPopup(`
-          <div class="map-popup">
-            <div class="map-popup-title">${esc(dealLabel(deal))}</div>
-            <div class="map-popup-sub">${esc(STAGES.find((s) => s.id === deal.stage)?.label || "Prospection")}</div>
-            <div class="map-popup-row">Contact: ${esc(deal.contact?.name || "N/A")}</div>
-            <div class="map-popup-row">Priorité: <span class="map-pill" style="background:${priority.color}22;color:${priority.color}">${esc(priority.label)}</span></div>
-            <div class="map-popup-row">Follow-up: ${esc(deal.followUpDate || "Non défini")}</div>
-            <button class="map-open-btn" data-open-deal="${esc(deal.id)}">Ouvrir le deal</button>
-          </div>
-        `);
-      } else {
-        const icon = L.divIcon({
-          className: "",
-          html: `<div class="map-cluster-pin" style="background:${"#C9A84C"}">${group.items.length}</div>`,
-          iconSize: [24, 24],
-          iconAnchor: [12, 12],
-        });
-        const marker = L.marker([group.lat, group.lng], { icon }).addTo(layer);
-        const rows = group.items.slice(0, 8).map((deal) => (
-          `<div class="map-popup-row">
-            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${stageColor(deal.stage)};margin-right:6px;"></span>
-            ${esc(dealLabel(deal))}
-            <button class="map-open-btn" data-open-deal="${esc(deal.id)}" style="padding:3px 7px;font-size:10px;margin-top:4px;margin-left:8px;">Ouvrir</button>
-          </div>`
-        )).join("");
-        marker.bindPopup(`
-          <div class="map-popup">
-            <div class="map-popup-title">${group.items.length} deals proches</div>
-            ${rows}
-          </div>
-        `);
-      }
-    });
-
-    if (safeDeals.length > 0) {
-      const bounds = L.latLngBounds(safeDeals.map((deal) => [Number(deal.coords.lat), Number(deal.coords.lng)]));
-      if (!interactive || !fittedRef.current) {
-        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 11 });
-        fittedRef.current = true;
-      }
-    } else if (!interactive) {
-      map.setView([46.8139, -71.2080], 7);
-    }
-
-    setTimeout(() => map.invalidateSize(), 0);
-  }, [deals, interactive, zoom]);
-
-  const onPopupAction = useCallback((event) => {
-    const target = event.target?.closest?.("[data-open-deal]");
-    if (!target) return;
-    const dealId = target.getAttribute("data-open-deal");
-    if (!dealId) return;
-    event.preventDefault();
-    onOpenDeal(dealId);
-  }, [onOpenDeal]);
-
-  const mapHeight = typeof height === "number" ? `${height}px` : height;
-
-  if (!window.L) {
-    return <div className="status-note">Leaflet n&apos;est pas chargé.</div>;
-  }
-
-  return (
-    <div onClick={onPopupAction}>
-      <div ref={mapElRef} className={`map-viewport${interactive ? "" : " mini"}`} style={{height: mapHeight}} />
-    </div>
-  );
-}
-
-function ActivityLogger({ dealId, onLog }) {
-  const [text, setText] = useState("");
-  const [formatLoading, setFormatLoading] = useState(false);
-  const [formatError, setFormatError] = useState("");
-  const QUICK = ["📞 Appel effectué","📧 Email envoyé","🤝 Rencontre faite","💰 Offre déposée","📋 Documents reçus","🔍 Inspection faite","🏦 Dossier financier soumis","✅ Condition levée"];
-
-  function splitActivityLines(value) {
-    return String(value || "")
-      .split(/\r?\n/)
-      .map(line => line.trim().replace(/^[-•*]\s*/, "").trim())
-      .filter(Boolean);
-  }
-
-  function logCurrentText() {
-    const lines = splitActivityLines(text);
-    if (!lines.length) return;
-    lines.forEach(line => onLog(dealId, line));
-    setText("");
-    setFormatError("");
-  }
-
-  async function formatActivityText() {
-    if (!text.trim()) return;
-    setFormatLoading(true);
-    setFormatError("");
-    try {
-      const res = await fetch("/api/ai/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "deal", text }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || `Erreur ${res.status}`);
-      }
-      setText(String(data.summary || "").trim());
-    } catch (err) {
-      setFormatError(String(err?.message || "Formatage impossible."));
-    } finally {
-      setFormatLoading(false);
-    }
-  }
-
-  return (
-    <div>
-      <div className="qa-wrap">
-        {QUICK.map(q => <button key={q} className="qa-btn" onClick={() => onLog(dealId, q)}>{q}</button>)}
-      </div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
-        <button className={`ai-btn${formatLoading ? " loading" : ""}`} onClick={formatActivityText}>
-          {formatLoading ? "Formatage..." : "✦ Formater la note"}
-        </button>
-        {formatError && <span style={{fontSize:11,color:"var(--red)"}}>{formatError}</span>}
-      </div>
-      <div style={{display:"flex",gap:8}}>
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="Note personnalisée…"
-          onKeyDown={e => { if (e.key === "Enter" && text.trim()) { logCurrentText(); } }} />
-        <button className="btn btn-gold" onClick={logCurrentText}>Log</button>
-      </div>
-    </div>
-  );
-}
+// AddressAutocomplete, DealMap, ActivityLogger moved to ./components/*.jsx
+// (imported at the top of this file).

@@ -291,6 +291,11 @@ const MATRICULE_RE = /^\d{4}-\d{2}-\d{4}-\d-\d{3}-\d{4}$/;
 const NUMBERED_CORP_RE = /^\d{4}-\d{4}\s*(qu[eé]bec|canada)?\s*inc\.?$/i;
 const MUNICIPAL_RE =
   /^(ville|municipalite|municipalit[eé]|mrc|regie|r[eé]gie|agglom[eé]ration|hotel de ville|h[oô]tel de ville)\b/i;
+// Emails and URLs get silently promoted to "business name" queries when the
+// Excel owner-name column is messy. These waste Places calls and return garbage;
+// reject at the junk-detection stage.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const URL_RE = /^(?:https?:\/\/|www\.)\S+$/i;
 
 export function isJunkBusinessName(v) {
   const t = cleanText(v);
@@ -299,6 +304,8 @@ export function isJunkBusinessName(v) {
   if (MATRICULE_RE.test(t)) return true;
   if (NUMBERED_CORP_RE.test(t)) return true;
   if (MUNICIPAL_RE.test(t)) return true;
+  if (EMAIL_RE.test(t)) return true;
+  if (URL_RE.test(t)) return true;
   // Pure numeric / separator garbage
   if (!/[a-z\u00c0-\u017f]/i.test(t)) return true;
   return false;
@@ -826,8 +833,20 @@ export function scoreCandidate({ query, candidate }) {
     // checked above) or if we can verify a civic mismatch (also checked above).
     // Accept anything that cleared those gates — the 50 m radius is our filter.
     if (pct < 20) return { accepted: false, confidence: pct, reason: `low_confidence:${pct}` };
+  } else if (query.type === "owner_address") {
+    // Owner mailing addresses come from messy Excel columns. Civic numbers are
+    // often missing on one side (the mailing label might be "123 Rue X" while
+    // Google returns "123 Rue X, Suite 5" or a geocoded point without civic).
+    // Be lenient: civic MISMATCH (both present, different) is still rejected
+    // by the check above. Here we only require a reasonable address similarity.
+    if ((addrSim ?? 0) < 0.4) {
+      return { accepted: false, confidence: pct, reason: `low_addr_sim:${(addrSim ?? 0).toFixed(2)}` };
+    }
+    // Floor confidence so owner-address matches without civic still surface.
+    if (pct < 30) return { accepted: false, confidence: pct, reason: `low_confidence:${pct}` };
   } else {
-    // address / owner_address query — still require civic
+    // address query — still require civic on both sides (stricter than owner_address
+    // because the expected input is a building address with a known civic number).
     if (!expectedCivic) {
       return { accepted: false, confidence: pct, reason: "address_query_requires_civic" };
     }
@@ -873,9 +892,9 @@ export function applyGlobalPhoneCap(results, cap) {
       addressesByPhone.get(k).add(normalizeKey(r.inputAddress));
     }
   }
-  const blacklisted = new Set();
+  const blacklisted = new Map(); // key → count (for observability)
   for (const [k, addrs] of addressesByPhone) {
-    if (addrs.size > cap) blacklisted.add(k);
+    if (addrs.size > cap) blacklisted.set(k, addrs.size);
   }
   if (!blacklisted.size) return results;
 
@@ -884,7 +903,7 @@ export function applyGlobalPhoneCap(results, cap) {
     const dropped = [];
     for (const p of r.onlinePhones || []) {
       const k = normalizePhoneKey(p);
-      if (k && blacklisted.has(k)) dropped.push(p);
+      if (k && blacklisted.has(k)) dropped.push({ phone: p, count: blacklisted.get(k) });
       else kept.push(p);
     }
     if (!dropped.length) return r;
@@ -894,7 +913,10 @@ export function applyGlobalPhoneCap(results, cap) {
     const rebuiltPhones = mergePhoneLists(r.fileInputPhones, kept);
     const trace = [
       ...(r.trace || []),
-      `frequency_cap_dropped:${dropped.join(",")}`,
+      // Example trace: "frequency_cap_dropped:(514) 555-0199 (seen on 7 addresses, cap=3)"
+      ...dropped.map(({ phone, count }) =>
+        `frequency_cap_dropped:${phone} (seen on ${count} addresses, cap=${cap})`,
+      ),
     ];
     const status = rebuiltPhones.length ? "found" : "not_found";
     return {
@@ -913,7 +935,7 @@ export function applyGlobalPhoneCap(results, cap) {
   });
 }
 
-async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new Map() }) {
+async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new Map(), detailsCache = new Map() }) {
   const id = idFactory();
   const norm = normalizeRow(rawRow);
   const trace = [];
@@ -970,9 +992,31 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
       }
       const top = results.slice(0, opts.topN);
       for (const raw of top) {
+        // Pre-filter: the Places "types" array comes back on the raw textSearch
+        // result, so we can reject city_hall / post_office / political places
+        // without paying for a Details call. Same for non-operational places.
+        // This saves roughly one Details call per rejected candidate.
+        const preScore = scoreCandidate({ query: q, candidate: flattenPlaceResult(raw, {}) });
+        if (!preScore.accepted && (
+          preScore.reason.startsWith("blocked_type:") ||
+          preScore.reason.startsWith("status:") ||
+          preScore.reason.startsWith("civic_mismatch:")
+        )) {
+          const flat = flattenPlaceResult(raw, {});
+          rejected.push({ ...flat, confidence: preScore.confidence, queryType: q.type, reason: preScore.reason });
+          continue;
+        }
+
         let detail = {};
         try {
-          detail = raw.place_id ? await client.details(raw.place_id) : {};
+          if (raw.place_id) {
+            if (detailsCache.has(raw.place_id)) {
+              detail = detailsCache.get(raw.place_id);
+            } else {
+              detail = await client.details(raw.place_id);
+              detailsCache.set(raw.place_id, detail);
+            }
+          }
         } catch (err) {
           trace.push(`details_error:${err.message || String(err)}`);
         }
@@ -990,11 +1034,20 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
   // candidate, try 150 m then 300 m. This catches businesses whose Google Maps
   // pin is slightly offset from the municipal cadastral coordinates.
   // The civic-number gate in scoreCandidate still rejects wrong-address results.
+  //
+  // COST OPTIMIZATION: skip the radius widening if a text-search query already
+  // returned a high-confidence name match (≥60%) — even without a phone. In that
+  // case Google found the right business but its listing simply has no phone
+  // number; widening the radius will not surface a better match, it will only
+  // return unrelated neighbours and burn 2-4 Details calls per row.
+  const hasPhoneBearingMatch = accepted.some((c) => normalizePhoneKey(c.phone));
+  const hasStrongNameMatch = accepted.some((c) => c.confidence >= 60 && c.queryType !== "nearby");
   if (
     client &&
     norm.lat !== null && norm.lng !== null &&
     !norm.utilisationIsLogement &&
-    !accepted.some((c) => normalizePhoneKey(c.phone))
+    !hasPhoneBearingMatch &&
+    !hasStrongNameMatch
   ) {
     const nearbyQ = {
       type: "nearby",
@@ -1015,7 +1068,16 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
       }
       for (const raw of nearbyResults.slice(0, opts.topN)) {
         let detail = {};
-        try { detail = raw.place_id ? await client.details(raw.place_id) : {}; } catch {}
+        try {
+          if (raw.place_id) {
+            if (detailsCache.has(raw.place_id)) {
+              detail = detailsCache.get(raw.place_id);
+            } else {
+              detail = await client.details(raw.place_id);
+              detailsCache.set(raw.place_id, detail);
+            }
+          }
+        } catch {}
         const flat = flattenPlaceResult(raw, detail);
         const score = scoreCandidate({ query: nearbyQ, candidate: flat });
         const enriched = { ...flat, confidence: score.confidence, queryType: `nearby_${radius}m` };
@@ -1041,15 +1103,22 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
   const onlinePhones = mergePhoneLists(online.map((c) => c.phone));
 
   // ── Directory fallback: Pages Jaunes + 411.ca (concurrent) ─────────────────
-  // Only fires when BOTH Google Places AND file columns returned no phone.
+  // Only fires when Google Places AND file columns returned no phone.
   // Both directories are queried in parallel to minimise latency; results are
   // merged and deduped. Each scraper fails gracefully (returns []) on any error.
+  //
+  // COST OPTIMIZATION: skip directory scraping when Places already returned a
+  // strong-confidence match (≥60%) — even without a phone. In that case we found
+  // the right business; the listing just happens to have no number. Scraping
+  // will usually return 0 results anyway and wastes 1-2 HTTP round-trips per row.
+  const hasAnyOnlineMatch = ranked.some((c) => c.confidence >= 60);
   let pjDirectoryPhones = [];
   let c411DirectoryPhones = [];
   if (
     client &&
     !onlinePhones.length &&
     !fileInputPhones.length &&
+    !hasAnyOnlineMatch &&
     norm.businessNames.length > 0 &&
     norm.city
   ) {
@@ -1134,11 +1203,18 @@ export async function runPhoneLookupBatch({
 } = {}) {
   const opts = {
     topN: options.topN ?? 3,
-    perRowDelayMs: options.perRowDelayMs ?? 80,
+    // Default 0 — Google Places rate-limits on global QPS (≈50/sec per project),
+    // not per-row. An arbitrary 80-100 ms pad per row wastes 4-5s on a 50-row
+    // batch with no real protection benefit (the API returns OVER_QUERY_LIMIT
+    // directly if we exceed, and that error is surfaced to the caller).
+    // Callers that hit rate limits in practice can still pass a non-zero value.
+    perRowDelayMs: options.perRowDelayMs ?? 0,
     globalPhoneCap: options.globalPhoneCap ?? 3,
     maxRows: options.maxRows ?? 50,
     fetchImpl: options.fetchImpl,
     offline: options.offline === true || !apiKey,
+    queryCache: options.queryCache instanceof Map ? options.queryCache : null,
+    detailsCache: options.detailsCache instanceof Map ? options.detailsCache : null,
   };
 
   if (!Array.isArray(rows) || !rows.length) {
@@ -1151,14 +1227,22 @@ export async function runPhoneLookupBatch({
     : createPlacesClient({ apiKey, fetchImpl: opts.fetchImpl });
 
   const idFactory = defaultIdFactory();
-  // Shared cache for text search results within this batch. If the same query
-  // string appears on multiple rows (e.g. the same LLC owns several properties),
-  // we hit the Places API once and reuse the raw results for subsequent rows.
-  // Nearby searches are NOT cached since each property has unique GPS coords.
-  const queryCache = new Map();
+  // Shared cache for text search results. If the same query string appears on
+  // multiple rows (e.g. the same LLC owns several properties), we hit the Places
+  // API once and reuse the raw results for subsequent rows. Nearby searches are
+  // NOT cached since each property has unique GPS coords.
+  //
+  // If the caller injected a queryCache (e.g. a server-side Map with TTL), we
+  // use that — results then persist across batches for a configurable window.
+  // Otherwise we fall back to a per-batch cache.
+  const queryCache = opts.queryCache || new Map();
+  // Same pattern for Details (placeId → detail object). A given Place's details
+  // rarely change within a day, so reusing across rows saves a call whenever two
+  // rows share a place_id (common when the same LLC owns multiple properties).
+  const detailsCache = opts.detailsCache || new Map();
   const results = [];
   for (const rawRow of capped) {
-    const r = await lookupOneRow({ rawRow, client, opts, idFactory, queryCache });
+    const r = await lookupOneRow({ rawRow, client, opts, idFactory, queryCache, detailsCache });
     results.push(r);
     if (opts.perRowDelayMs > 0 && client) {
       await new Promise((resolve) => setTimeout(resolve, opts.perRowDelayMs));

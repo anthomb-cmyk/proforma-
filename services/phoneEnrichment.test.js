@@ -996,3 +996,227 @@ test("runPhoneLookupBatch: query cache avoids duplicate text search for Logement
   // Both rows share an identical business query → only 1 text search call total.
   assert.equal(textSearchCalls, 1, `expected 1 cached text search; got ${textSearchCalls}`);
 });
+
+/* ------------------------------------------------------------------ *
+ *  Regression tests for the April 2026 cost/quality pass
+ * ------------------------------------------------------------------ */
+
+test("isJunkBusinessName rejects emails and URLs (Excel column pollution)", () => {
+  // These strings show up in real Excel exports when someone pasted contact
+  // info into the owner-name cell. Without this filter they waste a Places
+  // textSearch every time and usually return garbage.
+  assert.equal(isJunkBusinessName("contact@example.com"), true);
+  assert.equal(isJunkBusinessName("owner@acme.qc.ca"), true);
+  assert.equal(isJunkBusinessName("https://example.com"), true);
+  assert.equal(isJunkBusinessName("http://acme.qc.ca/contact"), true);
+  assert.equal(isJunkBusinessName("www.example.com"), true);
+  // Control: a real company name must still pass.
+  assert.equal(isJunkBusinessName("Les Immeubles Hamel-Rivard Inc."), false);
+});
+
+test("scoreCandidate owner_address: accepts when candidate lacks civic but addr_sim is good", () => {
+  // Owner mailing addresses often resolve to a geocoded point that Google
+  // describes without a civic number (e.g. "Rue Champagne, Victoriaville").
+  // The owner_address branch accepts these as long as addr_sim ≥ 0.4.
+  const result = scoreCandidate({
+    query: {
+      type: "owner_address",
+      query: "123 Rue Champagne, Victoriaville, Qc",
+      expectedAddress: "123 Rue Champagne, Victoriaville",
+      expectedCivic: "123",
+      expectedName: "",
+    },
+    candidate: {
+      name: "Dupont Holdings",
+      address: "Rue Champagne, Victoriaville, QC",  // no civic on Google side
+      phone: "(819) 555-0123",
+      types: ["establishment"],
+      business_status: "OPERATIONAL",
+    },
+  });
+  assert.equal(result.accepted, true, `should accept; got reason=${result.reason}`);
+  assert.ok(result.confidence >= 30, `expected floor ≥30; got ${result.confidence}`);
+});
+
+test("scoreCandidate owner_address: still rejects civic mismatch (hard safety gate)", () => {
+  const result = scoreCandidate({
+    query: {
+      type: "owner_address",
+      query: "123 Rue Champagne, Victoriaville",
+      expectedAddress: "123 Rue Champagne, Victoriaville",
+      expectedCivic: "123",
+      expectedName: "",
+    },
+    candidate: {
+      name: "Some shop",
+      address: "987 Rue Champagne, Victoriaville, QC",  // different civic
+      phone: "(819) 555-0000",
+      types: ["establishment"],
+      business_status: "OPERATIONAL",
+    },
+  });
+  assert.equal(result.accepted, false);
+  assert.match(result.reason, /civic_mismatch/);
+});
+
+test("scoreCandidate address query still rejects missing civic (unchanged behavior)", () => {
+  // Sanity: relaxing owner_address must NOT weaken the regular "address" branch.
+  const result = scoreCandidate({
+    query: {
+      type: "address",
+      query: "123 Rue Champagne, Victoriaville",
+      expectedAddress: "123 Rue Champagne, Victoriaville",
+      expectedCivic: "123",
+      expectedName: "",
+    },
+    candidate: {
+      name: "Dupont Holdings",
+      address: "Rue Champagne, Victoriaville, QC",
+      phone: "(819) 555-0123",
+      types: ["establishment"],
+      business_status: "OPERATIONAL",
+    },
+  });
+  assert.equal(result.accepted, false);
+  assert.match(result.reason, /result_missing_civic/);
+});
+
+test("runPhoneLookupBatch: blocked_type candidates are pre-rejected without a Details call", async () => {
+  // The pre-score filter on raw textSearch results means a city_hall hit
+  // should never cost a Details API call. We assert by counting /details
+  // fetches — they must be zero for this row.
+  let detailsCalls = 0;
+  const fetchImpl = stubFetch((url) => {
+    if (url.includes("textsearch")) {
+      return placesTextSearch([
+        {
+          place_id: "cityhall1",
+          name: "Hôtel de Ville",
+          formatted_address: "1 Place Notre-Dame, Victoriaville",
+          types: ["city_hall", "local_government_office"],
+        },
+      ]);
+    }
+    if (url.includes("details")) {
+      detailsCalls++;
+      return placesDetails({
+        name: "Hôtel de Ville de Victoriaville",
+        formatted_address: "1 Place Notre-Dame, Victoriaville, QC",
+        formatted_phone_number: "(819) 758-1571",
+        types: ["city_hall", "local_government_office"],
+        business_status: "OPERATIONAL",
+      });
+    }
+    return placesTextSearch([]);
+  });
+  const { results } = await runPhoneLookupBatch({
+    rows: [{
+      "adresses immeubles clean": "6 Rue Champagne, Victoriaville",
+      "Code Postal Immeuble": "G6P 5M3",
+      "Propriétaire1_Nom": "Bourque, Mathieu",
+      "Propriétaire1_StatutImpositionScolaire": "Physique",
+    }],
+    apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.equal(detailsCalls, 0, `expected 0 Details calls for a city_hall hit; got ${detailsCalls}`);
+  assert.equal(results[0].status, "not_found");
+});
+
+test("runPhoneLookupBatch: directory scrapers skip when Places returned a strong name match", async () => {
+  // The cost optimization says: if Places found a ≥60% confidence match (even
+  // without a phone), don't bother with Pages Jaunes/411.ca. Strong match =
+  // Google knows the business; the listing just happens to have no phone.
+  const calls = [];
+  const fetchImpl = stubFetch(
+    (url) => {
+      if (url.includes("textsearch")) {
+        return placesTextSearch([{
+          place_id: "biz1",
+          name: "Les Immeubles Hamel-Rivard Inc.",
+          formatted_address: "74 Rue Des Hospitalieres, Victoriaville, QC G6P 6N6",
+          types: ["real_estate_agency", "establishment"],
+        }]);
+      }
+      if (url.includes("details")) {
+        return placesDetails({
+          name: "Les Immeubles Hamel-Rivard Inc.",
+          formatted_address: "74 Rue Des Hospitalieres, Victoriaville, QC G6P 6N6",
+          formatted_phone_number: "",   // key: strong name match, no phone
+          types: ["real_estate_agency", "establishment"],
+          business_status: "OPERATIONAL",
+        });
+      }
+      return placesTextSearch([]);
+    },
+    (url) => {
+      if (url.includes("pagesjaunes")) calls.push("pj");
+      if (url.includes("411.ca") || url.includes("411ca")) calls.push("411");
+      return "";
+    }
+  );
+  const { results } = await runPhoneLookupBatch({
+    rows: [{
+      "adresses immeubles clean": "74-80 Rue Des Hospitalieres, Victoriaville",
+      "Code Postal Immeuble": "G6P 6N6",
+      "Propriétaire1_Nom": "Les Immeubles Hamel-Rivard Inc.",
+      "Propriétaire1_StatutImpositionScolaire": "Morale",
+      "Ville2": "Victoriaville",
+    }],
+    apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.ok(!calls.includes("pj"), `PJ should not have been called; calls=${calls.join(",")}`);
+  assert.ok(!calls.includes("411"), `411.ca should not have been called; calls=${calls.join(",")}`);
+  // Status is not_found because no phone surfaced, but the skip itself is the win.
+  assert.equal(results[0].status, "not_found");
+});
+
+test("runPhoneLookupBatch: progressive radius skipped when Places returned a strong name match without phone", async () => {
+  // Same optimization as above, applied to the GPS radius fallback. If Places
+  // text-search already returned a ≥60% match, widening the radius would only
+  // surface unrelated neighbours and burn Details calls.
+  const radiusCalls = [];
+  const fetchImpl = stubFetch((url) => {
+    if (url.includes("nearbysearch")) {
+      const m = url.match(/radius=(\d+)/);
+      radiusCalls.push(m ? Number(m[1]) : 0);
+      return placesTextSearch([]);
+    }
+    if (url.includes("textsearch")) {
+      // Strong name match, but no phone on the listing.
+      return placesTextSearch([{
+        place_id: "biz-strong",
+        name: "Service Fenêtres Plus",
+        formatted_address: "361 Rue Girouard, Victoriaville, QC G6P 5T9",
+        types: ["establishment"],
+      }]);
+    }
+    if (url.includes("details")) {
+      return placesDetails({
+        name: "Service Fenêtres Plus",
+        formatted_address: "361 Rue Girouard, Victoriaville, QC G6P 5T9",
+        formatted_phone_number: "",
+        types: ["establishment"],
+        business_status: "OPERATIONAL",
+      });
+    }
+    return placesTextSearch([]);
+  });
+  await runPhoneLookupBatch({
+    rows: [{
+      "adresses immeubles clean": "361 Rue Girouard, Victoriaville",
+      "Utilisation Prédominante": "Service de pose de portes",
+      "Propriétaire1_Nom": "Service Fenêtres Plus",
+      "Propriétaire1_StatutImpositionScolaire": "Morale",
+      "Code Postal Immeuble": "G6P 5T9",
+      "Lat": "46.0444924", "Long": "-71.9227064",
+    }],
+    apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0, topN: 3 },
+  });
+  // 50m might still fire as part of the initial queries[] set; what must NOT fire
+  // are the 150m / 300m widenings — strong match gates them off.
+  assert.ok(!radiusCalls.includes(150), `150m should be skipped; saw ${radiusCalls.join(",")}`);
+  assert.ok(!radiusCalls.includes(300), `300m should be skipped; saw ${radiusCalls.join(",")}`);
+});
