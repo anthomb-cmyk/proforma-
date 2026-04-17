@@ -938,6 +938,14 @@ export default function App() {
         continue;
       }
 
+      const rawRowForUnits = row?.rawRow || {};
+      const rre = (patterns) => Object.entries(rawRowForUnits).find(([k]) => patterns.some(rx => rx.test(k)))?.[1] || "";
+      const units       = parseInt(rre([/logement|unite|unit[eé]s?/i]), 10) || 0;
+      const cityFromRow = rre([/\bville\d*\b/i]);
+      const utilisation = row?.utilisation || rre([/utilisation|usage.*predominant|type.*immeuble/i]);
+      const assessment  = rre([/valeur.*fonciere|valeur.*immeuble|[eé]valuation|valeur.*totale|assess/i]);
+      const yearBuilt   = rre([/ann[eé]e.*construction|year.*built|construit/i]);
+      const lotArea     = rre([/superficie.*terrain|superficie.*lot|lot.*area/i]);
       const nextLead = {
         id: `lead_pf_${now}_${Math.random().toString(36).slice(2, 7)}`,
         createdAt,
@@ -946,7 +954,7 @@ export default function App() {
         companyName,
         contactName,
         buildingAddress,
-        city: "",
+        city: cityFromRow,
         province: "",
         postalCode: "",
         country: "Canada",
@@ -954,6 +962,11 @@ export default function App() {
         phone: phones[0] || "",
         phones,
         originalPhone: "",
+        units,
+        utilisation,
+        assessment,
+        yearBuilt,
+        lotArea,
         notes: sourceTitle ? `Importé depuis Recherche Tél. (${sourceTitle})` : "Importé depuis Recherche Tél.",
         sourceFile,
         matchedName: String(row?.matchedName || ""),
@@ -2154,7 +2167,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [importProgress, setImportProgress] = useState(null);
   const [importError, setImportError] = useState("");
   const [toast, setToast] = useState("");
-  const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all" });
+  const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" });
   const [selectedLeadId, setSelectedLeadId] = useState(null);
   const [page, setPage] = useState(1);
 
@@ -2176,7 +2189,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     invalid: "Numéro invalide",
   };
 
-  useEffect(() => { setPage(1); }, [filter.status, filter.search, filter.phone, filter.source, filter.linked, filter.call, leads.length]);
+  useEffect(() => { setPage(1); }, [filter.status, filter.search, filter.phone, filter.source, filter.linked, filter.call, filter.city, filter.units, leads.length]);
 
   function normalizeHeader(value) {
     return String(value || "")
@@ -2282,8 +2295,13 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       email: [/\bemail\b/, /\bcourriel\b/, /\bmail\b/],
       phone: [/\btelephone\b/, /\bphone\b/, /\bcell\b/, /\bmobile\b/],
       notes: [/\bnotes?\b/, /\bcomment\b/, /\bremarque\b/],
+      units:       [/\bnombre.*logement/, /\bnb.*logement/, /\bnb.*unit/, /\bnombre.*unit/, /\bnb log/, /\blogement/, /\bunite/, /\bunit[eé]s?\b/],
+      utilisation: [/\butilisation/, /\busage pr[eé]dominant/, /\bproperty.?type\b/, /\btype.*immeuble\b/, /\bzoning\b/],
+      assessment:  [/\bvaleur.*fonciere\b/, /\bvaleur.*immeuble\b/, /\b[eé]valuation\b/, /\bvaleur.*totale\b/, /\bassess/, /\bvaleur\b/],
+      yearBuilt:   [/\ann[eé]e.*construction\b/, /\bconstruction.*an\b/, /\byear.*built\b/, /\bbuilt\b/, /\bconstruit\b/],
+      lotArea:     [/\bsuperficie.*terrain\b/, /\bsuperficie.*lot\b/, /\blot.*area\b/, /\bterrain.*m2\b/, /\bsuperficie\b/],
     };
-    for (const key of ["buildingAddress", "city", "province", "postalCode", "country", "companyName", "contactName", "email", "phone", "notes"]) {
+    for (const key of ["buildingAddress", "city", "province", "postalCode", "country", "companyName", "contactName", "email", "phone", "notes", "units", "utilisation", "assessment", "yearBuilt", "lotArea"]) {
       const found = findHeader(patterns[key]);
       if (found) map[key] = found;
     }
@@ -2334,10 +2352,16 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const email = pickValue(row, colMap.email);
       const phone = pickValue(row, colMap.phone);
       const notes = pickValue(row, colMap.notes);
+      const unitsRaw    = pickValue(row, colMap.units);
+      const units       = unitsRaw ? (parseInt(unitsRaw, 10) || 0) : 0;
+      const utilisation = pickValue(row, colMap.utilisation);
+      const assessment  = pickValue(row, colMap.assessment);
+      const yearBuilt   = pickValue(row, colMap.yearBuilt);
+      const lotArea     = pickValue(row, colMap.lotArea);
       const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
       const lookupName = firstBusinessLookupName(companyName);
       const inputPhones = mergePhoneLists(phone, extractPhonesFromRow(row));
-      return { companyName, contactName, address, city, province, postalCode, country, email, phone, inputPhones, notes, buildingAddress, lookupName, rawRow: row };
+      return { companyName, contactName, address, city, province, postalCode, country, email, phone, inputPhones, notes, units, utilisation, assessment, yearBuilt, lotArea, buildingAddress, lookupName, rawRow: row };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
 
     if (!prepared.length) {
@@ -2411,6 +2435,11 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           phones: mergedPhones,
           originalPhone: item.inputPhones[0] || "",
           notes: item.notes || "",
+          units:       item.units || 0,
+          utilisation: item.utilisation || "",
+          assessment:  item.assessment || "",
+          yearBuilt:   item.yearBuilt || "",
+          lotArea:     item.lotArea || "",
           sourceFile: importFile.fileName || "",
           matchedName: looked.matchedName || "",
           matchedAddress: looked.matchedAddress || "",
@@ -2623,11 +2652,13 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   }
 
   function exportLeads() {
-    const headers = ["Entreprise", "Contact", "Adresse Immeuble", "Téléphone", "Email", "Statut", "Source", "Nom trouvé", "Adresse trouvée", "Confiance", "Site", "Date import"];
+    const headers = ["Entreprise", "Contact", "Adresse Immeuble", "Ville", "Unités", "Téléphone", "Email", "Statut", "Source", "Nom trouvé", "Adresse trouvée", "Confiance", "Site", "Date import"];
     const rows = filteredLeads.map(lead => [
       lead.companyName || "",
       lead.contactName || "",
       lead.buildingAddress || "",
+      lead.city || "",
+      lead.units || "",
       getLeadPhones(lead).join(" | "),
       lead.email || "",
       STAGE_CFG[lead.stage]?.label || lead.stage || "Nouveau",
@@ -2648,6 +2679,29 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     URL.revokeObjectURL(url);
   }
 
+  // Dynamic city list from all leads (for city filter dropdown).
+  const cityOptions = useMemo(() => {
+    const seen = new Set();
+    const cities = [];
+    for (const lead of leads) {
+      const c = String(lead.city || "").trim();
+      if (c && !seen.has(c)) { seen.add(c); cities.push(c); }
+    }
+    return cities.sort((a, b) => a.localeCompare(b, "fr"));
+  }, [leads]);
+
+  // Returns which units bucket a lead belongs to.
+  function unitsInBucket(lead, bucket) {
+    const n = Number(lead.units) || 0;
+    if (bucket === "1")  return n >= 1 && n <= 2;
+    if (bucket === "3")  return n >= 3 && n <= 5;
+    if (bucket === "6")  return n >= 6 && n <= 11;
+    if (bucket === "12") return n >= 12 && n <= 24;
+    if (bucket === "25") return n >= 25 && n <= 49;
+    if (bucket === "50") return n >= 50;
+    return true;
+  }
+
   const filteredLeads = useMemo(() => {
     let list = leads;
     if (filter.status !== "all") list = list.filter(lead => (lead.stage || "new") === filter.status);
@@ -2656,6 +2710,8 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     if (filter.source !== "all") list = list.filter(lead => leadSourceType(lead) === filter.source);
     if (filter.linked === "linked") list = list.filter(lead => Boolean(lead.linkedDealId));
     if (filter.linked === "unlinked") list = list.filter(lead => !lead.linkedDealId);
+    if (filter.city !== "all") list = list.filter(lead => (lead.city || "") === filter.city);
+    if (filter.units !== "all") list = list.filter(lead => unitsInBucket(lead, filter.units));
     if (filter.call === "due") {
       const now = Date.now();
       list = list.filter(lead => {
@@ -2669,7 +2725,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     if (filter.search) {
       const q = filter.search.toLowerCase();
       list = list.filter(lead => (
-        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""} ${lead.callNotes || ""}`
+        `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${lead.city || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""} ${lead.callNotes || ""}`
       ).toLowerCase().includes(q));
     }
     return list;
@@ -2702,6 +2758,11 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     email: "Courriel",
     phone: "Téléphone",
     notes: "Notes",
+    units:       "Nombre d'unités / logements",
+    utilisation: "Type / utilisation de l'immeuble",
+    assessment:  "Valeur foncière / évaluation",
+    yearBuilt:   "Année de construction",
+    lotArea:     "Superficie du terrain",
   };
 
   const FIELD_HINTS = {
@@ -2715,6 +2776,11 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     email: "optionnel",
     phone: "si déjà disponible",
     notes: "optionnel",
+    units:       "pour filtrer par taille d'immeuble",
+    utilisation: "affiché dans la fiche immeuble",
+    assessment:  "affiché dans la fiche immeuble",
+    yearBuilt:   "affiché dans la fiche immeuble",
+    lotArea:     "affiché dans la fiche immeuble",
   };
 
   return (
@@ -2784,60 +2850,85 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
-      <div className="card" style={{overflow:"hidden"}}>
-        <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-          <input className="tb-search" style={{width:260}} placeholder="Rechercher un lead…" value={filter.search} onChange={e => setFilter(prev => ({ ...prev, search:e.target.value }))} />
-          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
+      <div className="card" style={{display:"flex",flexDirection:"column",minHeight:0}}>
+        {/* ── Filter bar row 1: search + status + phone + units ── */}
+        <div style={{padding:"10px 14px 6px",borderBottom:"none",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <input className="tb-search" style={{flex:"1 1 200px",minWidth:160,maxWidth:320}} placeholder="🔍 Rechercher…" value={filter.search} onChange={e => setFilter(prev => ({ ...prev, search:e.target.value }))} />
+          <select style={{flex:"0 0 auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
             <option value="all">Tous les statuts</option>
             {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
           </select>
-          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
-            <option value="all">Téléphone: tous</option>
-            <option value="with">Téléphone: avec</option>
-            <option value="without">Téléphone: sans</option>
+          <select style={{flex:"0 0 auto",padding:"7px 10px",fontSize:12}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
+            <option value="all">📞 Tous</option>
+            <option value="with">📞 Avec tél.</option>
+            <option value="without">📞 Sans tél.</option>
           </select>
-          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.source} onChange={e => setFilter(prev => ({ ...prev, source:e.target.value }))}>
-            <option value="all">Source: toutes</option>
-            <option value="phonefinder">Source: Recherche Tél.</option>
-            <option value="import_file">Source: import fichier</option>
-            <option value="manual">Source: manuelle</option>
+          <select style={{flex:"0 0 auto",padding:"7px 10px",fontSize:12}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
+            <option value="all">🏢 Toutes tailles</option>
+            <option value="1">1–2 unités</option>
+            <option value="3">3–5 unités</option>
+            <option value="6">6–11 unités</option>
+            <option value="12">12–24 unités</option>
+            <option value="25">25–49 unités</option>
+            <option value="50">50+ unités</option>
           </select>
-          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
-            <option value="all">Appel: tous</option>
-            <option value="due">Appel: rappel dû</option>
-            {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>Appel: {label}</option>)}
-          </select>
-          <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.linked} onChange={e => setFilter(prev => ({ ...prev, linked:e.target.value }))}>
-            <option value="all">Liens: tous</option>
-            <option value="linked">Liens: deal lié</option>
-            <option value="unlinked">Liens: pas de deal</option>
-          </select>
-          <button className="btn btn-sm" onClick={cleanLegacyLeadPhones}>Nettoyer téléphones</button>
-          <button className="btn btn-sm" onClick={exportLeads}>⬇ Exporter</button>
-          <button className="btn btn-sm btn-danger" onClick={clearLeads}>Vider</button>
-          <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
-            {pagedLeads.length < filteredLeads.length
-              ? `${pagedLeads.length} affichés sur ${filteredLeads.length}`
-              : `${filteredLeads.length} lead${filteredLeads.length !== 1 ? "s" : ""}`}
+          {cityOptions.length > 0 && (
+            <select style={{flex:"0 0 auto",padding:"7px 10px",fontSize:12}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
+              <option value="all">📍 Toutes les villes</option>
+              {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
+          <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto",whiteSpace:"nowrap"}}>
+            {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""}
+            {leads.length !== filteredLeads.length ? ` / ${leads.length}` : ""}
           </span>
+        </div>
+        {/* ── Filter bar row 2: source + call + linked + actions ── */}
+        <div style={{padding:"0 14px 8px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <select style={{flex:"0 0 auto",padding:"6px 9px",fontSize:11}} value={filter.source} onChange={e => setFilter(prev => ({ ...prev, source:e.target.value }))}>
+            <option value="all">Source: toutes</option>
+            <option value="phonefinder">Recherche Tél.</option>
+            <option value="import_file">Import fichier</option>
+            <option value="manual">Manuelle</option>
+          </select>
+          <select style={{flex:"0 0 auto",padding:"6px 9px",fontSize:11}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
+            <option value="all">Appel: tous</option>
+            <option value="due">Rappel dû</option>
+            {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+          <select style={{flex:"0 0 auto",padding:"6px 9px",fontSize:11}} value={filter.linked} onChange={e => setFilter(prev => ({ ...prev, linked:e.target.value }))}>
+            <option value="all">Liens: tous</option>
+            <option value="linked">Deal lié</option>
+            <option value="unlinked">Pas de deal</option>
+          </select>
+          {(filter.status !== "all" || filter.phone !== "all" || filter.units !== "all" || filter.city !== "all" || filter.source !== "all" || filter.call !== "all" || filter.linked !== "all" || filter.search) && (
+            <button className="btn btn-sm" style={{fontSize:11}} onClick={() => setFilter({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" })}>✕ Réinitialiser filtres</button>
+          )}
+          <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+            <button className="btn btn-sm" onClick={cleanLegacyLeadPhones} title="Nettoyer les numéros invalides">🧹</button>
+            <button className="btn btn-sm" onClick={exportLeads}>⬇ Exporter</button>
+            <button className="btn btn-sm btn-danger" onClick={clearLeads}>Vider tout</button>
+          </div>
         </div>
 
         {filteredLeads.length === 0 ? (
           <div className="empty" style={{minHeight:220}}>
             <div className="empty-ico">🎯</div>
-            <div className="empty-title">Aucun lead</div>
-            <div className="empty-sub">Importez un fichier pour créer votre base d'appels avec immeuble + contact + téléphone.</div>
+            <div className="empty-title">{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
+            <div className="empty-sub">{leads.length === 0 ? "Importez un fichier pour créer votre base d'appels avec immeuble + contact + téléphone." : "Aucun lead ne correspond aux filtres actifs."}</div>
           </div>
         ) : (
           <>
-            <div style={{overflowX:"auto"}}>
+            {/* Scrollable table — overflow fixed by removing overflow:hidden from parent */}
+            <div style={{overflowX:"auto",overflowY:"auto",maxHeight:"55vh",minHeight:120}}>
               <table className="pf-tbl">
                 <thead>
                   <tr>
-                    <th>#</th>
+                    <th style={{width:32}}>#</th>
                     <th>Immeuble / Cible</th>
+                    <th style={{width:100}}>Ville</th>
+                    <th style={{width:60}}>Unités</th>
                     <th>Coordonnées</th>
-                    <th>Lookup</th>
                     <th>Statut</th>
                     <th>Actions</th>
                   </tr>
@@ -2853,11 +2944,15 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                         onClick={() => setSelectedLeadId(lead.id)}
                         style={{cursor:"pointer", background:isSelected ? "#FFFBF1" : undefined}}
                       >
-                        <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i + 1}</td>
+                        <td style={{color:"var(--text3)",fontSize:11}}>{i + 1}</td>
                         <td className="pf-input-col">
                           {(lead.companyName || lead.contactName) && <div className="pf-cell-name">{lead.companyName || lead.contactName}</div>}
                           {lead.buildingAddress && <div className="pf-cell-addr">🏢 {lead.buildingAddress}</div>}
                           {lead.contactName && lead.companyName && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {lead.contactName}</div>}
+                        </td>
+                        <td style={{fontSize:12,color:"var(--text2)"}}>{lead.city || <span style={{color:"var(--text3)"}}>—</span>}</td>
+                        <td style={{textAlign:"center",fontSize:12}}>
+                          {lead.units ? <span style={{fontWeight:600,color:"var(--blue)"}}>{lead.units}</span> : <span style={{color:"var(--text3)"}}>—</span>}
                         </td>
                         <td>
                           {leadPhones.length ? (
@@ -2870,15 +2965,10 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                           ) : <span style={{color:"var(--text3)"}}>—</span>}
                           {lead.email && <div style={{fontSize:11,color:"var(--text2)",marginTop:2}}>{lead.email}</div>}
                         </td>
-                        <td className="pf-match-col">
-                          {lead.matchedName && <div className="pf-cell-name">{lead.matchedName}</div>}
-                          {lead.matchedAddress && <div className="pf-cell-addr">{lead.matchedAddress}</div>}
-                          {!lead.matchedName && !lead.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
-                        </td>
                         <td>
-                          <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-start"}}>
+                          <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-start"}}>
                             <span className={`pf-status ${stage.cls}`}>{stage.label}</span>
-                            <select style={{width:130,padding:"5px 7px",fontSize:11}} value={lead.stage || "new"} onClick={e => e.stopPropagation()} onChange={e => updateLead(lead.id, { stage: e.target.value })}>
+                            <select style={{width:120,padding:"4px 6px",fontSize:11}} value={lead.stage || "new"} onClick={e => e.stopPropagation()} onChange={e => updateLead(lead.id, { stage: e.target.value })}>
                               {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
                             </select>
                           </div>
@@ -2886,9 +2976,9 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                         <td>
                           <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                             <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setSelectedLeadId(lead.id); }}>Ouvrir</button>
-                            {leadPhones.length > 0 && <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(leadPhones.join(" / ")); }}>📋</button>}
-                            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={(e) => { e.stopPropagation(); onCreateDealFromLead?.(lead); }}>Créer deal</button>}
-                            {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F"}}>Deal lié</span>}
+                            {leadPhones.length > 0 && <button className="btn btn-sm" title="Copier" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(leadPhones.join(" / ")); }}>📋</button>}
+                            {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={(e) => { e.stopPropagation(); onCreateDealFromLead?.(lead); }}>Deal</button>}
+                            {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F",fontSize:10}}>Lié</span>}
                             <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); removeLead(lead.id); }}>✕</button>
                           </div>
                         </td>
@@ -2899,7 +2989,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
               </table>
             </div>
             {pagedLeads.length < filteredLeads.length && (
-              <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
+              <div style={{padding:"10px 14px",borderTop:"1px solid var(--border)",textAlign:"center",flexShrink:0}}>
                 <button className="btn" onClick={() => setPage(p => p + 1)}>
                   Afficher {Math.min(LEAD_PAGE_SIZE, filteredLeads.length - pagedLeads.length)} de plus ({filteredLeads.length - pagedLeads.length} restants)
                 </button>
@@ -2910,87 +3000,186 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       </div>
 
       <div className="card f-card">
-        <div className="f-title">Fiche lead (section Leads)</div>
+        <div className="f-title">Fiche lead</div>
         {!selectedLead ? (
           <div className="status-note">Sélectionnez un lead dans la liste pour gérer les notes d'appel et le suivi.</div>
-        ) : (
-          <>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
-              <div>
-                <div style={{fontSize:16,fontWeight:700,color:"var(--text)"}}>{selectedLead.companyName || selectedLead.contactName || "Lead"}</div>
-                {selectedLead.buildingAddress && <div style={{fontSize:12,color:"var(--text2)",marginTop:2}}>🏢 {selectedLead.buildingAddress}</div>}
-                <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>
-                  Source: {selectedLead.sourceFile || "manuelle"}{selectedLead.createdAt ? ` · importé le ${new Date(selectedLead.createdAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}` : ""}
+        ) : (() => {
+          const leadPhones = getLeadPhones(selectedLead);
+          const fmtAssessment = (v) => {
+            if (!v) return "";
+            const n = parseFloat(String(v).replace(/[^\d.]/g, ""));
+            if (!Number.isFinite(n) || n === 0) return v;
+            return n >= 1000 ? `${(n / 1000).toFixed(0)} k$` : `${n} $`;
+          };
+          return (
+            <>
+              {/* ── Property card ──────────────────────────────────────────── */}
+              <div style={{background:"var(--surface,#FFFDF7)",border:"1.5px solid var(--gold,#C9A84C)",borderRadius:10,padding:"14px 16px",marginBottom:14}}>
+                {/* Address block */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:800,color:"var(--text)",lineHeight:1.3}}>
+                      🏢 {selectedLead.buildingAddress || selectedLead.address || <span style={{color:"var(--text3)"}}>Adresse non renseignée</span>}
+                    </div>
+                    {(selectedLead.city || selectedLead.province || selectedLead.postalCode) && (
+                      <div style={{fontSize:12,color:"var(--text2)",marginTop:3}}>
+                        📍 {[selectedLead.city, selectedLead.province, selectedLead.postalCode].filter(Boolean).join("  ·  ")}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
+                    {!selectedLead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(selectedLead)}>Créer deal</button>}
+                    {selectedLead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F"}}>Deal lié</span>}
+                  </div>
+                </div>
+
+                {/* Property details chips */}
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:10}}>
+                  {selectedLead.utilisation && (
+                    <span style={{background:"#EEF2FF",color:"#3730A3",borderRadius:6,padding:"3px 9px",fontSize:12,fontWeight:600}}>
+                      {selectedLead.utilisation}
+                    </span>
+                  )}
+                  {selectedLead.units > 0 && (
+                    <span style={{background:"#FFF7ED",color:"#C2410C",borderRadius:6,padding:"3px 9px",fontSize:12,fontWeight:600}}>
+                      {selectedLead.units} unité{selectedLead.units > 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {selectedLead.yearBuilt && (
+                    <span style={{background:"#F0FDF4",color:"#166534",borderRadius:6,padding:"3px 9px",fontSize:12,fontWeight:600}}>
+                      Construit {selectedLead.yearBuilt}
+                    </span>
+                  )}
+                  {selectedLead.assessment && (
+                    <span style={{background:"#FFF8F0",color:"#92400E",borderRadius:6,padding:"3px 9px",fontSize:12,fontWeight:600}}>
+                      Éval. {fmtAssessment(selectedLead.assessment)}
+                    </span>
+                  )}
+                  {selectedLead.lotArea && (
+                    <span style={{background:"#F0F9FF",color:"#075985",borderRadius:6,padding:"3px 9px",fontSize:12,fontWeight:600}}>
+                      Terrain {selectedLead.lotArea}
+                    </span>
+                  )}
+                </div>
+
+                {/* Owner / contact line */}
+                <div style={{marginTop:10,borderTop:"1px solid var(--border)",paddingTop:8,display:"flex",gap:16,flexWrap:"wrap"}}>
+                  {selectedLead.companyName && (
+                    <div style={{fontSize:12}}>
+                      <span style={{color:"var(--text3)"}}>Propriétaire: </span>
+                      <strong style={{color:"var(--text)"}}>{selectedLead.companyName}</strong>
+                    </div>
+                  )}
+                  {selectedLead.contactName && (
+                    <div style={{fontSize:12}}>
+                      <span style={{color:"var(--text3)"}}>Contact: </span>
+                      <strong style={{color:"var(--text)"}}>{selectedLead.contactName}</strong>
+                    </div>
+                  )}
+                  {selectedLead.website && (
+                    <div style={{fontSize:12}}>
+                      <a href={selectedLead.website.startsWith("http") ? selectedLead.website : `https://${selectedLead.website}`} target="_blank" rel="noreferrer" style={{color:"var(--blue)"}}>
+                        🌐 {selectedLead.website.replace(/^https?:\/\//, "").split("/")[0]}
+                      </a>
+                    </div>
+                  )}
+                  {selectedLead.matchedName && selectedLead.matchedName !== selectedLead.companyName && (
+                    <div style={{fontSize:11,color:"var(--text3)"}}>
+                      Google: {selectedLead.matchedName}
+                      {selectedLead.confidence > 0 && ` · ${Math.round(selectedLead.confidence * 100)}%`}
+                    </div>
+                  )}
+                </div>
+
+                {/* Phone numbers */}
+                <div style={{marginTop:10,borderTop:"1px solid var(--border)",paddingTop:8,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                  {leadPhones.length > 0 ? (
+                    <>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",flex:1}}>
+                        {leadPhones.map((ph, idx) => (
+                          <span key={idx} style={{
+                            background: idx === 0 ? "var(--gold,#C9A84C)" : "#F5F0E8",
+                            color: idx === 0 ? "#fff" : "var(--text)",
+                            fontWeight: 700, fontSize: 13,
+                            borderRadius: 7, padding: "4px 11px",
+                            letterSpacing: "0.5px",
+                          }}>
+                            📞 {ph}
+                          </span>
+                        ))}
+                      </div>
+                      <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))}>📋 Copier</button>
+                    </>
+                  ) : (
+                    <span style={{color:"var(--text3)",fontSize:12}}>Aucun numéro de téléphone</span>
+                  )}
+                  {selectedLead.email && (
+                    <span style={{fontSize:12,color:"var(--text2)"}}>✉ {selectedLead.email}</span>
+                  )}
                 </div>
               </div>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {getLeadPhones(selectedLead).length > 0 && (
-                  <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(getLeadPhones(selectedLead).join(" / "))}>📋 Copier numéros</button>
+
+              {/* ── Call controls ─────────────────────────────────────────── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
+                <div className="f-row">
+                  <div className="f-lbl">Statut lead</div>
+                  <select value={selectedLead.stage || "new"} onChange={e => updateLead(selectedLead.id, { stage: e.target.value })}>
+                    {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
+                  </select>
+                </div>
+                <div className="f-row">
+                  <div className="f-lbl">Statut d'appel</div>
+                  <select value={selectedLead.callStatus || "none"} onChange={e => updateLead(selectedLead.id, { callStatus: e.target.value })}>
+                    {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+                <div className="f-row">
+                  <div className="f-lbl">Prochain rappel</div>
+                  <input
+                    type="datetime-local"
+                    value={toDateTimeLocal(selectedLead.nextCallAt)}
+                    onChange={e => updateLead(selectedLead.id, { nextCallAt: e.target.value ? new Date(e.target.value).toISOString() : "" })}
+                  />
+                </div>
+              </div>
+
+              <div style={{marginBottom:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                <button className="btn btn-sm btn-gold" onClick={() => markCallNow(selectedLead)}>📞 Marquer appel maintenant</button>
+                {selectedLead.lastCallAt && (
+                  <span style={{fontSize:11,color:"var(--text2)"}}>
+                    Dernier appel: {new Date(selectedLead.lastCallAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}
+                  </span>
                 )}
-                {!selectedLead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDealFromLead?.(selectedLead)}>Créer deal</button>}
               </div>
-            </div>
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
-              <div className="f-row">
-                <div className="f-lbl">Statut lead</div>
-                <select value={selectedLead.stage || "new"} onChange={e => updateLead(selectedLead.id, { stage: e.target.value })}>
-                  {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
-                </select>
+              {/* ── Notes ─────────────────────────────────────────────────── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:10}}>
+                <div className="f-row" style={{marginBottom:0}}>
+                  <div className="f-lbl">Notes générales</div>
+                  <textarea
+                    style={{minHeight:100}}
+                    placeholder="Infos utiles sur ce lead (proprio, contexte, objections...)"
+                    value={selectedLead.notes || ""}
+                    onChange={e => updateLead(selectedLead.id, { notes: e.target.value })}
+                  />
+                </div>
+                <div className="f-row" style={{marginBottom:0}}>
+                  <div className="f-lbl">Notes d'appel</div>
+                  <textarea
+                    style={{minHeight:100}}
+                    placeholder="Script, suivi d'appel, réponse obtenue..."
+                    value={selectedLead.callNotes || ""}
+                    onChange={e => updateLead(selectedLead.id, { callNotes: e.target.value })}
+                  />
+                </div>
               </div>
-              <div className="f-row">
-                <div className="f-lbl">Statut d'appel</div>
-                <select value={selectedLead.callStatus || "none"} onChange={e => updateLead(selectedLead.id, { callStatus: e.target.value })}>
-                  {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                </select>
-              </div>
-              <div className="f-row">
-                <div className="f-lbl">Prochain rappel</div>
-                <input
-                  type="datetime-local"
-                  value={toDateTimeLocal(selectedLead.nextCallAt)}
-                  onChange={e => updateLead(selectedLead.id, { nextCallAt: e.target.value ? new Date(e.target.value).toISOString() : "" })}
-                />
-              </div>
-            </div>
 
-            <div style={{marginTop:8,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <button className="btn btn-sm btn-gold" onClick={() => markCallNow(selectedLead)}>📞 Marquer appel maintenant</button>
-              {selectedLead.lastCallAt && (
-                <span style={{fontSize:11,color:"var(--text2)"}}>
-                  Dernier appel: {new Date(selectedLead.lastCallAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}
-                </span>
-              )}
-            </div>
-
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:10,marginTop:10}}>
-              <div className="f-row" style={{marginBottom:0}}>
-                <div className="f-lbl">Notes générales</div>
-                <textarea
-                  style={{minHeight:110}}
-                  placeholder="Infos utiles sur ce lead (proprio, contexte, objections...)"
-                  value={selectedLead.notes || ""}
-                  onChange={e => updateLead(selectedLead.id, { notes: e.target.value })}
-                />
+              <div style={{marginTop:8,fontSize:11,color:"var(--text3)"}}>
+                Source: {selectedLead.sourceFile || "manuelle"}{selectedLead.createdAt ? ` · importé le ${new Date(selectedLead.createdAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}` : ""}
               </div>
-              <div className="f-row" style={{marginBottom:0}}>
-                <div className="f-lbl">Notes d'appel</div>
-                <textarea
-                  style={{minHeight:110}}
-                  placeholder="Script, suivi d'appel, réponse obtenue..."
-                  value={selectedLead.callNotes || ""}
-                  onChange={e => updateLead(selectedLead.id, { callNotes: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div style={{marginTop:10,fontSize:12,color:"var(--text2)"}}>
-              <strong>Contacts:</strong>{" "}
-              {getLeadPhones(selectedLead).length > 0 ? getLeadPhones(selectedLead).join(" · ") : "Aucun numéro"}
-              {selectedLead.email ? ` · ${selectedLead.email}` : ""}
-            </div>
-          </>
-        )}
+            </>
+          );
+        })()}
       </div>
 
       {toast && (
