@@ -18,6 +18,7 @@ import {
   normalizePhoneKey,
   isValidNanpPhone,
   extractRowPhones,
+  extractRowPhonesByColumn,
   mergePhoneLists,
   normalizeRow,
   buildQueries,
@@ -33,11 +34,12 @@ import {
  *  Helpers
  * ------------------------------------------------------------------ */
 
-function stubFetch(handler) {
+// stubFetch supports both .json() (for Places API) and .text() (for directory scraping).
+// Pass an optional second handler for HTML responses; defaults to empty string.
+function stubFetch(jsonHandler, textHandler) {
   return async (url) => ({
-    async json() {
-      return handler(String(url));
-    },
+    async json() { return jsonHandler(String(url)); },
+    async text() { return textHandler ? textHandler(String(url)) : ""; },
   });
 }
 
@@ -481,6 +483,190 @@ test("runPhoneLookupBatch: no queries => status=not_found but file phones surfac
   assert.deepEqual(r.inputPhones, ["(819) 231-0445"]);
 });
 
+// ─── New feature tests ──────────────────────────────────────────────────────
+
+test("extractRowPhonesByColumn: first column wins for the same phone", () => {
+  const row = {
+    "Propriétaire1_Téléphone": "(819) 758-0387",
+    "Propriétaire2_Téléphone": "(819) 758-0387",  // duplicate
+    "Propriétaire3_Téléphone": "(819) 389-1202",
+  };
+  const map = extractRowPhonesByColumn(row);
+  // 8197580387 → first column
+  assert.equal(map["8197580387"], "Propriétaire1_Téléphone");
+  // 8193891202 → its own column
+  assert.equal(map["8193891202"], "Propriétaire3_Téléphone");
+});
+
+test("extractRowPhonesByColumn: ignores junk values that aren't phones", () => {
+  const row = {
+    "Cadastre": "6192657",
+    "Matricule": "9401-65-8100-4-000-0000",
+    "Propriétaire1_Téléphone": "(819) 758-0387",
+  };
+  const map = extractRowPhonesByColumn(row);
+  assert.equal(Object.keys(map).length, 1);
+  assert.equal(map["8197580387"], "Propriétaire1_Téléphone");
+});
+
+test("normalizeRow: extracts lat/lng and detects residential isResidential=true", () => {
+  const row = {
+    "adresses immeubles clean": "10 Rue Saint-Philippe, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Vaugeois, Francis",
+    "Propriétaire1_StatutImpositionScolaire": "Physique",
+    "Lat": "46.0575354",
+    "Long": "-71.9637039",
+  };
+  const norm = normalizeRow(row);
+  assert.equal(norm.isResidential, true);
+  assert.equal(norm.utilisationIsLogement, true);
+  assert.equal(norm.lat, 46.0575354);
+  assert.equal(norm.lng, -71.9637039);
+});
+
+test("normalizeRow: Morale owner in Logement row → isResidential=false", () => {
+  const row = {
+    "adresses immeubles clean": "121 Rue Saint-Jean-Baptiste, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Immeubles Boissonneault Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Lat": "46.0564907",
+    "Long": "-71.9518089",
+  };
+  const norm = normalizeRow(row);
+  assert.equal(norm.utilisationIsLogement, true);
+  assert.equal(norm.isResidential, false); // Morale owner → should look up
+  assert.ok(!isNaN(norm.lat));
+});
+
+test("normalizeRow: commercial property → isResidential=false", () => {
+  const row = {
+    "adresses immeubles clean": "361 Rue Girouard, Victoriaville",
+    "Utilisation Prédominante": "Immeuble commercial",
+    "Propriétaire1_Nom": "GESTION CML 2008 INC.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Lat": "46.0444924",
+    "Long": "-71.9227064",
+  };
+  const norm = normalizeRow(row);
+  assert.equal(norm.utilisationIsLogement, false);
+  assert.equal(norm.isResidential, false);
+});
+
+test("buildQueries: nearby query prepended for non-logement row with GPS", () => {
+  const norm = {
+    buildingAddress: "361 Rue Girouard, Victoriaville",
+    city: "Victoriaville", province: "Qc", postal: "G6P 5T9", country: "Canada",
+    businessNames: ["GESTION CML 2008 INC."],
+    ownerAddresses: [],
+    civic: "361",
+    lat: 46.0444924, lng: -71.9227064,
+    utilisationIsLogement: false,
+  };
+  const queries = buildQueries(norm);
+  assert.equal(queries[0].type, "nearby", "nearby should be first");
+  assert.equal(queries[0].lat, 46.0444924);
+  assert.ok(queries.some(q => q.type === "address"));
+  assert.ok(queries.some(q => q.type === "business"));
+});
+
+test("buildQueries: NO nearby query for logement row even with GPS", () => {
+  const norm = {
+    buildingAddress: "10 Rue Saint-Philippe, Victoriaville",
+    city: "Victoriaville", province: "Qc", postal: "G6P 3L1", country: "Canada",
+    businessNames: [],
+    ownerAddresses: [],
+    civic: "10",
+    lat: 46.0575354, lng: -71.9637039,
+    utilisationIsLogement: true,
+  };
+  const queries = buildQueries(norm);
+  assert.ok(!queries.some(q => q.type === "nearby"), "logement should not use nearby");
+});
+
+test("runPhoneLookupBatch: residential+physique row skips API, returns file phones", async () => {
+  let apiCallCount = 0;
+  const fetchImpl = stubFetch(() => {
+    apiCallCount++;
+    return placesTextSearch([]);
+  });
+  const rows = [{
+    "adresses immeubles clean": "10 Rue Saint-Philippe, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Vaugeois, Francis",
+    "Propriétaire1_StatutImpositionScolaire": "Physique",
+    "Propriétaire1_Téléphone": "(819) 758-0387",
+    "Lat": "46.0575354",
+    "Long": "-71.9637039",
+  }];
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.equal(apiCallCount, 0, "no API calls for residential+physique");
+  assert.equal(results[0].status, "found");
+  assert.equal(results[0].inputPhones[0], "(819) 758-0387");
+  assert.ok(results[0].trace.some(t => t.includes("residential")));
+});
+
+test("runPhoneLookupBatch: nearby search fires for non-logement row", async () => {
+  const calls = [];
+  const fetchImpl = stubFetch((url) => {
+    calls.push(url.includes("nearbysearch") ? "nearby" : url.includes("textsearch") ? "text" : "details");
+    if (url.includes("nearbysearch")) {
+      return placesTextSearch([{
+        place_id: "biz1", name: "Gestion CML", formatted_address: "361 Rue Girouard, Victoriaville",
+        types: ["establishment"], business_status: "OPERATIONAL",
+      }]);
+    }
+    if (url.includes("details")) {
+      return placesDetails({
+        name: "Gestion CML 2008 Inc.",
+        formatted_address: "361 Rue Girouard, Victoriaville, QC G6P 5T9",
+        formatted_phone_number: "(819) 555-0155",
+        types: ["establishment"], business_status: "OPERATIONAL",
+      });
+    }
+    return placesTextSearch([]);
+  });
+  const rows = [{
+    "adresses immeubles clean": "361 Rue Girouard, Victoriaville",
+    "Utilisation Prédominante": "Immeuble commercial",
+    "Propriétaire1_Nom": "GESTION CML 2008 INC.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Code Postal Immeuble": "G6P 5T9",
+    "Lat": "46.0444924",
+    "Long": "-71.9227064",
+  }];
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0, topN: 3 },
+  });
+  assert.ok(calls.includes("nearby"), "nearby search should have been called");
+  assert.equal(results[0].status, "found");
+});
+
+test("runPhoneLookupBatch: filePhoneColumns maps phones to their Excel column", async () => {
+  const rows = [{
+    "adresses immeubles clean": "121 Rue Saint-Jean-Baptiste, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Immeubles Boissonneault Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Propriétaire3_Téléphone": "(819) 389-1202",
+    "Lat": "46.0564907",
+    "Long": "-71.9518089",
+  }];
+  const fetchImpl = stubFetch(() => placesTextSearch([]));
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  const r = results[0];
+  assert.equal(r.status, "found");
+  assert.equal(r.filePhoneColumns["8193891202"], "Propriétaire3_Téléphone");
+});
+
 test("runPhoneLookupBatch: Hôtel-de-ville result is rejected by blocked_type", async () => {
   const rows = [
     {
@@ -605,4 +791,152 @@ test("runPhoneLookupBatch: multi-row frequency cap scrubs a shared public number
     assert.equal(r.status, "not_found");
     assert.ok(r.trace.some((t) => t.startsWith("frequency_cap_dropped:")));
   }
+});
+
+// ─── Query strategy tests ────────────────────────────────────────────────────
+
+test("buildQueries: Logement row uses city-only business query (no building address)", () => {
+  const norm = {
+    buildingAddress: "121 Rue Saint-Jean-Baptiste, Victoriaville",
+    city: "Victoriaville", province: "Qc", postal: "G6P 4E9", country: "Canada",
+    businessNames: ["Immeubles Boissonneault Inc."],
+    ownerAddresses: [],
+    civic: "121",
+    lat: null, lng: null,
+    utilisationIsLogement: true,
+  };
+  const queries = buildQueries(norm);
+  // No address-only query for logement
+  assert.ok(!queries.some(q => q.type === "address"), "no address query for logement");
+  const bq = queries.find(q => q.type === "business");
+  assert.ok(bq, "business query should exist");
+  // Query should NOT contain the building address (121 Rue...)
+  assert.ok(!bq.query.includes("121 Rue"), "building address must not appear in logement business query");
+  // Query should contain city
+  assert.ok(bq.query.includes("Victoriaville"), "city should appear in query");
+  // expectedCivic should be empty for logement (can't gate on building civic)
+  assert.equal(bq.expectedCivic, "", "no civic gate for logement business query");
+});
+
+test("buildQueries: commercial row includes building address in business query", () => {
+  const norm = {
+    buildingAddress: "361 Rue Girouard, Victoriaville",
+    city: "Victoriaville", province: "Qc", postal: "G6P 5T9", country: "Canada",
+    businessNames: ["GESTION CML 2008 INC."],
+    ownerAddresses: [],
+    civic: "361",
+    lat: null, lng: null,
+    utilisationIsLogement: false,
+  };
+  const queries = buildQueries(norm);
+  assert.ok(queries.some(q => q.type === "address"), "address query present for commercial");
+  const bq = queries.find(q => q.type === "business");
+  assert.ok(bq.query.includes("361 Rue Girouard"), "building address should anchor commercial business query");
+  assert.equal(bq.expectedCivic, "361");
+});
+
+test("runPhoneLookupBatch: Pages Jaunes fallback fires when Places finds nothing", async () => {
+  const pjHtml = `<html><body>
+    <a class="listing-name">Les Immeubles Test Inc.</a>
+    <a href="tel:+18195550142">(819) 555-0142</a>
+  </body></html>`;
+
+  const calls = [];
+  const fetchImpl = stubFetch(
+    (url) => {
+      calls.push(url.includes("nearbysearch") ? "nearby" : url.includes("textsearch") ? "text" : "details");
+      return placesTextSearch([]);  // Places finds nothing
+    },
+    (url) => {
+      if (url.includes("pagesjaunes")) { calls.push("pj"); return pjHtml; }
+      return "";
+    }
+  );
+
+  const rows = [{
+    "adresses immeubles clean": "121 Rue Saint-Jean-Baptiste, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Les Immeubles Test Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Ville2": "Victoriaville",
+    "Lat": "46.0564907", "Long": "-71.9518089",
+  }];
+
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.ok(calls.includes("pj"), "Pages Jaunes should have been called");
+  assert.equal(results[0].status, "found");
+  assert.ok(results[0].directoryPhones.length > 0, "directoryPhones should have the PJ result");
+  assert.ok(results[0].trace.some(t => t.startsWith("pages_jaunes:")));
+});
+
+test("runPhoneLookupBatch: Pages Jaunes not called when file already has phones", async () => {
+  const calls = [];
+  const fetchImpl = stubFetch(
+    () => placesTextSearch([]),
+    (url) => { if (url.includes("pagesjaunes")) calls.push("pj"); return ""; }
+  );
+  const rows = [{
+    "adresses immeubles clean": "121 Rue Saint-Jean-Baptiste, Victoriaville",
+    "Utilisation Prédominante": "Logement",
+    "Propriétaire1_Nom": "Les Immeubles Test Inc.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Propriétaire1_Téléphone": "(819) 389-1202",  // phone already in file
+    "Ville2": "Victoriaville",
+  }];
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
+  });
+  assert.ok(!calls.includes("pj"), "Pages Jaunes should NOT be called when file has phones");
+  assert.equal(results[0].status, "found");
+});
+
+test("runPhoneLookupBatch: progressive radius fires 150m when 50m finds nothing", async () => {
+  const radiusCalls = [];
+  const fetchImpl = stubFetch((url) => {
+    if (url.includes("nearbysearch")) {
+      const m = url.match(/radius=(\d+)/);
+      const radius = m ? Number(m[1]) : 0;
+      radiusCalls.push(radius);
+      if (radius >= 150) {
+        // Return a result at 150m
+        return placesTextSearch([{
+          place_id: "biz150", name: "Service Fenêtres Plus",
+          formatted_address: "361 Rue Girouard, Victoriaville, QC G6P 5T9",
+          types: ["establishment"], business_status: "OPERATIONAL",
+        }]);
+      }
+      return placesTextSearch([]); // 50m finds nothing
+    }
+    if (url.includes("details")) {
+      return placesDetails({
+        name: "Service Fenêtres Plus",
+        formatted_address: "361 Rue Girouard, Victoriaville, QC G6P 5T9",
+        formatted_phone_number: "(819) 555-0155",
+        types: ["establishment"], business_status: "OPERATIONAL",
+      });
+    }
+    return placesTextSearch([]);
+  });
+
+  const rows = [{
+    "adresses immeubles clean": "361 Rue Girouard, Victoriaville",
+    "Utilisation Prédominante": "Service de pose de portes, de fenêtres et de panneaux de verre",
+    "Propriétaire1_Nom": "GESTION CML 2008 INC.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Code Postal Immeuble": "G6P 5T9",
+    "Lat": "46.0444924", "Long": "-71.9227064",
+  }];
+
+  const { results } = await runPhoneLookupBatch({
+    rows, apiKey: "FAKE_KEY",
+    options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0, topN: 3 },
+  });
+
+  assert.ok(radiusCalls.includes(50), "should have tried 50m first");
+  assert.ok(radiusCalls.includes(150), "should have widened to 150m");
+  assert.equal(results[0].status, "found");
 });

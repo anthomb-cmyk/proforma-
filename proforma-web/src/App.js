@@ -3092,7 +3092,15 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const results = activeRun?.rows || [];
 
   useEffect(() => {
-    try { localStorage.setItem(PF_RUNS_KEY, JSON.stringify(resultRuns.slice(0, MAX_PHONE_RUNS))); } catch {}
+    try {
+      // Strip in-memory-only _src fields before persisting (they contain the full
+      // raw row and would bloat localStorage beyond its 5 MB limit for large files).
+      const stripped = resultRuns.slice(0, MAX_PHONE_RUNS).map(run => ({
+        ...run,
+        rows: (run.rows || []).map(({ _src, ...rest }) => rest),
+      }));
+      localStorage.setItem(PF_RUNS_KEY, JSON.stringify(stripped));
+    } catch {}
   }, [resultRuns]);
 
   useEffect(() => {
@@ -3327,9 +3335,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     };
     const patterns = {
       address: [
+        /\badresses? immeubles? clean\b/,  // prefer clean column (e.g. "adresses immeubles clean")
+        /\badresses? immeubles?\b/,         // fallback: plural or singular without suffix
         /\badresse immeuble\b/,
-        /\badresse\b/,
-        /\baddress\b/,
+        /\badresse\b(?!.*postale)/,         // avoid postal address columns
+        /\baddress\b(?!.*postal)/,
         /\brue\b/,
         /\bstreet\b/,
       ],
@@ -3392,6 +3402,158 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     return map;
   }
 
+  // Mirror the server-side applyGlobalPhoneCap but run client-side across ALL
+  // batches once the full run is collected, closing the 10-row-window gap.
+  // (The server cap only fires within each 10-row request; a shared public number
+  // that appears on rows spread across multiple batches would otherwise survive.)
+  function clientApplyPhoneCap(rows, cap) {
+    if (!cap || cap <= 0) return rows;
+    const addressesByPhone = new Map();
+    for (const r of rows) {
+      const onlinePhones = mergePhoneLists(r.onlinePhones);
+      const addrKey = normalizeHeaderKey(r.buildingAddress || r.inputAddress || "");
+      for (const p of onlinePhones) {
+        const k = normalizePhoneKey(p);
+        if (!k) continue;
+        if (!addressesByPhone.has(k)) addressesByPhone.set(k, new Set());
+        addressesByPhone.get(k).add(addrKey);
+      }
+    }
+    const blacklisted = new Set();
+    for (const [k, addrs] of addressesByPhone) {
+      if (addrs.size > cap) blacklisted.add(k);
+    }
+    if (!blacklisted.size) return rows;
+    return rows.map(r => {
+      const survivingOnline = mergePhoneLists(r.onlinePhones).filter(p => {
+        const k = normalizePhoneKey(p);
+        return !k || !blacklisted.has(k);
+      });
+      const filePhones = mergePhoneLists(r.fileInputPhones);
+      const allPhones = mergePhoneLists(filePhones, survivingOnline);
+      if (allPhones.length === mergePhoneLists(r.inputPhones).length) return r; // unchanged
+      const status = allPhones.length ? "found" : "not_found";
+      return {
+        ...r,
+        onlinePhones: survivingOnline,
+        phone: allPhones[0] || "",
+        inputPhones: allPhones,
+        status,
+        statusLabel: status === "found" ? "Trouvé" : "Non trouvé",
+        matchedName: survivingOnline.length ? r.matchedName : "",
+        matchedAddress: survivingOnline.length ? r.matchedAddress : "",
+        website: survivingOnline.length ? r.website : "",
+        confidence: survivingOnline.length ? r.confidence : 0,
+      };
+    });
+  }
+
+  // Re-run the lookup for a single result row using its stored _src.
+  async function rerunSingleRow(resultRow) {
+    if (!resultRow?._src) return;
+    setLoading(true);
+    setApiError("");
+    try {
+      const resp = await fetch("/api/phone-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: [resultRow._src] }),
+      });
+      const data = await resp.json();
+      if (!data.ok) { setApiError(data.error || "Erreur serveur"); return; }
+      const rawResult = data.results?.[0];
+      if (!rawResult) return;
+      const src = resultRow._src;
+      const buildingAddress = src.buildingAddress || [src.address, src.city, src.province, src.postalCode].filter(Boolean).join(", ");
+      const companyName = src.company || "";
+      const leadContact = src.leadContact || "";
+      const fallbackName = src.rawName || src.name || "";
+      const inputPhones = mergePhoneLists(src.inputPhones, rawResult.inputPhones);
+      const updated = normalizeResultRowPhones({
+        ...rawResult,
+        inputName: companyName || rawResult.inputName || fallbackName,
+        inputAddress: buildingAddress || rawResult.inputAddress || "",
+        buildingAddress: buildingAddress || "",
+        companyName,
+        leadContact,
+        inputPhones,
+        id: resultRow.id,
+        _src: src,
+      });
+      updateActiveRunRows(prev => prev.map(r => r.id === resultRow.id ? updated : r));
+      setToast(updated.status === "found" ? "🔄 Relancé · numéro trouvé !" : "🔄 Relancé · toujours introuvable");
+      setTimeout(() => setToast(""), 4000);
+    } catch (err) {
+      setApiError(`Erreur: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Re-run the lookup for ALL not_found rows in the active run.
+  async function rerunNotFound() {
+    const notFoundRows = results.filter(r => r.status === "not_found" && r._src);
+    if (!notFoundRows.length) {
+      setToast("Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).");
+      setTimeout(() => setToast(""), 5000);
+      return;
+    }
+    stopRef.current = false;
+    setLoading(true);
+    setApiError("");
+    setProgress({ done: 0, total: notFoundRows.length });
+    let done = 0;
+    const updatedById = new Map();
+    for (let i = 0; i < notFoundRows.length; i += BATCH_SIZE) {
+      if (stopRef.current) break;
+      const sliceRows = notFoundRows.slice(i, i + BATCH_SIZE);
+      const sliceSrc = sliceRows.map(r => r._src);
+      try {
+        const resp = await fetch("/api/phone-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: sliceSrc }),
+        });
+        const data = await resp.json();
+        if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
+        const rawChunk = Array.isArray(data.results) ? data.results : [];
+        rawChunk.forEach((rawResult, idx) => {
+          const origRow = sliceRows[idx];
+          const src = sliceSrc[idx] || {};
+          if (!origRow) return;
+          const buildingAddress = src.buildingAddress || [src.address, src.city, src.province, src.postalCode].filter(Boolean).join(", ");
+          const companyName = src.company || "";
+          const leadContact = src.leadContact || "";
+          const fallbackName = src.rawName || src.name || "";
+          const inputPhones = mergePhoneLists(src.inputPhones, rawResult.inputPhones);
+          const updated = normalizeResultRowPhones({
+            ...rawResult,
+            inputName: companyName || rawResult.inputName || fallbackName,
+            inputAddress: buildingAddress || rawResult.inputAddress || "",
+            buildingAddress: buildingAddress || "",
+            companyName,
+            leadContact,
+            inputPhones,
+            id: origRow.id,
+            _src: src,
+          });
+          updatedById.set(origRow.id, updated);
+        });
+        done += sliceRows.length;
+        setProgress({ done, total: notFoundRows.length });
+      } catch (err) {
+        setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
+        break;
+      }
+    }
+    updateActiveRunRows(prev => prev.map(r => updatedById.has(r.id) ? updatedById.get(r.id) : r));
+    const newlyFound = [...updatedById.values()].filter(r => r.status === "found").length;
+    setToast(`🔄 ${done} relancés · ${newlyFound} nouveau${newlyFound !== 1 ? "x" : ""} numéro${newlyFound !== 1 ? "s" : ""} trouvé${newlyFound !== 1 ? "s" : ""}`);
+    setTimeout(() => setToast(""), 6000);
+    setLoading(false);
+    setProgress(null);
+  }
+
   // Send rows in small batches so each request completes in < 5s (no proxy timeout)
   async function doLookupBatched(allRows, source = "csv") {
     stopRef.current = false;
@@ -3447,6 +3609,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             companyName,
             leadContact,
             inputPhones,
+            _src: src,  // kept in memory only; stripped before localStorage save
           };
         });
         const normalizedChunk = chunk.map(normalizeResultRowPhones);
@@ -3462,11 +3625,19 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       }
     }
 
+    // Apply a client-side frequency cap across ALL batches to catch shared public
+    // numbers that slipped through because they were split across batch windows.
+    const cappedRows = clientApplyPhoneCap(runRows, 3);
+    if (cappedRows !== runRows) {
+      setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(cappedRows) } : r));
+    }
+
     setLoading(false);
     setProgress(null);
 
     if (done > 0) {
-      setToast(`✅ ${done} lignes traitées · ${added} numéros trouvés`);
+      const finalFound = cappedRows.filter(rowHasAnyPhone).length;
+      setToast(`✅ ${done} lignes traitées · ${finalFound} numéros trouvés`);
       setTimeout(() => setToast(""), 6000);
       setPfPage("results");
     } else {
@@ -3890,6 +4061,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                           <option value="multiple_matches">Choix multiple</option>
                           <option value="not_found">Non trouvé</option>
                         </select>
+                        {results.some(r => r.status === "not_found" && r._src) && (
+                          <button
+                            className="btn btn-sm"
+                            onClick={rerunNotFound}
+                            disabled={loading}
+                            title="Relancer la recherche Google Places pour toutes les lignes non trouvées dans cette session"
+                            style={{whiteSpace:"nowrap"}}
+                          >
+                            🔄 Relancer non trouvés
+                          </button>
+                        )}
                         <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
                           {pagedResults.length < filteredResults.length
                             ? `${pagedResults.length} affichés sur ${filteredResults.length}`
@@ -3915,15 +4097,52 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                             {pagedResults.map((r, i) => {
                               const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
                               const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
+                              const filePhoneKeys = new Set(mergePhoneLists(r.fileInputPhones).map(normalizePhoneKey).filter(Boolean));
+                              const onlinePhoneKeys = new Set(mergePhoneLists(r.onlinePhones).map(normalizePhoneKey).filter(Boolean));
+                              const directoryPhoneKeys = new Set(mergePhoneLists(r.directoryPhones).map(normalizePhoneKey).filter(Boolean));
+                              // filePhoneColumns is a { normalizedKey → rawColumnName } map sent by
+                              // the server. When present, show the exact Excel column (e.g.
+                              // "Propriétaire2_Téléphone"). Fall back to "fichier" for old results.
+                              const filePhoneColumns = r.filePhoneColumns || {};
+                              const prettyColName = (colName) =>
+                                colName
+                                  .replace(/Propri[eé]taire(\d+)[_\s]?[Tt][eé]l[eé]phone/i, "Prop.$1 Tél.")
+                                  .replace(/[_\s]T[eé]l[eé]phone$/i, " Tél.")
+                                  .replace(/_/g, " ")
+                                  .replace(/\s+/g, " ")
+                                  .trim();
+                              const sourceLabelForPhone = (phone) => {
+                                const key = normalizePhoneKey(phone);
+                                if (!key) return "";
+                                const sources = [];
+                                const colName = filePhoneColumns[key];
+                                if (colName) {
+                                  sources.push(prettyColName(colName));
+                                } else if (filePhoneKeys.has(key)) {
+                                  sources.push("fichier");
+                                }
+                                if (onlinePhoneKeys.has(key)) sources.push("Google Places");
+                                if (directoryPhoneKeys.has(key)) sources.push("Pages Jaunes");
+                                return sources.join(" + ");
+                              };
+                              const listedPhones = mergePhoneLists(r.inputPhones);
+                              const primaryPhone = r.phone || listedPhones[0] || "";
+                              const primaryPhoneSource = primaryPhone ? sourceLabelForPhone(primaryPhone) : "";
                               return (
                                 <tr key={r.id || i}>
                                   <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
                                   <td className="pf-input-col">
                                     {(r.companyName || r.inputName) && <div className="pf-cell-name">{r.companyName || r.inputName}</div>}
                                     {(r.buildingAddress || r.inputAddress) && <div className="pf-cell-addr">🏢 {r.buildingAddress || r.inputAddress}</div>}
+                                    {r.utilisation && <div style={{fontSize:10,color:"var(--text3)",marginTop:2}}>🏷 {r.utilisation}</div>}
                                     {r.leadContact && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {r.leadContact}</div>}
-                                    {Array.isArray(r.inputPhones) && r.inputPhones.length > 0 && (
-                                      <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>📇 {r.inputPhones.join(" · ")}</div>
+                                    {listedPhones.length > 0 && (
+                                      <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>
+                                        {listedPhones.map(phone => {
+                                          const src = sourceLabelForPhone(phone);
+                                          return `📇 ${phone}${src ? ` · ${src}` : ""}`;
+                                        }).join("  ")}
+                                      </div>
                                     )}
                                     {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
                                   </td>
@@ -3935,9 +4154,12 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                                   <td>
                                     {r.phone
                                       ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
-                                      : (Array.isArray(r.inputPhones) && r.inputPhones.length > 0
-                                        ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.inputPhones.join(" / "))} title="Copier">📇 {r.inputPhones[0]}</span>
+                                      : (listedPhones.length > 0
+                                        ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(listedPhones.join(" / "))} title="Copier">📇 {listedPhones[0]}</span>
                                         : <span style={{color:"var(--text3)"}}>—</span>)}
+                                    {primaryPhoneSource && (
+                                      <div style={{fontSize:10,color:"var(--text3)",marginTop:2}}>📍 {primaryPhoneSource}</div>
+                                    )}
                                   </td>
                                   <td className="pf-web-col">
                                     {r.website
@@ -3951,6 +4173,16 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                                   <td>
                                     <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
                                       {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
+                                      {r.status === "not_found" && r._src && (
+                                        <button
+                                          className="btn btn-sm"
+                                          onClick={() => rerunSingleRow(r)}
+                                          disabled={loading}
+                                          title="Relancer la recherche pour cette ligne"
+                                        >
+                                          🔄
+                                        </button>
+                                      )}
                                       {(r.phone || (Array.isArray(r.inputPhones) && r.inputPhones.length > 0)) && (
                                         <button
                                           className="btn btn-sm"

@@ -5,8 +5,12 @@
 // Contract (kept backward-compatible with proforma-web/src/App.js):
 //   runPhoneLookupBatch({ rows, apiKey, options }) -> { results: [...] }
 // Each result has: { id, inputName, inputAddress, matchedName, matchedAddress,
-//                    phone, inputPhones, website, source, confidence,
-//                    status, statusLabel, candidates, searchedAt, trace }
+//                    phone, inputPhones, filePhoneColumns, website, source,
+//                    confidence, status, statusLabel, candidates, searchedAt, trace }
+//
+// filePhoneColumns: { [normalizedPhoneKey]: columnName } — maps each phone that
+// was already present in the source file to the Excel column it came from
+// (e.g. "Propriétaire2_Téléphone"). Lets the UI display the exact source column.
 //
 // Design priorities — in this order:
 //   1) Never produce false-positive matches (Hôtel de ville, shared public
@@ -133,6 +137,26 @@ export function formatPhone(v) {
   return `(${k.slice(0, 3)}) ${k.slice(3, 6)}-${k.slice(6)}`;
 }
 
+// Return a map of { normalizedPhoneKey → columnName } for every phone found in
+// the top-level object keys of a raw row. Only the FIRST column that contains
+// a given phone is recorded (column order wins). This powers per-column source
+// attribution in the UI ("Propriétaire2_Téléphone" instead of just "fichier").
+export function extractRowPhonesByColumn(source) {
+  const map = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (value === null || value === undefined) continue;
+    const s = String(value);
+    PHONE_RE.lastIndex = 0;
+    let m;
+    while ((m = PHONE_RE.exec(s))) {
+      const k = normalizePhoneKey(m[0]);
+      if (!k || map[k]) continue; // first column wins
+      map[k] = key;
+    }
+  }
+  return map;
+}
+
 // Extract *all* phone numbers appearing anywhere in a row's values.
 // The row may already have been flattened (string values) or still be the raw
 // object with any column types. We stringify defensively.
@@ -192,7 +216,7 @@ const HEADER_PATTERNS = {
     /\bstreet\b/,
     /\brue\b/,
   ],
-  cityBuilding: [/\bville\b/, /\bcity\b/, /\bmunicipalite\b/, /\bmunicipality\b/],
+  cityBuilding: [/\bville\d*\b/, /\bcity\b/, /\bmunicipalite\b/, /\bmunicipality\b/],
   postalBuilding: [/\bcode postal immeuble\b/, /\bcode postal\b/, /\bpostal code\b/, /\bzip\b/],
   province: [/\bprovince\b/, /\betat\b/, /\bstate\b/],
   ownerName: [
@@ -216,6 +240,17 @@ const HEADER_PATTERNS = {
   cadastre: [/\bcadastre\b/],
   matricule: [/\bmatricule\b/],
   contact: [/\bcontact\b/, /\bprenom\b/, /\bnom complet\b/],
+  // GPS coordinates — used for Places Nearby Search when available.
+  lat: [/\blat(itude)?\b/],
+  lng: [/\b(long(itude)?|lng)\b/],
+  // Property usage type — used to detect residential-only rows.
+  utilisation: [
+    /\butilisation\b/,
+    /\buse\b/,
+    /\busage\b/,
+    /\bproperty type\b/,
+    /\btype immeu\b/,
+  ],
   companyExplicit: [
     /\bcompagnie\b/,
     /\bentreprise\b/,
@@ -413,6 +448,25 @@ export function normalizeRow(rawRow = {}) {
   // Inferred phones mined from every cell.
   const inputPhones = extractRowPhones(source);
 
+  // Per-column phone source map — tells the UI "this phone came from column X".
+  const filePhoneColumns = extractRowPhonesByColumn(source);
+
+  // GPS coordinates for Nearby Search.
+  const latRaw = pickFirst(entries, HEADER_PATTERNS.lat)?.value;
+  const lngRaw = pickFirst(entries, HEADER_PATTERNS.lng)?.value;
+  const lat = latRaw ? parseFloat(latRaw) : NaN;
+  const lng = lngRaw ? parseFloat(lngRaw) : NaN;
+
+  // Utilisation / property type (e.g. "Logement", "Immeuble commercial").
+  const utilisation = cleanText(pickFirst(entries, HEADER_PATTERNS.utilisation)?.value);
+
+  // Residential-only detection: "Logement" property with ALL owners Physique →
+  // there is no registered business here, skip the online lookup entirely.
+  const utilisationIsLogement = /^logement$/i.test(utilisation.trim());
+  const allOwnersPhysique =
+    owners.length > 0 && owners.every((o) => /^physique$/i.test(o.status));
+  const isResidential = utilisationIsLogement && allOwnersPhysique;
+
   return {
     buildingAddress: finalBuildingAddress,
     city,
@@ -425,6 +479,12 @@ export function normalizeRow(rawRow = {}) {
     suppressed: suppressed.map((s) => ({ key: s.key, value: s.value })),
     civic: extractCivicNumber(finalBuildingAddress),
     inputPhones,
+    filePhoneColumns,
+    lat: isNaN(lat) ? null : lat,
+    lng: isNaN(lng) ? null : lng,
+    utilisation,
+    utilisationIsLogement,
+    isResidential,
     raw: source,
   };
 }
@@ -443,10 +503,11 @@ export function buildQueries(norm) {
   const prov = norm.province;
   const postal = norm.postal;
 
-  if (addr) {
-    // Address-only query. City is helpful here because the address is tied to
-    // a physical location. We DO NOT pass a business name in this query —
-    // that's what caused drift before.
+  // Address-only query — only useful for commercial/non-residential properties.
+  // For Logement rows the building is a rental block; querying its address on
+  // Places returns residential addresses, NOT the property management company.
+  // Skip it for Logement so we don't waste a call and risk a bad match.
+  if (addr && !norm.utilisationIsLogement) {
     const parts = [addr, city, prov, postal, norm.country].filter(Boolean);
     queries.push({
       type: "address",
@@ -458,15 +519,23 @@ export function buildQueries(norm) {
   }
 
   for (const name of norm.businessNames) {
-    // Business-name query is intentionally PARTNERED with the address when we
-    // have one (so Places disambiguates). If we have no address, we fall back
-    // to name + city only — but NEVER city alone.
-    const parts = [name, addr || null, city, prov].filter(Boolean);
+    // KEY DIFFERENCE for Logement rows:
+    //   The property management company is NOT physically located at the rental
+    //   building. Anchoring the query with the building address actively hurts —
+    //   Google would search around the apartment block and find nothing.
+    //   Use city-only context so Places searches province-wide for the company.
+    //   Also clear expectedCivic: we can't verify the result's civic number
+    //   against the building's civic number when the company sits elsewhere.
+    //
+    // For commercial rows: keep building address as context (company IS there).
+    const queryParts = norm.utilisationIsLogement
+      ? [name, city, prov].filter(Boolean)
+      : [name, addr || null, city, prov].filter(Boolean);
     queries.push({
       type: "business",
-      query: parts.join(", "),
+      query: queryParts.join(", "),
       expectedAddress: addr,
-      expectedCivic: norm.civic,
+      expectedCivic: norm.utilisationIsLogement ? "" : norm.civic,
       expectedName: name,
     });
   }
@@ -484,6 +553,28 @@ export function buildQueries(norm) {
     });
   }
 
+  // GPS Nearby Search — when lat/lng is available AND the property is NOT a
+  // pure residential "Logement" (those won't have a business registered at the
+  // building address on Google). We prepend this so it runs first; its results
+  // are scored alongside the text-search results and deduplicated by placeId.
+  //
+  // Why not for Logement? A rental building's GPS will return neighbouring
+  // businesses / residential addresses — the registered owner company is at
+  // their own mailing address, not the building, so owner_address queries are
+  // the right tool for those. Non-residential properties (Immeuble commercial,
+  // services, etc.) ARE typically findable at their building GPS point.
+  if (norm.lat !== null && norm.lng !== null && !norm.utilisationIsLogement) {
+    queries.unshift({
+      type: "nearby",
+      query: `${norm.lat},${norm.lng}`,
+      lat: norm.lat,
+      lng: norm.lng,
+      expectedAddress: addr,
+      expectedCivic: norm.civic,
+      expectedName: norm.businessNames[0] || "",
+    });
+  }
+
   return queries;
 }
 
@@ -493,10 +584,17 @@ export function buildQueries(norm) {
 
 const PLACES_TEXT_SEARCH_URL =
   "https://maps.googleapis.com/maps/api/place/textsearch/json";
+const PLACES_NEARBY_URL =
+  "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
 const PLACES_DETAILS_URL =
   "https://maps.googleapis.com/maps/api/place/details/json";
 const PLACES_DETAIL_FIELDS =
   "name,formatted_address,formatted_phone_number,international_phone_number,website,business_status,types,place_id";
+
+// Nearby Search radius in metres. 50 m keeps results tightly bound to the
+// building's lot — wide enough to catch businesses in a multi-unit block,
+// narrow enough to reject unrelated neighbours.
+const NEARBY_RADIUS_M = 50;
 
 export function createPlacesClient({ apiKey, fetchImpl = globalThis.fetch } = {}) {
   if (!apiKey) throw new Error("GOOGLE_PLACES_API_KEY manquante.");
@@ -515,6 +613,25 @@ export function createPlacesClient({ apiKey, fetchImpl = globalThis.fetch } = {}
     return Array.isArray(d.results) ? d.results : [];
   }
 
+  // Places Nearby Search — uses GPS coordinates instead of a text query.
+  // Returns businesses within NEARBY_RADIUS_M metres of the given point.
+  // Nearby Search results use `vicinity` (street + number, no city) rather than
+  // `formatted_address`; the Details call fills in the full address.
+  async function nearbySearch({ lat, lng, radius = NEARBY_RADIUS_M } = {}) {
+    const url =
+      `${PLACES_NEARBY_URL}?location=${lat},${lng}` +
+      `&radius=${radius}&language=fr&region=ca&key=${encodeURIComponent(apiKey)}`;
+    const r = await fetchImpl(url, { headers: { Accept: "application/json" } });
+    const d = await r.json();
+    if (d.status === "REQUEST_DENIED") {
+      throw new Error(`Google Places Nearby: ${d.error_message || "REQUEST_DENIED"}`);
+    }
+    if (d.status === "OVER_QUERY_LIMIT") {
+      throw new Error("Google Places: OVER_QUERY_LIMIT");
+    }
+    return Array.isArray(d.results) ? d.results : [];
+  }
+
   async function details(placeId) {
     const url = `${PLACES_DETAILS_URL}?place_id=${encodeURIComponent(placeId)}&fields=${PLACES_DETAIL_FIELDS}&language=fr&key=${encodeURIComponent(apiKey)}`;
     const r = await fetchImpl(url, { headers: { Accept: "application/json" } });
@@ -522,7 +639,46 @@ export function createPlacesClient({ apiKey, fetchImpl = globalThis.fetch } = {}
     return d?.result || {};
   }
 
-  return { textSearch, details };
+  // Pages Jaunes directory search — scrapes pagesjaunes.ca for the company name
+  // in the given city. Used as a fallback when Google Places finds no phone.
+  // Returns validated NANP phone strings, or [] on any error / blocked response.
+  async function searchPagesJaunes({ name, city, province = "QC" } = {}) {
+    if (!name || !city) return [];
+    try {
+      const what = encodeURIComponent(cleanText(name));
+      const where = encodeURIComponent(`${cleanText(city)}, ${province}`);
+      const url = `https://www.pagesjaunes.ca/search/si/1/${what}/${where}`;
+      const resp = await fetchImpl(url, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "fr-CA,fr;q=0.9",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/124.0.0.0 Safari/537.36",
+        },
+      });
+      const html = await resp.text();
+      // Extract phone numbers from tel: anchor hrefs (standard pattern on pagesjaunes.ca).
+      // We cap at 5 to avoid pulling in the whole page.
+      const phones = [];
+      const seen = new Set();
+      const telRe = /href="tel:([+\d\s.()\-]{7,20})"/g;
+      let m;
+      while ((m = telRe.exec(html)) !== null) {
+        const key = normalizePhoneKey(m[1].replace(/\s+/g, ""));
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        phones.push(formatPhone(key));
+        if (phones.length >= 5) break;
+      }
+      return phones;
+    } catch {
+      return []; // graceful degradation — never let directory errors block the pipeline
+    }
+  }
+
+  return { textSearch, nearbySearch, details, searchPagesJaunes };
 }
 
 /* ========================================================================== *
@@ -596,14 +752,22 @@ export function scoreCandidate({ query, candidate }) {
   }
 
   // Confidence model:
-  //  - business query: 60% name sim + 40% address sim (default .2 floor)
-  //  - address query: 100% address sim
+  //  - business query:  60% name sim + 40% address sim (default .2 floor)
+  //  - address query:   100% address sim
+  //  - nearby query:    GPS already placed us at the building; address sim is a
+  //                     bonus, not a gate. Civic match is still enforced.
   //  - bonus for civic match, penalty for missing civic
   let confidence;
   if (query.type === "business") {
     const ns = nameSim === null ? 0.2 : nameSim;
     const as = addrSim === null ? 0.2 : addrSim;
     confidence = 0.6 * ns + 0.4 * as;
+  } else if (query.type === "nearby") {
+    // GPS already filtered to a 50 m radius — start with a solid base
+    // confidence and boost/penalise for name/address similarity.
+    confidence = 0.55;
+    if (nameSim !== null) confidence += 0.25 * nameSim;
+    if (addrSim !== null) confidence += 0.20 * addrSim;
   } else {
     confidence = addrSim === null ? 0 : addrSim;
   }
@@ -617,8 +781,7 @@ export function scoreCandidate({ query, candidate }) {
   confidence = Math.max(0, Math.min(1, confidence));
   const pct = Math.round(confidence * 100);
 
-  // Acceptance threshold. Higher for business queries; address queries need
-  // a civic match to be trusted.
+  // Acceptance thresholds.
   if (query.type === "business") {
     const minName = nameSim !== null ? nameSim : 0;
     if (minName < 0.2 && (addrSim ?? 0) < 0.4) {
@@ -629,8 +792,13 @@ export function scoreCandidate({ query, candidate }) {
       };
     }
     if (pct < 35) return { accepted: false, confidence: pct, reason: `low_confidence:${pct}` };
+  } else if (query.type === "nearby") {
+    // GPS confidence is high by default; only reject if types are bad (already
+    // checked above) or if we can verify a civic mismatch (also checked above).
+    // Accept anything that cleared those gates — the 50 m radius is our filter.
+    if (pct < 20) return { accepted: false, confidence: pct, reason: `low_confidence:${pct}` };
   } else {
-    // address query
+    // address / owner_address query — still require civic
     if (!expectedCivic) {
       return { accepted: false, confidence: pct, reason: "address_query_requires_civic" };
     }
@@ -721,6 +889,7 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
   const norm = normalizeRow(rawRow);
   const trace = [];
   const fileInputPhones = norm.inputPhones;
+  const filePhoneColumns = norm.filePhoneColumns || {};
 
   if (fileInputPhones.length)
     trace.push(`file_phones:${fileInputPhones.length}`);
@@ -736,8 +905,14 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
     trace.push("warn_no_civic_parsed");
   }
 
-  const queries = buildQueries(norm);
-  if (!queries.length) {
+  // Residential-only rows (Logement + all-Physique owners) have no registered
+  // business at this address. Skip every online API call — just return file phones.
+  if (norm.isResidential) {
+    trace.push("skip:residential_all_physique");
+  }
+
+  const queries = norm.isResidential ? [] : buildQueries(norm);
+  if (!queries.length && !norm.isResidential) {
     trace.push("no_queries_built");
   } else {
     for (const q of queries) trace.push(`query[${q.type}]:${q.query}`);
@@ -746,13 +921,16 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
   const accepted = [];
   const rejected = [];
 
+  // ── Google Places queries (serially to avoid burst limits) ─────────────────
   if (client && queries.length) {
-    // Fire queries serially — Places gets angry with bursts, and the caller
-    // already parallelizes across rows with a concurrency limit.
     for (const q of queries) {
       let results;
       try {
-        results = await client.textSearch(q.query);
+        if (q.type === "nearby") {
+          results = await client.nearbySearch({ lat: q.lat, lng: q.lng });
+        } else {
+          results = await client.textSearch(q.query);
+        }
       } catch (err) {
         trace.push(`error[${q.type}]:${err.message || String(err)}`);
         continue;
@@ -767,19 +945,57 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
         }
         const flat = flattenPlaceResult(raw, detail);
         const score = scoreCandidate({ query: q, candidate: flat });
-        const enriched = {
-          ...flat,
-          confidence: score.confidence,
-          queryType: q.type,
-        };
+        const enriched = { ...flat, confidence: score.confidence, queryType: q.type };
         if (score.accepted) accepted.push(enriched);
         else rejected.push({ ...enriched, reason: score.reason });
       }
     }
   }
 
-  // Dedupe accepted candidates by placeId (or name+address fallback), keep
-  // highest confidence.
+  // ── Progressive GPS radius fallback (commercial rows only) ──────────────────
+  // If the 50 m nearby search (already in `queries`) found no phone-bearing
+  // candidate, try 150 m then 300 m. This catches businesses whose Google Maps
+  // pin is slightly offset from the municipal cadastral coordinates.
+  // The civic-number gate in scoreCandidate still rejects wrong-address results.
+  if (
+    client &&
+    norm.lat !== null && norm.lng !== null &&
+    !norm.utilisationIsLogement &&
+    !accepted.some((c) => normalizePhoneKey(c.phone))
+  ) {
+    const nearbyQ = {
+      type: "nearby",
+      expectedAddress: norm.buildingAddress,
+      expectedCivic: norm.civic,
+      expectedName: norm.businessNames[0] || "",
+      lat: norm.lat,
+      lng: norm.lng,
+    };
+    for (const radius of [150, 300]) {
+      let nearbyResults = [];
+      try {
+        nearbyResults = await client.nearbySearch({ lat: norm.lat, lng: norm.lng, radius });
+        trace.push(`query[nearby_${radius}m]:${norm.lat},${norm.lng}`);
+      } catch (err) {
+        trace.push(`error[nearby_${radius}m]:${err.message || String(err)}`);
+        break;
+      }
+      for (const raw of nearbyResults.slice(0, opts.topN)) {
+        let detail = {};
+        try { detail = raw.place_id ? await client.details(raw.place_id) : {}; } catch {}
+        const flat = flattenPlaceResult(raw, detail);
+        const score = scoreCandidate({ query: nearbyQ, candidate: flat });
+        const enriched = { ...flat, confidence: score.confidence, queryType: `nearby_${radius}m` };
+        if (score.accepted) accepted.push(enriched);
+        else rejected.push({ ...enriched, reason: score.reason });
+      }
+      // Stop widening once we have a phone-bearing accepted candidate.
+      if (accepted.some((c) => normalizePhoneKey(c.phone))) break;
+      trace.push(`nearby_${radius}m: no phone found, widening radius`);
+    }
+  }
+
+  // ── Dedupe accepted candidates ───────────────────────────────────────────────
   const byKey = new Map();
   for (const c of accepted) {
     const key = c.placeId || `${normalizeKey(c.name)}|${normalizeKey(c.address)}`;
@@ -789,23 +1005,59 @@ async function lookupOneRow({ rawRow, client, opts, idFactory }) {
   const ranked = [...byKey.values()].sort((a, b) => b.confidence - a.confidence);
   const online = ranked.filter((c) => normalizePhoneKey(c.phone));
   const best = online[0] || ranked[0] || null;
-
   const onlinePhones = mergePhoneLists(online.map((c) => c.phone));
-  const allPhones = mergePhoneLists(fileInputPhones, onlinePhones);
+
+  // ── Pages Jaunes fallback ────────────────────────────────────────────────────
+  // Only fires when BOTH Google Places AND file columns returned no phone.
+  // Scraped from pagesjaunes.ca — uses the company name + city as the query.
+  // Fails gracefully (returns []) if the site blocks or uses JS rendering.
+  let directoryPhones = [];
+  if (
+    client &&
+    !onlinePhones.length &&
+    !fileInputPhones.length &&
+    norm.businessNames.length > 0 &&
+    norm.city
+  ) {
+    for (const name of norm.businessNames) {
+      try {
+        const found = await client.searchPagesJaunes({ name, city: norm.city });
+        if (found.length) {
+          directoryPhones = mergePhoneLists(directoryPhones, found);
+          trace.push(`pages_jaunes:${found.length} phone(s) for "${name.slice(0, 40)}"`);
+          break; // one successful name lookup is enough
+        }
+      } catch (err) {
+        trace.push(`pages_jaunes_error:${err.message || String(err)}`);
+      }
+    }
+  }
+
+  const allPhones = mergePhoneLists(fileInputPhones, onlinePhones, directoryPhones);
   const status = allPhones.length ? "found" : "not_found";
+
+  // Source label: reflect which systems contributed phones.
+  const sourceParts = [];
+  if (onlinePhones.length) sourceParts.push("google_places");
+  if (directoryPhones.length) sourceParts.push("pages_jaunes");
+  if (!sourceParts.length) sourceParts.push("file");
+  const source = sourceParts.join(",");
 
   return {
     id,
     inputName: norm.businessNames[0] || "",
     inputAddress: norm.buildingAddress,
+    utilisation: norm.utilisation || "",
     matchedName: online.length ? best?.name || "" : "",
     matchedAddress: online.length ? best?.address || "" : "",
     phone: allPhones[0] || "",
     inputPhones: allPhones,
     onlinePhones,
+    directoryPhones,    // phones found via Pages Jaunes
     fileInputPhones,
+    filePhoneColumns,   // { normalizedKey → columnName } for UI source labels
     website: online.length ? best?.website || "" : "",
-    source: "google_places",
+    source,
     confidence: online.length ? Number(best?.confidence || 0) : 0,
     status,
     statusLabel: status === "found" ? "Trouvé" : "Non trouvé",
