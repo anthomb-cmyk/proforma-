@@ -4007,6 +4007,72 @@ class TtlMap extends Map {
 const placesQueryCache = new TtlMap(PLACES_CACHE_TTL_MS, PLACES_CACHE_MAX_ENTRIES);
 const placesDetailsCache = new TtlMap(PLACES_CACHE_TTL_MS, PLACES_CACHE_MAX_ENTRIES);
 
+// ── Daily budget cap ──
+// Hard safety net so an accidental 10k-row import can't burn the whole
+// month's budget in a single afternoon. Configurable via env:
+//   DAILY_PLACES_BUDGET_USD   — refuse new batches once today's estimated
+//                               spend meets or exceeds this value
+//                               (default 50, which at ~$0.10/row caps at
+//                               roughly 500 rows/day).
+// The counter is in-process and resets on Railway dyno restart; that's
+// OK — restarts are rare, and a restart granting a fresh budget is a
+// tolerable failure mode for a safety net (worst case the user gets
+// 2× the cap on a restart day). For harder guarantees we would need
+// Redis / a DB, which isn't justified yet.
+//
+// Google Places SKU pricing (2025 Essentials):
+//   Text Search:    $0.032 / call
+//   Place Details:  $0.017 / call
+const PLACES_TEXTSEARCH_COST = 0.032;
+const PLACES_DETAILS_COST    = 0.017;
+const PLACES_NEARBY_COST     = 0.032; // billed as a Text Search SKU
+const DAILY_PLACES_BUDGET_USD = Number(process.env.DAILY_PLACES_BUDGET_USD || 50);
+
+function todayKeyLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Per-day counter. Self-resets when the calendar day changes so we
+// don't have to run a cron.
+const placesSpend = {
+  date: todayKeyLocal(),
+  textSearch: 0,
+  details: 0,
+  nearby: 0,
+};
+function resetSpendIfNewDay() {
+  const d = todayKeyLocal();
+  if (placesSpend.date !== d) {
+    placesSpend.date = d;
+    placesSpend.textSearch = 0;
+    placesSpend.details = 0;
+    placesSpend.nearby = 0;
+  }
+}
+function currentSpendUsd() {
+  resetSpendIfNewDay();
+  return (
+    placesSpend.textSearch * PLACES_TEXTSEARCH_COST +
+    placesSpend.details    * PLACES_DETAILS_COST +
+    placesSpend.nearby     * PLACES_NEARBY_COST
+  );
+}
+
+// Accounting fetch wrapper: intercepts every Places HTTP call so we
+// can count textsearch / details / nearbysearch hits without changing
+// the phoneEnrichment service signature. Pass this via options.fetchImpl
+// and runPhoneLookupBatch uses it transparently.
+function placesAccountingFetch(url, init) {
+  resetSpendIfNewDay();
+  if (typeof url === "string") {
+    if (url.includes("/place/textsearch/"))         placesSpend.textSearch++;
+    else if (url.includes("/place/details/"))       placesSpend.details++;
+    else if (url.includes("/place/nearbysearch/"))  placesSpend.nearby++;
+  }
+  return fetch(url, init);
+}
+
 app.post("/api/phone-lookup", async (req, res) => {
   if (!GOOGLE_PLACES_KEY) {
     return res.status(503).json({
@@ -4017,6 +4083,16 @@ app.post("/api/phone-lookup", async (req, res) => {
   const rows = req.body?.rows;
   if (!Array.isArray(rows) || !rows.length) {
     return res.status(400).json({ ok: false, error: "rows[] requis." });
+  }
+  // Budget gate: refuse BEFORE processing if today is already over cap.
+  // Returns 402 (Payment Required) so the frontend can distinguish this
+  // from generic 500 errors and show a clearer message.
+  if (DAILY_PLACES_BUDGET_USD > 0 && currentSpendUsd() >= DAILY_PLACES_BUDGET_USD) {
+    return res.status(402).json({
+      ok: false,
+      error: `Budget quotidien atteint (~$${currentSpendUsd().toFixed(2)} / $${DAILY_PLACES_BUDGET_USD}). Réessayez demain ou ajustez DAILY_PLACES_BUDGET_USD.`,
+      budget: { date: placesSpend.date, spentUsd: currentSpendUsd(), capUsd: DAILY_PLACES_BUDGET_USD },
+    });
   }
   try {
     const { results } = await runPhoneLookupBatch({
@@ -4031,23 +4107,41 @@ app.post("/api/phone-lookup", async (req, res) => {
         globalPhoneCap: 3,
         queryCache: placesQueryCache,
         detailsCache: placesDetailsCache,
+        // Wrap fetch so every Places call increments the daily counter.
+        fetchImpl: placesAccountingFetch,
       }
     });
-    return res.json({ ok: true, results });
+    return res.json({
+      ok: true,
+      results,
+      budget: {
+        date: placesSpend.date,
+        spentUsd: currentSpendUsd(),
+        capUsd: DAILY_PLACES_BUDGET_USD,
+        calls: { textSearch: placesSpend.textSearch, details: placesSpend.details, nearby: placesSpend.nearby },
+      },
+    });
   } catch (err) {
     console.error("[phone-lookup] batch failed:", err);
     return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
 });
 
-// Lightweight observability endpoint — current cache sizes and TTL. Useful to
-// debug cost/hit-rate without redeploying. Safe to leave public (exposes sizes only).
+// Lightweight observability endpoint — current cache sizes + daily spend.
+// Frontend can poll this on page load to hydrate the spend counter from
+// the authoritative in-process number instead of its localStorage estimate.
 app.get("/api/phone-lookup/cache-stats", (_req, res) => {
   res.json({
     ok: true,
     ttlMs: PLACES_CACHE_TTL_MS,
     queryCache: { size: placesQueryCache.size },
     detailsCache: { size: placesDetailsCache.size },
+    budget: {
+      date: placesSpend.date,
+      spentUsd: currentSpendUsd(),
+      capUsd: DAILY_PLACES_BUDGET_USD,
+      calls: { textSearch: placesSpend.textSearch, details: placesSpend.details, nearby: placesSpend.nearby },
+    },
   });
 });
 // ─────────────────────────────────────────────────────────────────────────────

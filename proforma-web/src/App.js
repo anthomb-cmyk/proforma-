@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, Suspense } from "react";
+import lazyWithPreload from "./lib/lazyWithPreload.js";
 import {
   mergePhoneLists,
   extractPhonesFromRow,
@@ -18,14 +19,30 @@ import NavIcon from "./components/NavIcon.jsx";
 import Topbar from "./components/Topbar.jsx";
 import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
 import ActivityLogger from "./components/ActivityLogger.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 // Heavy pages/viewers — code-split with React.lazy so their deps
 // (Leaflet via window.L, SheetJS via window.XLSX, react-window, and each
 // page's local helpers) only load when the corresponding view/modal is
 // actually opened. Suspense fallbacks below keep the initial paint snappy.
-const DealMap = lazy(() => import("./components/DealMap.jsx"));
-const XlsxViewer = lazy(() => import("./components/XlsxViewer.jsx"));
-const LeadsManager = lazy(() => import("./pages/LeadsManager.jsx"));
-const PhoneFinder = lazy(() => import("./pages/PhoneFinder.jsx"));
+//
+// lazyWithPreload exposes a .preload() method on each component so the
+// nav bar can start fetching the chunk on hover/focus; by the time the
+// user clicks, the chunk is usually already resolved and the Suspense
+// fallback flashes for ~0ms instead of the 150–400ms a cold fetch takes.
+const DealMap = lazyWithPreload(() => import("./components/DealMap.jsx"));
+const XlsxViewer = lazyWithPreload(() => import("./components/XlsxViewer.jsx"));
+const LeadsManager = lazyWithPreload(() => import("./pages/LeadsManager.jsx"));
+const PhoneFinder = lazyWithPreload(() => import("./pages/PhoneFinder.jsx"));
+
+// Map nav-item id → preload function. The nav button's onMouseEnter /
+// onFocus calls this to kick off the chunk fetch. Entries without a
+// lazy chunk (dashboard / pipeline / followups / calendar) are absent
+// → prefetch becomes a no-op.
+const NAV_PRELOAD = {
+  map: DealMap.preload,
+  leads: LeadsManager.preload,
+  phonefinder: PhoneFinder.preload,
+};
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
@@ -989,7 +1006,13 @@ export default function App() {
               { id:"leads", label:"Leads" },
               { id:"phonefinder", label:"Recherche Tél." },
             ].map(item => (
-              <button key={item.id} className={`nav-item${view===item.id?" active":""}`} onClick={() => setView(item.id)}>
+              <button
+                key={item.id}
+                className={`nav-item${view===item.id?" active":""}`}
+                onClick={() => setView(item.id)}
+                onMouseEnter={NAV_PRELOAD[item.id]}
+                onFocus={NAV_PRELOAD[item.id]}
+              >
                 <NavIcon id={item.id} />
                 <span style={{flex:1,textAlign:"left"}}>{item.label}</span>
                 {item.id === "followups" && stats.overdue > 0 && <span className="k-count" style={{background:"#FCE9E6",color:"#C0392B"}}>{stats.overdue}</span>}
@@ -1072,9 +1095,11 @@ export default function App() {
                       </div>
                       <div>
                         <div className="map-wrap">
-                          <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>Chargement de la carte…</div>}>
-                            <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
-                          </Suspense>
+                          <ErrorBoundary label="la carte">
+                            <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>Chargement de la carte…</div>}>
+                              <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
+                            </Suspense>
+                          </ErrorBoundary>
                         </div>
                         <div className="map-mini-foot">
                           <button className="btn btn-sm" onClick={() => setView("map")}>Voir la carte complète</button>
@@ -1198,9 +1223,11 @@ export default function App() {
               <div className="content">
                 <div className="map-layout">
                   <div className="map-wrap">
-                    <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>Chargement de la carte…</div>}>
-                      <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
-                    </Suspense>
+                    <ErrorBoundary label="la carte">
+                      <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>Chargement de la carte…</div>}>
+                        <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
+                      </Suspense>
+                    </ErrorBoundary>
                     <div className="map-overlay legend">
                       <h4>Étapes</h4>
                       {STAGES.map((stage) => (
@@ -1330,20 +1357,24 @@ export default function App() {
             <>
               <Topbar title="Leads" subtitle="Importez, enrichissez et gérez vos prospects propriétaires" overdue={stats.overdue} />
               <div className="content">
-                <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des leads…</div>}>
-                  <LeadsManager leads={leads} setLeads={setLeads} onCreateDealFromLead={createDealFromLead} />
-                </Suspense>
+                <ErrorBoundary label="la page Leads">
+                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des leads…</div>}>
+                    <LeadsManager leads={leads} setLeads={setLeads} onCreateDealFromLead={createDealFromLead} />
+                  </Suspense>
+                </ErrorBoundary>
               </div>
             </>
           )}
 
           {view === "phonefinder" && (
-            <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement de Recherche Tél…</div>}>
-              <PhoneFinder
-                onExportFoundToLeads={importPhoneFinderResultsToLeads}
-                onOpenLeads={() => setView("leads")}
-              />
-            </Suspense>
+            <ErrorBoundary label="Recherche Tél">
+              <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement de Recherche Tél…</div>}>
+                <PhoneFinder
+                  onExportFoundToLeads={importPhoneFinderResultsToLeads}
+                  onOpenLeads={() => setView("leads")}
+                />
+              </Suspense>
+            </ErrorBoundary>
           )}
 
           {view === "workspace" && (
@@ -1573,9 +1604,11 @@ export default function App() {
                               : viewing.type?.includes("image")
                               ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:"100%",display:"block",margin:"auto",objectFit:"contain",padding:16}} />
                               : (viewing.type?.includes("spreadsheet") || viewing.name?.match(/\.xlsx?$/i))
-                              ? <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement du tableur…</div>}>
-                                  <XlsxViewer dataUrl={viewing.dataUrl} />
-                                </Suspense>
+                              ? <ErrorBoundary label="le tableur">
+                                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement du tableur…</div>}>
+                                    <XlsxViewer dataUrl={viewing.dataUrl} />
+                                  </Suspense>
+                                </ErrorBoundary>
                               : <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
                             }
                           </div>

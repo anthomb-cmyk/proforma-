@@ -9,11 +9,27 @@ import {
   extractPhonesFromRow,
 } from "../lib/phoneUtils.js";
 import { firstBusinessLookupName } from "../lib/businessName.js";
+import useDebouncedValue from "../lib/useDebouncedValue.js";
+import useToast from "../lib/useToast.js";
+import useEscapeKey from "../lib/useEscapeKey.js";
+import useFocusHotkey from "../lib/useFocusHotkey.js";
+import { estimateLookupCost, formatCost } from "../lib/phoneLookupCost.js";
+import { loadTodaySpend, recordBatch } from "../lib/dailySpendTracker.js";
+import {
+  parseCSV,
+  parseSpreadsheet,
+  isSpreadsheetFile,
+  normalizeHeader as normalizeHeaderKey,
+} from "../lib/tableImport.js";
+import PhoneResultRow from "../components/PhoneResultRow.jsx";
+import {
+  loadRunsFromStorage,
+  persistRunsDiff,
+  clearRunsFromStorage,
+} from "../lib/pfRunsStorage.js";
 
 // Rows per API call — keeps POST /api/phone-lookup under the proxy timeout.
 const BATCH_SIZE = 10;
-// LocalStorage key for the list of saved enrichment runs.
-const PF_RUNS_KEY = "pf_runs";
 // LocalStorage key for the id of the currently open run.
 const PF_ACTIVE_RUN_KEY = "pf_active_run";
 // Cap on the number of runs we keep in memory (oldest evicted).
@@ -41,39 +57,46 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const [pfTab, setPfTab] = useState("manual");
   const [form, setForm] = useState({ name:"", address:"", city:"", province:"Québec", postalCode:"", country:"Canada" });
   const [resultRuns, setResultRuns] = useState(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(PF_RUNS_KEY) || "[]");
-      if (Array.isArray(stored) && stored.length) {
-        return stored
-          .map((run, idx) => {
-            if (!run || typeof run !== "object") return null;
-            const rows = Array.isArray(run.rows) ? run.rows.map(normalizeResultRowPhones) : [];
-            const createdAt = run.createdAt || new Date().toISOString();
-            const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
-            return {
-              id: run.id || `pf_run_${Date.now()}_${idx}`,
-              title: run.title || fallbackTitle,
-              source: run.source || "csv",
-              createdAt,
-              totalRows: Number.isFinite(run.totalRows) ? run.totalRows : rows.length,
-              foundCount: Number.isFinite(run.foundCount) ? run.foundCount : rows.filter(rowHasAnyPhone).length,
-              rows,
-            };
-          })
-          .filter(Boolean)
-          .slice(0, MAX_PHONE_RUNS);
-      }
-    } catch {}
+    // Sharded storage (pf_runs_index + pf_run:<id>) auto-migrates the
+    // legacy single-blob `pf_runs` key on first read. Normalize rows here
+    // because the storage layer is agnostic to our phone-row shape.
+    const loaded = loadRunsFromStorage();
+    if (loaded.length) {
+      return loaded
+        .map((run, idx) => {
+          const rows = Array.isArray(run.rows) ? run.rows.map(normalizeResultRowPhones) : [];
+          const createdAt = run.createdAt || new Date().toISOString();
+          const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
+          return {
+            id: run.id || `pf_run_${Date.now()}_${idx}`,
+            title: run.title || fallbackTitle,
+            source: run.source || "csv",
+            createdAt,
+            updatedAt: run.updatedAt || createdAt,
+            totalRows: Number.isFinite(run.totalRows) ? run.totalRows : rows.length,
+            foundCount: Number.isFinite(run.foundCount) ? run.foundCount : rows.filter(rowHasAnyPhone).length,
+            rows,
+          };
+        })
+        .slice(0, MAX_PHONE_RUNS);
+    }
+    // Secondary legacy path: an even older build persisted a flat rows
+    // array under `pf_results` (no wrapping run record). Promote it into
+    // a single synthetic run so users don't lose historical enrichments.
+    // Clean up the key afterwards — we no longer write to it, so leaving
+    // it around would trip this branch again on the next load.
     try {
       const legacy = JSON.parse(localStorage.getItem("pf_results") || "[]");
       if (Array.isArray(legacy) && legacy.length) {
         const rows = legacy.map(normalizeResultRowPhones);
         const createdAt = new Date().toISOString();
+        localStorage.removeItem("pf_results");
         return [{
           id: `pf_run_legacy_${Date.now()}`,
           title: `Historique importé · ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`,
           source: "legacy",
           createdAt,
+          updatedAt: createdAt,
           totalRows: rows.length,
           foundCount: rows.filter(rowHasAnyPhone).length,
           rows,
@@ -91,10 +114,24 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const [csvFile, setCsvFile] = useState(null);
   const [colMap, setColMap] = useState({});
   const [showColMap, setShowColMap] = useState(false);
-  const [filter, setFilter] = useState({ status:"all", search:"" });
+  // filter.search is no longer used — we read the debounced searchInput
+  // directly into filteredResults. Kept in state for status etc.
+  const [filter, setFilter] = useState({ status:"all" });
+  // searchInput mirrors the <input> so typing stays snappy; debouncedSearch
+  // is the value the filter reads — coalesces keystroke bursts into one
+  // filter pass + 100-row <PhoneResultRow> repaint.
+  const [searchInput, setSearchInput] = useState("");
+  const debouncedSearch = useDebouncedValue(searchInput, 180);
+  // Cmd/Ctrl+K focuses the results filter — matches the same shortcut on
+  // LeadsManager so both pages feel consistent.
+  const searchRef = useRef(null);
+  useFocusHotkey(searchRef);
   const [reviewRow, setReviewRow] = useState(null);
   const [page, setPage] = useState(1);
-  const [toast, setToast] = useState("");
+  // useToast cancels pending hide-timers on unmount so we never
+  // setState on a dead component, and coalesces rapid showToast calls
+  // so earlier toasts don't blank out later ones mid-display.
+  const { toast, showToast } = useToast();
   const [exportBusy, setExportBusy] = useState(false);
   const stopRef = useRef(false);
   // AbortController for the current phone-lookup batch fetch so the Stop
@@ -103,24 +140,50 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const lookupAbortRef = useRef(null);
   const PAGE_SIZE = 100;
 
+  // When the debounced search changes, jump back to page 1 so freshly
+  // filtered matches are visible from the top.
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
+
+  // Pre-flight confirmation before a CSV batch runs. `pendingLookup`
+  // holds { rows, source } while the cost estimate modal is open.
+  // Users can cancel and avoid the $ spend, or confirm to kick off
+  // the batch. Single-row manual searches (too cheap to be worth
+  // confirming) bypass this and call doLookupBatched directly.
+  const [pendingLookup, setPendingLookup] = useState(null);
+  // Running tally of today's phone-lookup spend, persisted in
+  // localStorage and shown in the page header. Resets at midnight
+  // local time (see dailySpendTracker). Updated after each batch
+  // finishes so the user sees their spend climb in near-real-time.
+  const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
+
+  // Esc dismisses whichever modal is open. The hook only attaches its
+  // keydown listener while `active` is truthy, so we never intercept
+  // Escape when nothing's on screen.
+  useEscapeKey(() => setReviewRow(null), Boolean(reviewRow));
+  useEscapeKey(() => setShowColMap(false), showColMap);
+  useEscapeKey(() => setPendingLookup(null), Boolean(pendingLookup));
+
   const activeRun = useMemo(() => resultRuns.find(run => run.id === activeRunId) || null, [resultRuns, activeRunId]);
   const results = activeRun?.rows || [];
 
-  useEffect(() => {
-    try {
-      // Strip in-memory-only _src fields before persisting (they contain the full
-      // raw row and would bloat localStorage beyond its 5 MB limit for large files).
-      const stripped = resultRuns.slice(0, MAX_PHONE_RUNS).map(run => ({
-        ...run,
-        rows: (run.rows || []).map(({ _src, ...rest }) => rest),
-      }));
-      localStorage.setItem(PF_RUNS_KEY, JSON.stringify(stripped));
-    } catch {}
-  }, [resultRuns]);
+  // Tracks the last resultRuns we handed to persistRunsDiff so we can
+  // diff identity-stably across renders. Seeded with the initial loaded
+  // value so the first mount does NOT rewrite every shard just because
+  // useEffect fires on mount — storage is already in sync at that point
+  // (loadRunsFromStorage's migration path writes everything it needs).
+  const lastPersistedRef = useRef(resultRuns);
 
   useEffect(() => {
-    try { localStorage.setItem("pf_results", JSON.stringify(results.slice(0, 2000))); } catch {}
-  }, [results]);
+    // persistRunsDiff compares prev vs. next run objects by identity on
+    // .rows — renaming a run (spread keeps rows stable) writes only the
+    // small index blob; editing rows of one run writes only that shard
+    // instead of re-serializing all 40 runs. Removes shards whose runs
+    // disappeared. _src stripping happens inside persistRunsDiff.
+    const prev = lastPersistedRef.current;
+    if (prev === resultRuns) return; // identity unchanged, nothing to do
+    persistRunsDiff(prev, resultRuns);
+    lastPersistedRef.current = resultRuns;
+  }, [resultRuns]);
 
   useEffect(() => {
     try {
@@ -141,7 +204,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
   useEffect(() => {
     setPage(1);
-    setFilter({ status:"all", search:"" });
+    setFilter({ status:"all" });
+    setSearchInput("");
     setReviewRow(null);
   }, [activeRunId]);
 
@@ -197,8 +261,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     if (next === null) return;
     const ok = renameRun(run.id, next);
     if (!ok) {
-      setToast("Le titre ne peut pas être vide.");
-      setTimeout(() => setToast(""), 3500);
+      showToast("Le titre ne peut pas être vide.", 3500);
     }
   }
 
@@ -207,26 +270,33 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     setResultRuns([]);
     setActiveRunId(null);
     setReviewRow(null);
-    setFilter({ status:"all", search:"" });
+    setFilter({ status:"all" });
+    setSearchInput("");
     setPage(1);
     setPfPage("search");
+    // Defense-in-depth: persistRunsDiff([], []) will also delete the
+    // shards, but an explicit sweep catches any orphans left by a prior
+    // crash mid-write or a stale legacy key. No-op if storage is empty.
+    clearRunsFromStorage();
   }
 
   async function exportRunToLeads(run = activeRun) {
     if (!run) return;
     const rowsToExport = (run.rows || []).filter(rowHasAnyPhone);
     if (!rowsToExport.length) {
-      setToast("Aucun numéro trouvé à exporter.");
-      setTimeout(() => setToast(""), 3500);
+      showToast("Aucun numéro trouvé à exporter.", 3500);
       return;
     }
     if (typeof onExportFoundToLeads !== "function") {
-      setToast("Export vers Leads indisponible.");
-      setTimeout(() => setToast(""), 3500);
+      showToast("Export vers Leads indisponible.", 3500);
       return;
     }
 
     setExportBusy(true);
+    // The finally clause clears the busy flag + auto-hides the toast.
+    // We show the success/error toast eagerly so the display isn't
+    // racy with setExportBusy; showToast cancels any prior timer so
+    // whichever message lands last survives its full 5-second window.
     try {
       const result = await Promise.resolve(onExportFoundToLeads(rowsToExport, {
         id: run.id,
@@ -241,97 +311,24 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         if (added > 0) parts.push(`${added} nouveau${added > 1 ? "x" : ""}`);
         if (updated > 0) parts.push(`${updated} enrichi${updated > 1 ? "s" : ""}`);
         if (skipped > 0) parts.push(`${skipped} inchangé${skipped > 1 ? "s" : ""}`);
-        setToast(`✅ Leads mis à jour: ${parts.join(" · ")} · aucune donnée supprimée`);
+        showToast(`✅ Leads mis à jour: ${parts.join(" · ")} · aucune donnée supprimée`, 5000);
         if (typeof onOpenLeads === "function") {
           setTimeout(() => onOpenLeads(), 250);
         }
       } else {
-        setToast("Tous les numéros trouvés sont déjà dans Leads.");
+        showToast("Tous les numéros trouvés sont déjà dans Leads.", 5000);
       }
     } catch (err) {
-      setToast(`Export impossible: ${String(err?.message || err)}`);
+      showToast(`Export impossible: ${String(err?.message || err)}`, 5000);
     } finally {
       setExportBusy(false);
-      setTimeout(() => setToast(""), 5000);
     }
   }
 
-  function normalizeHeaderKey(value) {
-    return String(value || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-  }
-
-  function parseCSV(text) {
-    const lines = text.trim().split(/\r?\n/);
-    if (!lines.length) return { headers:[], rows:[] };
-    // Auto-detect delimiter: semicolon (French Excel), tab, or comma
-    const first = lines[0];
-    const counts = { ",": (first.match(/,/g)||[]).length, ";": (first.match(/;/g)||[]).length, "\t": (first.match(/\t/g)||[]).length };
-    const delim = counts[";"] >= counts[","] && counts[";"] >= counts["\t"] ? ";"
-                : counts["\t"] >= counts[","] ? "\t"
-                : ",";
-    const parseLine = line => {
-      const res = []; let cur = ""; let inQ = false;
-      for (const c of line) {
-        if (c === "\"") { inQ = !inQ; continue; }
-        if (c === delim && !inQ) { res.push(cur.trim()); cur = ""; continue; }
-        cur += c;
-      }
-      res.push(cur.trim());
-      return res;
-    };
-    const headers = parseLine(lines[0]);
-    const rows = lines.slice(1).filter(l => l.trim()).map(l => {
-      const vals = parseLine(l);
-      return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
-    });
-    return { headers, rows, delim };
-  }
-
-  function parseSpreadsheet(file) {
-    return new Promise((resolve, reject) => {
-      const XLSX = window.XLSX;
-      if (!XLSX) { reject(new Error("Module Excel non chargé.")); return; }
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error("Impossible de lire le fichier."));
-      reader.onload = e => {
-        try {
-          const wb = XLSX.read(e.target.result, { type: "array" });
-          const firstSheet = wb.SheetNames[0];
-          if (!firstSheet) throw new Error("Aucune feuille trouvée.");
-          const matrix = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" });
-          if (!Array.isArray(matrix) || !matrix.length) throw new Error("Le fichier est vide.");
-          const rawHeaders = Array.isArray(matrix[0]) ? matrix[0] : [];
-          const dedupe = {};
-          const headers = rawHeaders.map((h, i) => {
-            let base = String(h || `Colonne ${i + 1}`).trim();
-            if (!base) base = `Colonne ${i + 1}`;
-            const seen = dedupe[base] || 0;
-            dedupe[base] = seen + 1;
-            return seen ? `${base} (${seen + 1})` : base;
-          });
-          const rows = matrix
-            .slice(1)
-            .map(vals => Object.fromEntries(headers.map((h, i) => [h, String(vals?.[i] ?? "").trim()])))
-            .filter(row => Object.values(row).some(v => String(v).trim()));
-          resolve({ headers, rows, delim: `XLSX · ${firstSheet}` });
-        } catch (err) {
-          reject(err);
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  }
-
-  function isSpreadsheetFile(file) {
-    const name = String(file?.name || "").toLowerCase();
-    const type = String(file?.type || "").toLowerCase();
-    return /\.xlsx?$/.test(name) || type.includes("spreadsheetml") || type.includes("excel");
-  }
+  // parseCSV / parseSpreadsheet / isSpreadsheetFile / normalizeHeader now
+  // live in lib/tableImport.js — imported above (aliased to
+  // normalizeHeaderKey for readability since this file has a file-local
+  // normalizeTextKey that does something slightly different).
 
   function pickMappedValue(row, columnName) {
     if (!columnName) return "";
@@ -475,7 +472,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         body: JSON.stringify({ rows: [resultRow._src] }),
       });
       const data = await resp.json();
-      if (!data.ok) { setApiError(data.error || "Erreur serveur"); return; }
+      if (!data.ok) {
+        if (resp.status === 402) {
+          setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+          return;
+        }
+        setApiError(data.error || "Erreur serveur");
+        return;
+      }
+      if (data.budget && typeof data.budget.spentUsd === "number") {
+        setDailySpend(prev => ({ ...prev, estCost: data.budget.spentUsd, date: data.budget.date || prev.date }));
+      }
       const rawResult = data.results?.[0];
       if (!rawResult) return;
       const src = resultRow._src;
@@ -496,8 +503,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         _src: src,
       });
       updateActiveRunRows(prev => prev.map(r => r.id === resultRow.id ? updated : r));
-      setToast(updated.status === "found" ? "🔄 Relancé · numéro trouvé !" : "🔄 Relancé · toujours introuvable");
-      setTimeout(() => setToast(""), 4000);
+      showToast(
+        updated.status === "found" ? "🔄 Relancé · numéro trouvé !" : "🔄 Relancé · toujours introuvable",
+        4000,
+      );
     } catch (err) {
       setApiError(`Erreur: ${err.message}`);
     } finally {
@@ -509,8 +518,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   async function rerunNotFound() {
     const notFoundRows = results.filter(r => r.status === "not_found" && r._src);
     if (!notFoundRows.length) {
-      setToast("Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).");
-      setTimeout(() => setToast(""), 5000);
+      showToast("Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).", 5000);
       return;
     }
     stopRef.current = false;
@@ -530,7 +538,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           body: JSON.stringify({ rows: sliceSrc }),
         });
         const data = await resp.json();
-        if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
+        if (!data.ok) {
+          if (resp.status === 402) {
+            setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+            break;
+          }
+          setApiError(data.error || "Erreur serveur");
+          break;
+        }
+        if (data.budget && typeof data.budget.spentUsd === "number") {
+          setDailySpend(prev => ({ ...prev, estCost: data.budget.spentUsd, date: data.budget.date || prev.date }));
+        }
         const rawChunk = Array.isArray(data.results) ? data.results : [];
         rawChunk.forEach((rawResult, idx) => {
           const origRow = sliceRows[idx];
@@ -563,8 +581,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     }
     updateActiveRunRows(prev => prev.map(r => updatedById.has(r.id) ? updatedById.get(r.id) : r));
     const newlyFound = [...updatedById.values()].filter(r => r.status === "found").length;
-    setToast(`🔄 ${done} relancés · ${newlyFound} nouveau${newlyFound !== 1 ? "x" : ""} numéro${newlyFound !== 1 ? "s" : ""} trouvé${newlyFound !== 1 ? "s" : ""}`);
-    setTimeout(() => setToast(""), 6000);
+    showToast(
+      `🔄 ${done} relancés · ${newlyFound} nouveau${newlyFound !== 1 ? "x" : ""} numéro${newlyFound !== 1 ? "s" : ""} trouvé${newlyFound !== 1 ? "s" : ""}`,
+      6000,
+    );
     setLoading(false);
     setProgress(null);
   }
@@ -610,7 +630,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           signal: controller.signal,
         });
         const data = await resp.json();
-        if (!data.ok) { setApiError(data.error || "Erreur serveur"); break; }
+        if (!data.ok) {
+          if (resp.status === 402) {
+            setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+            break;
+          }
+          setApiError(data.error || "Erreur serveur");
+          break;
+        }
+        if (data.budget && typeof data.budget.spentUsd === "number") {
+          setDailySpend(prev => ({ ...prev, estCost: data.budget.spentUsd, date: data.budget.date || prev.date }));
+        }
         const rawChunk = Array.isArray(data.results) ? data.results : [];
         const chunk = rawChunk.map((rowResult, idx) => {
           const src = batch[idx] || {};
@@ -657,10 +687,20 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     setLoading(false);
     setProgress(null);
 
+    // Add what we actually ran to today's spend tally so the header
+    // counter reflects the real row count (not the pre-flight estimate
+    // which is based on total rows — if the user hit Stop midway, we
+    // only charge for `done` rows). estimateLookupCost's midpoint is
+    // a reasonable proxy since we don't see the per-batch call count
+    // from the backend in the response payload today.
+    if (done > 0) {
+      const est = estimateLookupCost(done);
+      setDailySpend(recordBatch(done, est.mid));
+    }
+
     if (done > 0) {
       const finalFound = cappedRows.filter(rowHasAnyPhone).length;
-      setToast(`✅ ${done} lignes traitées · ${finalFound} numéros trouvés`);
-      setTimeout(() => setToast(""), 6000);
+      showToast(`✅ ${done} lignes traitées · ${finalFound} numéros trouvés`, 6000);
       setPfPage("results");
     } else {
       setResultRuns(prev => prev.filter(r => r.id !== runId));
@@ -709,7 +749,20 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
     if (!rows.length) { setApiError("Aucune ligne exploitable dans ce fichier."); return; }
-    await doLookupBatched(rows, "csv");
+    // Rather than firing the batch immediately, stage it behind the
+    // cost-confirmation modal so the user gets an explicit "about to
+    // spend ~$X" moment. Cheap to cancel, expensive to un-spend.
+    setPendingLookup({ rows, source: "csv" });
+  }
+
+  // Kick off the lookup the user just confirmed and clear the pending
+  // state. Separate function so the modal's Confirm button and any
+  // future keyboard shortcut can share one entry point.
+  async function confirmPendingLookup() {
+    const pending = pendingLookup;
+    if (!pending) return;
+    setPendingLookup(null);
+    await doLookupBatched(pending.rows, pending.source);
   }
 
   async function handleCSVDrop(file) {
@@ -764,14 +817,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   const filteredResults = useMemo(() => {
     let r = results;
     if (filter.status !== "all") r = r.filter(x => x.status === filter.status);
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       r = r.filter(x => (
         `${x.inputName || ""} ${x.inputAddress || ""} ${x.companyName || ""} ${x.leadContact || ""} ${x.buildingAddress || ""} ${x.matchedName || ""} ${x.phone || ""} ${(x.inputPhones || []).join(" ")} ${x.website || ""}`
       ).toLowerCase().includes(q));
     }
     return r;
-  }, [results, filter]);
+  }, [results, filter, debouncedSearch]);
 
   const exportFoundRows = useMemo(() => (
     filteredResults.filter(r => r.status === "found" && rowHasAnyPhone(r))
@@ -811,6 +864,22 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     multiple_matches: { label:"Choix multiple", cls:"multiple_matches" },
     not_found:        { label:"Non trouvé",     cls:"not_found" },
   };
+
+  // Stable row handlers for <PhoneResultRow memo>. updateActiveRunRows /
+  // rerunSingleRow are recreated every render, so we mirror them through
+  // refs and hand the row a useCallback that never changes identity — keeps
+  // React.memo bails fast even when parent re-renders for unrelated reasons
+  // (filter typing, page click, toast, etc).
+  const rerunRef = useRef(rerunSingleRow);
+  rerunRef.current = rerunSingleRow;
+  const updateRowsRef = useRef(updateActiveRunRows);
+  updateRowsRef.current = updateActiveRunRows;
+
+  const onRowReview = useCallback((r) => setReviewRow(r), []);
+  const onRowRerun = useCallback((r) => rerunRef.current(r), []);
+  const onRowDelete = useCallback((r) => {
+    updateRowsRef.current(prev => prev.filter(x => x.id !== r.id));
+  }, []);
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
@@ -877,11 +946,72 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         </div>
       )}
 
+      {/* ── Pre-flight cost confirmation ──────────────────────────────
+          Shows before a CSV batch hits Google Places. Displays a
+          midpoint $ estimate + a range, and a call-count breakdown
+          so the user knows what they're authorizing. The modal
+          blocks on confirmPendingLookup — Cancel closes without
+          making any API calls. Backdrop click + Esc also cancel.
+          Added after a $100 Places bill burn; cheaper to show a
+          dialog than to hope the user never imports too big. */}
+      {pendingLookup && (() => {
+        const est = estimateLookupCost(pendingLookup.rows.length);
+        return (
+          <div className="mo" onClick={() => setPendingLookup(null)}>
+            <div className="mo-box" style={{maxWidth:480}} onClick={e => e.stopPropagation()}>
+              <div className="mo-title">Confirmer la recherche téléphones</div>
+              <div style={{fontSize:13,lineHeight:1.6,color:"var(--text2)",marginBottom:14}}>
+                Vous êtes sur le point d'enrichir{" "}
+                <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong>{" "}
+                {pendingLookup.rows.length === 1 ? "ligne" : "lignes"} via Google Places.
+              </div>
+              <div style={{background:"#FAF8F4",border:"1px solid var(--border)",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+                  <div style={{fontSize:12,color:"var(--text2)"}}>Coût estimé</div>
+                  <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{formatCost(est.mid)}</div>
+                </div>
+                <div style={{fontSize:11,color:"var(--text3)",lineHeight:1.5}}>
+                  Fourchette&nbsp;: {formatCost(est.lo)} – {formatCost(est.hi)}<br/>
+                  Appels estimés&nbsp;: {Math.round(est.callsLoTextSearch)}–{Math.round(est.callsHiTextSearch)} Text Search + {Math.round(est.callsLoDetails)}–{Math.round(est.callsHiDetails)} Details<br/>
+                  Les lignes résidentielles (Logement · Physique) ne font aucun appel. Les doublons d'adresse dans le même lot sont mis en cache.
+                </div>
+              </div>
+              <div className="mo-foot">
+                <button className="btn" onClick={() => setPendingLookup(null)}>Annuler</button>
+                <button className="btn btn-gold" onClick={confirmPendingLookup}>
+                  Lancer la recherche
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Header ───────────────────────────────────────────────────── */}
       <div style={{background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"14px 22px 0",flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div>
-            <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>Recherche de Numéros</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>Recherche de Numéros</div>
+              {dailySpend.rows > 0 && (
+                <span
+                  title={`${dailySpend.rows} lignes enrichies aujourd'hui (estimation Google Places Essentials 2025)`}
+                  style={{
+                    fontSize:11,
+                    fontWeight:700,
+                    padding:"3px 9px",
+                    borderRadius:999,
+                    background: dailySpend.estCost >= 50 ? "#FCE9E6" : dailySpend.estCost >= 20 ? "#FFF4DD" : "var(--gold-light)",
+                    color: dailySpend.estCost >= 50 ? "var(--red)" : "var(--text)",
+                    border: "1px solid",
+                    borderColor: dailySpend.estCost >= 50 ? "#F5C9C2" : dailySpend.estCost >= 20 ? "#F5E5B0" : "#E9D9AA",
+                    whiteSpace:"nowrap",
+                  }}
+                >
+                  Aujourd'hui · {dailySpend.rows} lignes · ~{formatCost(dailySpend.estCost)}
+                </span>
+              )}
+            </div>
             <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Google Places · imports sauvegardés localement</div>
           </div>
           {activeRun && (
@@ -1086,7 +1216,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                   filteredResults.length > 0 ? (
                     <div className="card" style={{overflow:"hidden"}}>
                       <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                        <input className="tb-search" style={{width:200}} placeholder="Filtrer les résultats…" value={filter.search} onChange={e => { setFilter(f => ({ ...f, search:e.target.value })); setPage(1); }} />
+                        <input ref={searchRef} className="tb-search" style={{width:200}} placeholder="Filtrer les résultats… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
                         <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
                           <option value="all">Tous les statuts</option>
                           <option value="found">Trouvé</option>
@@ -1127,112 +1257,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                             </tr>
                           </thead>
                           <tbody>
-                            {pagedResults.map((r, i) => {
-                              const sc = STATUS_CFG[r.status] || STATUS_CFG.not_found;
-                              const hasAlts = (r.status === "needs_review" || r.status === "multiple_matches") && r.candidates?.length > 0;
-                              const filePhoneKeys = new Set(mergePhoneLists(r.fileInputPhones).map(normalizePhoneKey).filter(Boolean));
-                              const onlinePhoneKeys = new Set(mergePhoneLists(r.onlinePhones).map(normalizePhoneKey).filter(Boolean));
-                              const pjPhoneKeys = new Set(mergePhoneLists(r.pjDirectoryPhones || r.directoryPhones).map(normalizePhoneKey).filter(Boolean));
-                              const c411PhoneKeys = new Set(mergePhoneLists(r.c411DirectoryPhones || []).map(normalizePhoneKey).filter(Boolean));
-                              // filePhoneColumns is a { normalizedKey → rawColumnName } map sent by
-                              // the server. When present, show the exact Excel column (e.g.
-                              // "Propriétaire2_Téléphone"). Fall back to "fichier" for old results.
-                              const filePhoneColumns = r.filePhoneColumns || {};
-                              const prettyColName = (colName) =>
-                                colName
-                                  .replace(/Propri[eé]taire(\d+)[_\s]?[Tt][eé]l[eé]phone/i, "Prop.$1 Tél.")
-                                  .replace(/[_\s]T[eé]l[eé]phone$/i, " Tél.")
-                                  .replace(/_/g, " ")
-                                  .replace(/\s+/g, " ")
-                                  .trim();
-                              const sourceLabelForPhone = (phone) => {
-                                const key = normalizePhoneKey(phone);
-                                if (!key) return "";
-                                const sources = [];
-                                const colName = filePhoneColumns[key];
-                                if (colName) {
-                                  sources.push(prettyColName(colName));
-                                } else if (filePhoneKeys.has(key)) {
-                                  sources.push("fichier");
-                                }
-                                if (onlinePhoneKeys.has(key)) sources.push("Google Places");
-                                if (pjPhoneKeys.has(key)) sources.push("Pages Jaunes");
-                                if (c411PhoneKeys.has(key)) sources.push("411.ca");
-                                return sources.join(" + ");
-                              };
-                              const listedPhones = mergePhoneLists(r.inputPhones);
-                              const primaryPhone = r.phone || listedPhones[0] || "";
-                              const primaryPhoneSource = primaryPhone ? sourceLabelForPhone(primaryPhone) : "";
-                              return (
-                                <tr key={r.id || i}>
-                                  <td style={{color:"var(--text3)",fontSize:11,width:36}}>{i+1}</td>
-                                  <td className="pf-input-col">
-                                    {(r.companyName || r.inputName) && <div className="pf-cell-name">{r.companyName || r.inputName}</div>}
-                                    {(r.buildingAddress || r.inputAddress) && <div className="pf-cell-addr">🏢 {r.buildingAddress || r.inputAddress}</div>}
-                                    {r.utilisation && <div style={{fontSize:10,color:"var(--text3)",marginTop:2}}>🏷 {r.utilisation}</div>}
-                                    {r.leadContact && <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>👤 {r.leadContact}</div>}
-                                    {listedPhones.length > 0 && (
-                                      <div style={{fontSize:10,color:"var(--text2)",marginTop:2}}>
-                                        {listedPhones.map(phone => {
-                                          const src = sourceLabelForPhone(phone);
-                                          return `📇 ${phone}${src ? ` · ${src}` : ""}`;
-                                        }).join("  ")}
-                                      </div>
-                                    )}
-                                    {r.error && <div style={{fontSize:10,color:"var(--red)",marginTop:2}} title={r.error}>⚠ {r.error.slice(0,60)}</div>}
-                                  </td>
-                                  <td className="pf-match-col">
-                                    {r.matchedName    && <div className="pf-cell-name">{r.matchedName}</div>}
-                                    {r.matchedAddress && <div className="pf-cell-addr">{r.matchedAddress}</div>}
-                                    {!r.matchedName && !r.matchedAddress && <span style={{color:"var(--text3)"}}>—</span>}
-                                  </td>
-                                  <td>
-                                    {r.phone
-                                      ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(r.phone)} title="Copier">📞 {r.phone}</span>
-                                      : (listedPhones.length > 0
-                                        ? <span className="pf-phone" onClick={() => navigator.clipboard?.writeText(listedPhones.join(" / "))} title="Copier">📇 {listedPhones[0]}</span>
-                                        : <span style={{color:"var(--text3)"}}>—</span>)}
-                                    {primaryPhoneSource && (
-                                      <div style={{fontSize:10,color:"var(--text3)",marginTop:2}}>📍 {primaryPhoneSource}</div>
-                                    )}
-                                  </td>
-                                  <td className="pf-web-col">
-                                    {r.website
-                                      ? <a href={r.website} target="_blank" rel="noopener noreferrer" style={{color:"var(--blue)",fontSize:11,display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.website.replace(/^https?:\/\/(www\.)?/,"")}</a>
-                                      : <span style={{color:"var(--text3)"}}>—</span>}
-                                  </td>
-                                  <td style={{textAlign:"center"}}>
-                                    <span className={`pf-conf ${confClass(r.confidence)}`}>{r.confidence}%</span>
-                                  </td>
-                                  <td><span className={`pf-status ${sc.cls}`}>{sc.label}</span></td>
-                                  <td>
-                                    <div style={{display:"flex",gap:4,flexWrap:"nowrap"}}>
-                                      {hasAlts && <button className="btn btn-sm btn-gold" onClick={() => setReviewRow(r)}>Choisir</button>}
-                                      {r.status === "not_found" && r._src && (
-                                        <button
-                                          className="btn btn-sm"
-                                          onClick={() => rerunSingleRow(r)}
-                                          disabled={loading}
-                                          title="Relancer la recherche pour cette ligne"
-                                        >
-                                          🔄
-                                        </button>
-                                      )}
-                                      {(r.phone || (Array.isArray(r.inputPhones) && r.inputPhones.length > 0)) && (
-                                        <button
-                                          className="btn btn-sm"
-                                          onClick={() => navigator.clipboard?.writeText(mergePhoneLists(r.phone, r.inputPhones).join(" / "))}
-                                          title="Copier"
-                                        >
-                                          📋
-                                        </button>
-                                      )}
-                                      <button className="btn btn-sm btn-danger" onClick={() => updateActiveRunRows(prev => prev.filter(x => x.id !== r.id))}>✕</button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                            {pagedResults.map((r, i) => (
+                              <PhoneResultRow
+                                key={r.id || i}
+                                r={r}
+                                i={i}
+                                loading={loading}
+                                onReview={onRowReview}
+                                onRerun={onRowRerun}
+                                onDelete={onRowDelete}
+                              />
+                            ))}
                           </tbody>
                         </table>
                       </div>

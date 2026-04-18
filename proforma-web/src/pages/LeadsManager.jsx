@@ -10,6 +10,16 @@ import {
 } from "../lib/phoneUtils.js";
 import { buildLeadIdentityKey, getLeadPhones } from "../lib/dealHelpers.js";
 import { firstBusinessLookupName } from "../lib/businessName.js";
+import useDebouncedValue from "../lib/useDebouncedValue.js";
+import useToast from "../lib/useToast.js";
+import useEscapeKey from "../lib/useEscapeKey.js";
+import useFocusHotkey from "../lib/useFocusHotkey.js";
+import {
+  parseCSV,
+  parseSpreadsheet,
+  isSpreadsheetFile,
+  normalizeHeader,
+} from "../lib/tableImport.js";
 import LeadFiche from "../components/LeadFiche.jsx";
 import LeadListRow, { LEAD_ROW_HEIGHT } from "../components/LeadListRow.jsx";
 
@@ -24,13 +34,40 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   const [importBusy, setImportBusy] = useState(false);
   const [importProgress, setImportProgress] = useState(null);
   const [importError, setImportError] = useState("");
-  const [toast, setToast] = useState("");
-  const [filter, setFilter] = useState({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" });
+  // useToast cancels pending hide-timers on unmount + coalesces
+  // back-to-back showToast calls so earlier toasts don't clobber later
+  // ones mid-display.
+  const { toast, showToast } = useToast();
+  // filter.search is intentionally split off: searchInput drives the <input>
+  // so typing feels instant; debouncedSearch (180ms trailing) is what the
+  // filteredLeads useMemo + virtualized list actually read.
+  const [filter, setFilter] = useState({ status:"all", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" });
+  const [searchInput, setSearchInput] = useState("");
+  const debouncedSearch = useDebouncedValue(searchInput, 180);
+  // Cmd/Ctrl+K focuses the search input — industry-standard shortcut
+  // (Linear / GitHub / Notion / Slack). Saves a mouse trip when the user
+  // is already on the keyboard adding call notes or editing a lead.
+  const searchRef = useRef(null);
+  useFocusHotkey(searchRef);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
-  // Tab toggle: "list" shows filters + virtualized lead list, "import" shows
-  // the CSV/XLSX dropzone. Matches the PhoneFinder tab pattern so the two
-  // pages feel consistent.
-  const [leadTab, setLeadTab] = useState("list");
+  // Import now lives in a modal instead of a full tab — the list is
+  // always-visible workspace, "+ Importer" in the header opens the
+  // dropzone. This keeps the page focused on what users do 95% of
+  // the time (triage the list) instead of surfacing an empty import
+  // tab that eats vertical space.
+  const [showImportModal, setShowImportModal] = useState(false);
+  // Secondary filters (téléphone, unités, ville, appel) hide behind a
+  // "+ Filtres" toggle so the always-visible bar stays compact. Search
+  // + statut are visible by default because those are the two filters
+  // users touch on every session.
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
+  // Esc dismisses whichever modal is on top. Order matters: column
+  // mapping sits above the import modal, so its Esc handler runs
+  // first. The import-modal handler is disabled while colMap is open
+  // to avoid closing both with a single keystroke.
+  useEscapeKey(() => setShowColMap(false), showColMap);
+  useEscapeKey(() => setShowImportModal(false), showImportModal && !showColMap);
 
   const STAGE_CFG = {
     new: { label:"Nouveau", cls:"multiple_matches" },
@@ -54,83 +91,8 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   // "+ de plus" button. The virtualized list renders the full filter result,
   // so there's no page cursor to reset.
 
-  function normalizeHeader(value) {
-    return String(value || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-  }
-
-  function parseCSV(text) {
-    const lines = String(text || "").trim().split(/\r?\n/);
-    if (!lines.length) return { headers:[], rows:[] };
-    const first = lines[0];
-    const counts = { ",": (first.match(/,/g)||[]).length, ";": (first.match(/;/g)||[]).length, "\t": (first.match(/\t/g)||[]).length };
-    const delim = counts[";"] >= counts[","] && counts[";"] >= counts["\t"] ? ";"
-                : counts["\t"] >= counts[","] ? "\t"
-                : ",";
-    const parseLine = line => {
-      const res = []; let cur = ""; let inQ = false;
-      for (const c of line) {
-        if (c === "\"") { inQ = !inQ; continue; }
-        if (c === delim && !inQ) { res.push(cur.trim()); cur = ""; continue; }
-        cur += c;
-      }
-      res.push(cur.trim());
-      return res;
-    };
-    const headers = parseLine(lines[0]);
-    const rows = lines.slice(1)
-      .filter(l => l.trim())
-      .map(l => {
-        const vals = parseLine(l);
-        return Object.fromEntries(headers.map((h, i) => [h, vals[i] || ""]));
-      });
-    return { headers, rows, delim };
-  }
-
-  function parseSpreadsheet(file) {
-    return new Promise((resolve, reject) => {
-      const XLSX = window.XLSX;
-      if (!XLSX) { reject(new Error("Module Excel non chargé.")); return; }
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error("Impossible de lire le fichier."));
-      reader.onload = e => {
-        try {
-          const wb = XLSX.read(e.target.result, { type: "array" });
-          const firstSheet = wb.SheetNames[0];
-          if (!firstSheet) throw new Error("Aucune feuille trouvée.");
-          const matrix = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: "" });
-          if (!Array.isArray(matrix) || !matrix.length) throw new Error("Le fichier est vide.");
-          const rawHeaders = Array.isArray(matrix[0]) ? matrix[0] : [];
-          const dedupe = {};
-          const headers = rawHeaders.map((h, i) => {
-            let base = String(h || `Colonne ${i + 1}`).trim();
-            if (!base) base = `Colonne ${i + 1}`;
-            const seen = dedupe[base] || 0;
-            dedupe[base] = seen + 1;
-            return seen ? `${base} (${seen + 1})` : base;
-          });
-          const rows = matrix
-            .slice(1)
-            .map(vals => Object.fromEntries(headers.map((h, i) => [h, String(vals?.[i] ?? "").trim()])))
-            .filter(row => Object.values(row).some(v => String(v).trim()));
-          resolve({ headers, rows, delim: `XLSX · ${firstSheet}` });
-        } catch (err) {
-          reject(err);
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    });
-  }
-
-  function isSpreadsheetFile(file) {
-    const name = String(file?.name || "").toLowerCase();
-    const type = String(file?.type || "").toLowerCase();
-    return /\.xlsx?$/.test(name) || type.includes("spreadsheetml") || type.includes("excel");
-  }
+  // parseCSV / parseSpreadsheet / isSpreadsheetFile / normalizeHeader now
+  // live in lib/tableImport.js — see imports above. Shared with PhoneFinder.
 
   function pickValue(row, col) {
     if (!col) return "";
@@ -383,8 +345,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     if (addedCount > 0) summary.push(`${addedCount} nouveau${addedCount > 1 ? "x" : ""}`);
     if (updatedCount > 0) summary.push(`${updatedCount} enrichi${updatedCount > 1 ? "s" : ""}`);
     if (unchangedCount > 0) summary.push(`${unchangedCount} inchangé${unchangedCount > 1 ? "s" : ""}`);
-    setToast(`✅ Import Leads terminé${summary.length ? ` · ${summary.join(" · ")}` : ""}.`);
-    setTimeout(() => setToast(""), 5000);
+    showToast(`✅ Import Leads terminé${summary.length ? ` · ${summary.join(" · ")}` : ""}.`, 5000);
     setImportFile(null);
     setColMap({});
     setShowColMap(false);
@@ -425,8 +386,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       stage: (lead.stage === "new" || lead.stage === "to_call") ? "contacted" : lead.stage,
       callNotes: existing ? `${existing}\n${line}` : line,
     });
-    setToast("✅ Appel noté dans le lead.");
-    setTimeout(() => setToast(""), 2800);
+    showToast("✅ Appel noté dans le lead.", 2800);
   }
 
   function removeLead(id) {
@@ -469,8 +429,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
 
   function cleanLegacyLeadPhones() {
     if (!Array.isArray(leads) || leads.length === 0) {
-      setToast("Aucun lead à nettoyer.");
-      setTimeout(() => setToast(""), 2500);
+      showToast("Aucun lead à nettoyer.", 2500);
       return;
     }
     if (!window.confirm("Nettoyer les téléphones invalides dans tous les leads existants ?")) return;
@@ -504,14 +463,12 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     });
 
     if (changed === 0) {
-      setToast("Aucun numéro invalide trouvé dans les leads.");
-      setTimeout(() => setToast(""), 3200);
+      showToast("Aucun numéro invalide trouvé dans les leads.", 3200);
       return;
     }
 
     setLeads(cleaned);
-    setToast(`✅ Nettoyage terminé: ${changed} leads corrigés · ${removedValues} valeurs retirées`);
-    setTimeout(() => setToast(""), 4500);
+    showToast(`✅ Nettoyage terminé: ${changed} leads corrigés · ${removedValues} valeurs retirées`, 4500);
   }
 
   function exportLeads() {
@@ -585,14 +542,14 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     } else if (filter.call !== "all") {
       list = list.filter(lead => (lead.callStatus || "none") === filter.call);
     }
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
       list = list.filter(lead => (
         `${lead.companyName || ""} ${lead.contactName || ""} ${lead.buildingAddress || ""} ${lead.city || ""} ${getLeadPhones(lead).join(" ")} ${lead.email || ""} ${lead.notes || ""} ${lead.callNotes || ""}`
       ).toLowerCase().includes(q));
     }
     return list;
-  }, [leads, filter]);
+  }, [leads, filter, debouncedSearch]);
 
   useEffect(() => {
     if (!filteredLeads.length) {
@@ -603,6 +560,15 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       setSelectedLeadId(filteredLeads[0].id);
     }
   }, [filteredLeads, selectedLeadId]);
+
+  // Memoize the itemData object we pass to FixedSizeList. Without this, the
+  // object identity changes on every parent render, so react-window marks
+  // every row "dirty" even when filteredLeads and selectedLeadId are
+  // unchanged (e.g. typing in an unrelated input elsewhere on the page).
+  const leadListItemData = useMemo(
+    () => ({ leads: filteredLeads, selectedLeadId, onSelect: setSelectedLeadId }),
+    [filteredLeads, selectedLeadId],
+  );
 
   const selectedLead = useMemo(() => (
     leads.find(lead => lead.id === selectedLeadId) || null
@@ -671,55 +637,67 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
-      {/* Liste / Importer tabs — mirrors PhoneFinder so both pages share the
-          same navigation pattern. The import dropzone used to sit above the
-          list and eat half the viewport; moving it into its own tab keeps
-          the list as the default, always-visible workspace. */}
-      <div className="tabs" style={{marginBottom:14}}>
-        <button className={`tab${leadTab==="list"?" active":""}`} onClick={() => setLeadTab("list")}>
-          📋 Liste ({leads.length})
-        </button>
-        <button className={`tab${leadTab==="import"?" active":""}`} onClick={() => setLeadTab("import")}>
+      {/* ── Page header ──
+          Title + count on the left, primary "+ Importer" CTA on the
+          right. The import flow opens in a modal (below) so the user
+          never loses their place in the list while importing. */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--text)"}}>Leads <span style={{color:"var(--text3)",fontWeight:500,fontSize:15}}>· {leads.length}</span></div>
+          <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Importez, filtrez et suivez vos pistes.</div>
+        </div>
+        <button className="btn btn-gold" onClick={() => setShowImportModal(true)}>
           📂 Importer CSV / XLSX
         </button>
       </div>
 
-      {leadTab === "import" && (
-        <div className="card f-card">
-          <div className="f-title">Importer des leads (CSV / XLSX)</div>
-          <div className="pf-drop"
-            onDragOver={e => e.preventDefault()}
-            onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
-            onClick={pickImportFile}
-          >
-            <div style={{fontSize:32,marginBottom:8}}>📂</div>
-            {importFile
-              ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
-              : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
-            <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Formats: CSV, XLSX · Colonnes recommandées: adresse immeuble, nom complet, entreprise</div>
-          </div>
-          {importFile && (
-            <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-              <div style={{fontSize:12,color:"var(--text2)"}}>
+      {/* ── Import modal ──
+          Triggered from the header or the empty-state CTA. Closes on
+          Esc (see useEscapeKey above), on backdrop click, or after a
+          successful import. */}
+      {showImportModal && (
+        <div className="mo" onClick={() => setShowImportModal(false)}>
+          <div className="mo-box" style={{maxWidth:560}} onClick={e => e.stopPropagation()}>
+            <div className="mo-title">Importer des leads (CSV / XLSX)</div>
+            <div className="pf-drop"
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImportFile(f); }}
+              onClick={pickImportFile}
+              style={{marginTop:8}}
+            >
+              <div style={{fontSize:32,marginBottom:8}}>📂</div>
+              {importFile
+                ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
+                : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
+              <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Formats: CSV, XLSX · Colonnes recommandées: adresse immeuble, nom complet, entreprise</div>
+            </div>
+            {importFile && (
+              <div style={{marginTop:12,fontSize:12,color:"var(--text2)"}}>
                 <strong>{importFile.rows.length}</strong> lignes prêtes ·{" "}
                 <button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>
                   mappage avancé (optionnel)
                 </button>
               </div>
-              <button className="btn btn-gold" onClick={() => { importLeads(); setLeadTab("list"); }} disabled={importBusy}>
+            )}
+            {importError && <div className="status-note error" style={{marginTop:10}}>{importError}</div>}
+            <div className="mo-foot">
+              <button className="btn" onClick={() => setShowImportModal(false)}>Fermer</button>
+              <button
+                className="btn btn-gold"
+                disabled={!importFile || importBusy}
+                onClick={() => { importLeads(); setShowImportModal(false); }}
+              >
                 {importBusy ? "Import en cours…" : "Importer dans Leads"}
               </button>
             </div>
-          )}
-          {importError && <div className="status-note error" style={{marginTop:10}}>{importError}</div>}
+          </div>
         </div>
       )}
 
-      {/* Progress bar stays visible while an import is running even if the
-          user switches back to the list tab — otherwise the progress would
-          disappear as soon as the list-tab auto-switch fires. */}
+      {/* Progress bar stays visible after the import modal closes so
+          the user sees progress while they triage other leads. */}
       {importBusy && importProgress && (
-        <div className="card" style={{padding:16}}>
+        <div className="card" style={{padding:16,marginBottom:14}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>⏳ {importProgress.done} / {importProgress.total} lignes importées</div>
           </div>
@@ -729,56 +707,81 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
-      {leadTab === "list" && (
       <div className="card" style={{padding:0,overflow:"hidden"}}>
-        {/* ── Filter bar ──
-            The global `input,select,textarea{width:100%}` rule in App CSS
-            stretches each select to a full row by default. Inline
-            `width:"auto"` keeps them their natural size so the whole bar
-            lives on a single line instead of piling 5 filters vertically. */}
-        <div style={{padding:"10px 14px 8px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <input className="tb-search" style={{width:200,minWidth:140}} placeholder="🔍 Rechercher…" value={filter.search} onChange={e => setFilter(prev => ({ ...prev, search:e.target.value }))} />
-          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
-            <option value="all">Tous les statuts</option>
-            {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
-          </select>
-          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
-            <option value="all">📞 Tous</option>
-            <option value="with">📞 Avec tél.</option>
-            <option value="without">📞 Sans tél.</option>
-          </select>
-          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
-            <option value="all">🏢 Toutes tailles</option>
-            <option value="1">1–2 unités</option>
-            <option value="3">3–5 unités</option>
-            <option value="6">6–11 unités</option>
-            <option value="12">12–24 unités</option>
-            <option value="25">25–49 unités</option>
-            <option value="50">50+ unités</option>
-          </select>
-          {cityOptions.length > 0 && (
-            <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
-              <option value="all">📍 Toutes villes</option>
-              {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          )}
-          <select style={{padding:"7px 9px",fontSize:12,width:"auto"}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
-            <option value="all">Appel: tous</option>
-            <option value="due">Rappel dû</option>
-            {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-          </select>
-          {(filter.status !== "all" || filter.phone !== "all" || filter.units !== "all" || filter.city !== "all" || filter.call !== "all" || filter.search) && (
-            <button className="btn btn-sm" style={{fontSize:11}} onClick={() => setFilter({ status:"all", search:"", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" })}>✕ Réinitialiser</button>
-          )}
-          <span style={{marginLeft:"auto",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>
-            {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""}
-            {leads.length !== filteredLeads.length ? " / " + leads.length : ""}
-          </span>
-          <div style={{display:"flex",gap:5}}>
-            <button className="btn btn-sm" onClick={exportLeads} title="Exporter">⬇</button>
-            <button className="btn btn-sm btn-danger" onClick={clearLeads} title="Vider tout">🗑</button>
-          </div>
-        </div>
+        {/* ── Compact filter bar ──
+            Primary row: search + statut + "+ Filtres" toggle + count +
+            export/delete. Secondary filters (téléphone, unités, ville,
+            appel) hide behind the toggle so the bar stays on one line.
+            The toggle shows (+N) when secondary filters are active so
+            the user knows to open the panel to see what's applied. */}
+        {(() => {
+          const activeSecondary =
+            (filter.phone !== "all" ? 1 : 0) +
+            (filter.units !== "all" ? 1 : 0) +
+            (filter.city  !== "all" ? 1 : 0) +
+            (filter.call  !== "all" ? 1 : 0);
+          const anyFilterActive = activeSecondary > 0 || filter.status !== "all" || searchInput;
+          return (
+            <>
+              <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <input ref={searchRef} className="tb-search" style={{width:200,minWidth:140}} placeholder="🔍 Rechercher… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+                <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
+                  <option value="all">Tous les statuts</option>
+                  {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
+                </select>
+                <button
+                  className="btn btn-sm"
+                  style={{fontSize:12,padding:"6px 10px",background:showAdvancedFilters||activeSecondary?"var(--gold-light)":undefined,borderColor:showAdvancedFilters||activeSecondary?"#E9D9AA":undefined}}
+                  onClick={() => setShowAdvancedFilters(v => !v)}
+                >
+                  {showAdvancedFilters ? "▾" : "▸"} Filtres{activeSecondary > 0 ? ` (${activeSecondary})` : ""}
+                </button>
+                {anyFilterActive && (
+                  <button className="btn btn-sm" style={{fontSize:11}} onClick={() => { setFilter({ status:"all", phone:"all", source:"all", linked:"all", call:"all", city:"all", units:"all" }); setSearchInput(""); }}>
+                    ✕ Réinitialiser
+                  </button>
+                )}
+                <span style={{marginLeft:"auto",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>
+                  {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""}
+                  {leads.length !== filteredLeads.length ? " / " + leads.length : ""}
+                </span>
+                <div style={{display:"flex",gap:5}}>
+                  <button className="btn btn-sm" onClick={exportLeads} title="Exporter">⬇</button>
+                  <button className="btn btn-sm btn-danger" onClick={clearLeads} title="Vider tout">🗑</button>
+                </div>
+              </div>
+              {showAdvancedFilters && (
+                <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",background:"#FAF8F4",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
+                    <option value="all">📞 Tous</option>
+                    <option value="with">📞 Avec tél.</option>
+                    <option value="without">📞 Sans tél.</option>
+                  </select>
+                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
+                    <option value="all">🏢 Toutes tailles</option>
+                    <option value="1">1–2 unités</option>
+                    <option value="3">3–5 unités</option>
+                    <option value="6">6–11 unités</option>
+                    <option value="12">12–24 unités</option>
+                    <option value="25">25–49 unités</option>
+                    <option value="50">50+ unités</option>
+                  </select>
+                  {cityOptions.length > 0 && (
+                    <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
+                      <option value="all">📍 Toutes villes</option>
+                      {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  )}
+                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
+                    <option value="all">Appel: tous</option>
+                    <option value="due">Rappel dû</option>
+                    {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                  </select>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* ── Two-column body: list LEFT · fiche RIGHT ── */}
         <div style={{display:"flex",height:600,minHeight:400}}>
@@ -791,7 +794,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                 <div style={{fontWeight:700,marginBottom:4}}>{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
                 <div style={{fontSize:12,marginBottom:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
                 {leads.length === 0 && (
-                  <button className="btn btn-gold btn-sm" onClick={() => setLeadTab("import")}>
+                  <button className="btn btn-gold btn-sm" onClick={() => setShowImportModal(true)}>
                     📂 Importer un fichier
                   </button>
                 )}
@@ -802,7 +805,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                 width={320}
                 itemCount={filteredLeads.length}
                 itemSize={LEAD_ROW_HEIGHT}
-                itemData={{ leads: filteredLeads, selectedLeadId, onSelect: setSelectedLeadId }}
+                itemData={leadListItemData}
               >
                 {LeadListRow}
               </VirtualList>
@@ -833,7 +836,6 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           </div>
         </div>
       </div>
-      )}
 
       {toast && (
         <div style={{position:"fixed",bottom:24,right:24,background:"#1A7A3F",color:"#fff",padding:"12px 18px",borderRadius:10,fontWeight:700,fontSize:13,zIndex:999,boxShadow:"0 4px 16px rgba(0,0,0,.2)"}}>
