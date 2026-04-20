@@ -5,7 +5,8 @@
 // control that silently does nothing; re-introduce as a real global
 // search when we wire one up.
 
-export default function Topbar({ title, subtitle, overdue }) {
+export default function Topbar({ title, subtitle, overdue, userName, badgeCount, lang, onToggleLang, langSwitchLabel }) {
+  const badge = typeof badgeCount === "number" ? badgeCount : overdue;
   return (
     <div className="topbar">
       <div>
@@ -13,11 +14,31 @@ export default function Topbar({ title, subtitle, overdue }) {
         {subtitle ? <div className="tb-sub">{subtitle}</div> : null}
       </div>
       <div className="tb-right">
+        {onToggleLang && (
+          <button
+            type="button"
+            onClick={onToggleLang}
+            title={lang === "fr" ? "Switch to English" : "Passer en français"}
+            style={{
+              border: "1px solid var(--border)",
+              background: "#fff",
+              borderRadius: 8,
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+              color: "var(--text)",
+              cursor: "pointer",
+            }}
+          >
+            {langSwitchLabel || (lang === "fr" ? "EN" : "FR")}
+          </button>
+        )}
         <div className="bell" title="Notifications">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
-          {overdue > 0 && <span className="bell-badge">{overdue}</span>}
+          {badge > 0 && <span className="bell-badge">{badge}</span>}
         </div>
-        <span className="tb-user">Anthony Makeen</span>
+        <span className="tb-user">{userName || "Anthony Makeen"}</span>
       </div>
     </div>
   );

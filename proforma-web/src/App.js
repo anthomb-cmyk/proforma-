@@ -16,6 +16,131 @@ import {
 } from "./lib/dealHelpers.js";
 import { migrateLeadsToOwners } from "./lib/ownerGrouping.js";
 
+// ─── Runtime constants ───────────────────────────────────────────────────────
+// OpenAI key for the in-app assistant chatbox. Client-side key — this ships in
+// the bundle, so keep it in the admin-configured env when hosted. Left empty
+// here so the repo doesn't leak a credential; Anthony fills it in locally.
+const OPENAI_API_KEY = "";
+
+// Hardcoded per-user PIN access. Client-side only (not a security boundary —
+// anyone with devtools can bypass). Good enough for a small internal team
+// where the real enforcement is "we trust each other" + role-gated UI.
+const USERS = [
+  { id: "anthony", name: "Anthony Makeen", role: "admin",    pin: "9472", initials: "AM", roleLabel: { fr: "Président",     en: "President" } },
+  { id: "gaylord", name: "Gaylord",        role: "employee", pin: "3815", initials: "G",  roleLabel: { fr: "Acquisitions",  en: "Acquisitions" } },
+];
+
+// Tiny i18n dictionary. Deliberately narrow: covers the NEW strings this
+// commit adds (auth, flag workflow, chatbox, top-level nav, topbar titles)
+// plus a handful of high-traffic buttons. Deep-internal French strings
+// (stage labels, workspace tabs, lead import wording) are left intact — a
+// full-app translation pass is out of scope for this change.
+//
+// tr(lang, key, ...args) resolves the value; functions in the dict take
+// runtime arguments (e.g. chat greeting with the user's name).
+const I18N = {
+  fr: {
+    login_title: "Connexion SOCLE",
+    login_tag: "Sélectionnez votre profil",
+    login_pin_placeholder: "PIN à 4 chiffres",
+    login_submit: "Entrer",
+    login_error: "PIN incorrect.",
+    logout: "Déconnexion",
+    nav_dashboard: "Dashboard",
+    nav_pipeline: "Pipeline",
+    nav_map: "Carte",
+    nav_followups: "Follow-ups",
+    nav_calendar: "Calendrier",
+    nav_owners: "Investisseurs",
+    nav_leads: "Leads",
+    nav_phonefinder: "Recherche Tél.",
+    nav_new_deal: "＋ Nouveau deal",
+    topbar_dashboard: "Dashboard",
+    topbar_pipeline: "Pipeline",
+    topbar_map: "Carte",
+    topbar_map_sub: "Vue géographique des deals au Québec",
+    topbar_followups: "Follow-ups",
+    topbar_calendar: "Calendrier",
+    topbar_owners: "Investisseurs",
+    topbar_owners_sub: "Un investisseur = une adresse postale. Toutes ses compagnies, numéros et propriétés regroupés.",
+    topbar_leads: "Leads",
+    topbar_leads_sub: "Importez, enrichissez et gérez vos prospects propriétaires",
+    topbar_workspace: "Workspace",
+    topbar_workspace_empty: "Sélectionnez un deal",
+    flag_banner: "🚩 Soumettre ce lead à Anthony",
+    flag_note_placeholder: "Note pour Anthony (optionnel)…",
+    flag_submit: "Soumettre",
+    flag_submitted: "Lead soumis à Anthony.",
+    flag_resubmit: "Déjà soumis · mettre à jour",
+    admin_flags_title: "Leads soumis par Gaylord",
+    admin_flags_empty: "Aucun lead soumis pour le moment.",
+    admin_flags_note_label: "Note:",
+    flag_view: "Voir",
+    flag_dismiss: "✓ Vu",
+    delete: "Supprimer",
+    chat_title: "Assistant SOCLE",
+    chat_send: "Envoyer",
+    chat_placeholder: "Posez votre question…",
+    chat_thinking: "Réflexion…",
+    chat_key_missing: "⚠️ Clé OpenAI manquante. Ajoutez-la dans App.js (OPENAI_API_KEY).",
+    chat_greet: (name) => `Bonjour ${name} ! Je suis l'assistant SOCLE. Posez-moi vos questions sur le CRM (stages, leads, follow-ups, calendrier, etc.) pour éviter de déranger Anthony.`,
+    lang_switch: "EN",
+  },
+  en: {
+    login_title: "SOCLE Sign-in",
+    login_tag: "Choose your profile",
+    login_pin_placeholder: "4-digit PIN",
+    login_submit: "Enter",
+    login_error: "Incorrect PIN.",
+    logout: "Sign out",
+    nav_dashboard: "Dashboard",
+    nav_pipeline: "Pipeline",
+    nav_map: "Map",
+    nav_followups: "Follow-ups",
+    nav_calendar: "Calendar",
+    nav_owners: "Investors",
+    nav_leads: "Leads",
+    nav_phonefinder: "Phone Finder",
+    nav_new_deal: "＋ New deal",
+    topbar_dashboard: "Dashboard",
+    topbar_pipeline: "Pipeline",
+    topbar_map: "Map",
+    topbar_map_sub: "Geographic view of deals across Québec",
+    topbar_followups: "Follow-ups",
+    topbar_calendar: "Calendar",
+    topbar_owners: "Investors",
+    topbar_owners_sub: "One investor = one mailing address. Companies, phone numbers and properties all grouped.",
+    topbar_leads: "Leads",
+    topbar_leads_sub: "Import, enrich, and manage owner prospects",
+    topbar_workspace: "Workspace",
+    topbar_workspace_empty: "Select a deal",
+    flag_banner: "🚩 Submit this lead to Anthony",
+    flag_note_placeholder: "Note for Anthony (optional)…",
+    flag_submit: "Submit",
+    flag_submitted: "Lead submitted to Anthony.",
+    flag_resubmit: "Already submitted · update",
+    admin_flags_title: "Leads submitted by Gaylord",
+    admin_flags_empty: "No submitted leads.",
+    admin_flags_note_label: "Note:",
+    flag_view: "Open",
+    flag_dismiss: "✓ Seen",
+    delete: "Delete",
+    chat_title: "SOCLE Assistant",
+    chat_send: "Send",
+    chat_placeholder: "Ask a question…",
+    chat_thinking: "Thinking…",
+    chat_key_missing: "⚠️ OpenAI key missing. Add it in App.js (OPENAI_API_KEY).",
+    chat_greet: (name) => `Hi ${name}! I'm the SOCLE assistant. Ask me anything about the CRM (stages, leads, follow-ups, calendar, etc.) so you don't have to call Anthony.`,
+    lang_switch: "FR",
+  },
+};
+
+function tr(lang, key, ...args) {
+  const val = (I18N[lang] && I18N[lang][key] !== undefined) ? I18N[lang][key] : I18N.fr[key];
+  if (val === undefined) return key;
+  return typeof val === "function" ? val(...args) : val;
+}
+
 import NavIcon from "./components/NavIcon.jsx";
 import Topbar from "./components/Topbar.jsx";
 import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
@@ -417,6 +542,49 @@ export default function App() {
   const [deals, setDeals]         = useState((stored?.deals || []).map(normalizeDeal));
   const [leads, setLeads]         = useState(Array.isArray(stored?.leads) ? stored.leads : []);
   const [owners, setOwners]       = useState(Array.isArray(stored?.owners) ? stored.owners : []);
+  // Leads flagged by Gaylord for Anthony's review. Lives in the main persist
+  // payload so it survives reloads.
+  const [flaggedLeads, setFlaggedLeads] = useState(Array.isArray(stored?.flaggedLeads) ? stored.flaggedLeads : []);
+
+  // Auth session — stored in its own localStorage key (not the main payload)
+  // so signing out doesn't wipe CRM data. The session holds only id/name/role/
+  // initials — the PIN stays out of anything persisted.
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("socle_user") || "null"); } catch { return null; }
+  });
+
+  // Language preference ("fr" | "en"), also stored in its own key.
+  const [lang, setLang] = useState(() => {
+    const v = localStorage.getItem("socle_lang");
+    return v === "fr" || v === "en" ? v : "fr";
+  });
+  useEffect(() => { try { localStorage.setItem("socle_lang", lang); } catch {} }, [lang]);
+  const t = useCallback((key, ...args) => tr(lang, key, ...args), [lang]);
+
+  // Chat state (in-memory — conversation doesn't persist across reloads).
+  const [chatOpen, setChatOpen]         = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput]       = useState("");
+  const [chatBusy, setChatBusy]         = useState(false);
+
+  const isAdmin = currentUser?.role === "admin";
+
+  const login = useCallback((userId, pin) => {
+    const u = USERS.find(x => x.id === userId && x.pin === String(pin || ""));
+    if (!u) return false;
+    const session = { id: u.id, name: u.name, role: u.role, initials: u.initials, roleLabel: u.roleLabel };
+    try { localStorage.setItem("socle_user", JSON.stringify(session)); } catch {}
+    setCurrentUser(session);
+    return true;
+  }, []);
+
+  const logout = useCallback(() => {
+    try { localStorage.removeItem("socle_user"); } catch {}
+    setCurrentUser(null);
+    setChatOpen(false);
+    setChatMessages([]);
+  }, []);
+
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
   const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
   const [gcalEvents, setGcalEvents] = useState([]);
@@ -457,7 +625,7 @@ export default function App() {
   useEffect(() => {
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      persist({ deals, leads, owners, currentId, gcalOk }, (err) => {
+      persist({ deals, leads, owners, flaggedLeads, currentId, gcalOk }, (err) => {
         if (isQuotaError(err)) {
           setAppToast("⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.");
           setTimeout(() => setAppToast(""), 8000);
@@ -465,7 +633,7 @@ export default function App() {
       });
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
-  }, [deals, leads, owners, currentId, gcalOk]);
+  }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
 
   // Make sure a pending write is flushed before the tab closes.
   useEffect(() => {
@@ -473,12 +641,12 @@ export default function App() {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
-        persist({ deals, leads, owners, currentId, gcalOk });
+        persist({ deals, leads, owners, flaggedLeads, currentId, gcalOk });
       }
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
-  }, [deals, leads, owners, currentId, gcalOk]);
+  }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
 
   // One-time migration: rebuild the Investisseurs view from legacy Leads.
   // Runs only when we have leads but no owners yet (fresh install of the
@@ -601,6 +769,101 @@ export default function App() {
     setTab("crm");
     setViewing(null);
   }, []);
+
+  // ─── Flag-for-review workflow ──────────────────────────────────────────────
+  // Employees (Gaylord) can tag a deal for Anthony's attention with an optional
+  // note. Re-flagging the same deal replaces the prior entry (one pending flag
+  // per deal — simpler than a full thread, good enough for the "take a look at
+  // this" use case). Admin dismisses by removing the flag.
+  const flagDeal = useCallback((dealId, note) => {
+    if (!dealId || !currentUser) return;
+    setFlaggedLeads(prev => {
+      const without = prev.filter(f => f.dealId !== dealId);
+      return [
+        ...without,
+        {
+          id: `flag_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          dealId,
+          note: String(note || "").trim(),
+          byId: currentUser.id,
+          byName: currentUser.name,
+          at: Date.now(),
+        },
+      ];
+    });
+  }, [currentUser]);
+
+  const dismissFlag = useCallback((flagId) => {
+    setFlaggedLeads(prev => prev.filter(f => f.id !== flagId));
+  }, []);
+
+  // ─── Chatbox → OpenAI gpt-4o-mini ─────────────────────────────────────────
+  // Client-side call (key ships in bundle — see OPENAI_API_KEY note). The
+  // system prompt sketches the CRM so the assistant can answer "what does
+  // Pipeline mean?" / "où est-ce que je flag un lead?" without Gaylord calling
+  // Anthony every ten minutes.
+  const sendChat = useCallback(async (text) => {
+    const content = String(text || "").trim();
+    if (!content || chatBusy) return;
+    const userMsg = { role: "user", content };
+    const history = [...chatMessages.filter(m => m.role !== "system"), userMsg];
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatInput("");
+    if (!OPENAI_API_KEY) {
+      setChatMessages(prev => [...prev, { role: "assistant", content: t("chat_key_missing") }]);
+      return;
+    }
+    setChatBusy(true);
+    try {
+      const sysPrompt = lang === "en" ? (
+        `You are the SOCLE ACQUISITIONS assistant — an internal tool for a small Quebec real estate acquisitions team. ` +
+        `Users: Anthony Makeen (admin, President) and Gaylord (employee, Acquisitions). ` +
+        `The CRM has these main views (left sidebar): Dashboard, Pipeline, Map (Carte), Follow-ups, Calendar, Investors (Investisseurs — one mailing address = one person, all their companies and properties grouped), Leads (import/enrich), Phone Finder (admin only, uses Google Places). ` +
+        `Deal stages: prospection → négociation → due diligence → closing → perdu. ` +
+        `Employees can flag a deal for Anthony's review from the Workspace CRM tab (yellow banner "Submit this lead to Anthony"). Submitted flags appear on Anthony's dashboard. Employees cannot delete deals or run phone enrichment. The ✦ IA buttons summarize deal/vendor notes. There's a Google Calendar connection and Twilio-powered call recording per deal. ` +
+        `The user talking to you right now is ${currentUser?.name || "a team member"} (${currentUser?.role || "member"}). Answer concisely in English. If they ask how to do something, describe the exact UI steps. If they ask something outside the CRM scope, politely redirect.`
+      ) : (
+        `Tu es l'assistant de SOCLE ACQUISITIONS, un CRM interne pour une petite équipe d'acquisition immobilière au Québec. ` +
+        `Utilisateurs : Anthony Makeen (admin, Président) et Gaylord (employé, Acquisitions). ` +
+        `Vues principales (barre de gauche) : Dashboard, Pipeline, Carte, Follow-ups, Calendrier, Investisseurs (une adresse postale = une personne, toutes ses compagnies et propriétés regroupées), Leads (importer/enrichir), Recherche Tél. (admin seulement, via Google Places). ` +
+        `Étapes d'un deal : prospection → négociation → due diligence → closing → perdu. ` +
+        `Les employés peuvent soumettre un lead à Anthony depuis l'onglet CRM du Workspace (bandeau jaune « Soumettre ce lead à Anthony »). Les leads soumis apparaissent sur le dashboard d'Anthony. Les employés ne peuvent pas supprimer de deals ni lancer la recherche téléphonique. Les boutons ✦ IA résument les notes du deal ou du vendeur. Il y a une connexion Google Calendar et un enregistrement d'appels Twilio par deal. ` +
+        `L'utilisateur qui te parle est ${currentUser?.name || "un membre de l'équipe"} (${currentUser?.role || "membre"}). Réponds en français, de façon concise. Si on te demande comment faire une action, décris les étapes exactes dans l'UI. Si la question sort du cadre du CRM, redirige poliment.`
+      );
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "system", content: sysPrompt }, ...history],
+          temperature: 0.3,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${data.error?.message || `HTTP ${r.status}`}` }]);
+        return;
+      }
+      const reply = data.choices?.[0]?.message?.content || "—";
+      setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${err?.message || "Erreur réseau."}` }]);
+    } finally {
+      setChatBusy(false);
+    }
+  }, [chatMessages, chatBusy, lang, currentUser, t]);
+
+  // Seed the chat with a greeting the first time it opens for a given user/lang.
+  useEffect(() => {
+    if (!chatOpen) return;
+    if (chatMessages.length > 0) return;
+    if (!currentUser) return;
+    const firstName = String(currentUser.name || "").split(" ")[0];
+    setChatMessages([{ role: "assistant", content: t("chat_greet", firstName) }]);
+  }, [chatOpen, chatMessages.length, currentUser, t]);
 
   const createDealFn = () => {
     const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim(), newAddrCoords, newUnits.trim(), newAskingPrice.trim());
@@ -1005,6 +1268,32 @@ export default function App() {
 
   const currentStageLabel = STAGES.find(s => s.id === current?.stage)?.label || "—";
 
+  // Admin sees the combined count of overdue follow-ups + submitted flags in
+  // the topbar bell; employees keep the original overdue-only count.
+  const bellCount = currentUser?.role === "admin"
+    ? (stats.overdue + flaggedLeads.length)
+    : stats.overdue;
+
+  // Common props for the <Topbar> — keeps the nine call sites DRY.
+  const topbarCommon = currentUser ? {
+    userName: currentUser.name,
+    badgeCount: bellCount,
+    lang,
+    onToggleLang: () => setLang(lang === "fr" ? "en" : "fr"),
+    langSwitchLabel: t("lang_switch"),
+  } : {};
+
+  // Gate the app behind a PIN login. Session lives in localStorage so a
+  // refresh doesn't kick the user back to the login screen.
+  if (!currentUser) {
+    return (
+      <>
+        <style>{CSS}</style>
+        <LoginScreen users={USERS} onLogin={login} lang={lang} setLang={setLang} t={t} />
+      </>
+    );
+  }
+
   return (
     <>
       <style>{CSS}</style>
@@ -1018,14 +1307,15 @@ export default function App() {
 
           <div className="sb-nav">
             {[
-              { id:"dashboard", label:"Dashboard" },
-              { id:"pipeline", label:"Pipeline" },
-              { id:"map", label:"Carte" },
-              { id:"followups", label:"Follow-ups" },
-              { id:"calendar", label:"Calendrier" },
-              { id:"owners", label:"Investisseurs" },
-              { id:"leads", label:"Leads" },
-              { id:"phonefinder", label:"Recherche Tél." },
+              { id:"dashboard", label:t("nav_dashboard") },
+              { id:"pipeline", label:t("nav_pipeline") },
+              { id:"map", label:t("nav_map") },
+              { id:"followups", label:t("nav_followups") },
+              { id:"calendar", label:t("nav_calendar") },
+              { id:"owners", label:t("nav_owners") },
+              { id:"leads", label:t("nav_leads") },
+              // Phone Finder is admin-only: Gaylord doesn't get it in the nav.
+              ...(isAdmin ? [{ id:"phonefinder", label:t("nav_phonefinder") }] : []),
             ].map(item => (
               <button
                 key={item.id}
@@ -1061,22 +1351,109 @@ export default function App() {
             })}
           </div>
 
-          <button className="new-btn" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+          <button className="new-btn" onClick={() => setModal("new")}>{t("nav_new_deal")}</button>
 
           <div className="sb-profile">
-            <div className="p-avatar">AM</div>
-            <div>
-              <div className="p-name">Anthony Makeen</div>
-              <div className="p-role">Président</div>
+            <div className="p-avatar">{currentUser.initials || "?"}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div className="p-name">{currentUser.name}</div>
+              <div className="p-role">
+                {(currentUser.roleLabel && currentUser.roleLabel[lang]) || currentUser.role}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={logout}
+              title={t("logout")}
+              aria-label={t("logout")}
+              style={{
+                border: "1px solid var(--border)",
+                background: "#fff",
+                color: "var(--text2)",
+                borderRadius: 8,
+                width: 30, height: 30,
+                display: "grid", placeItems: "center",
+                fontSize: 14, cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >↩</button>
           </div>
         </aside>
 
         <main className="main">
           {view === "dashboard" && (
             <>
-              <Topbar title="Dashboard" overdue={stats.overdue} />
+              <Topbar title={t("topbar_dashboard")} {...topbarCommon} />
               <div className="content">
+                {isAdmin && flaggedLeads.length > 0 && (
+                  <div
+                    className="card sec"
+                    style={{
+                      background: "linear-gradient(135deg, #FFF8E1 0%, #FAF0C8 100%)",
+                      border: "1px solid #E8D79A",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div className="sec-head">
+                      <div className="sec-title" style={{color: "#8D6A15"}}>
+                        🚩 {t("admin_flags_title")} ({flaggedLeads.length})
+                      </div>
+                    </div>
+                    <div style={{display: "flex", flexDirection: "column", gap: 8}}>
+                      {flaggedLeads
+                        .slice()
+                        .sort((a, b) => (b.at || 0) - (a.at || 0))
+                        .map(f => {
+                          const d = deals.find(x => x.id === f.dealId);
+                          return (
+                            <div
+                              key={f.id}
+                              style={{
+                                background: "#fff",
+                                border: "1px solid #E8D79A",
+                                borderRadius: 10,
+                                padding: "10px 12px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <div style={{flex: 1, minWidth: 200}}>
+                                <div style={{fontSize: 13, fontWeight: 700, color: "var(--text)"}}>
+                                  {d ? dealLabel(d) : f.dealId}
+                                </div>
+                                <div style={{fontSize: 11, color: "var(--text3)", marginTop: 2}}>
+                                  {f.byName} · {new Date(f.at).toLocaleString(lang === "en" ? "en-CA" : "fr-CA", {dateStyle: "short", timeStyle: "short"})}
+                                </div>
+                                {f.note && (
+                                  <div style={{fontSize: 12, color: "var(--text2)", marginTop: 6}}>
+                                    <span style={{fontWeight: 700}}>{t("admin_flags_note_label")}</span> {f.note}
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{display: "flex", gap: 6}}>
+                                {d && (
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => openDeal(f.dealId)}
+                                  >
+                                    {t("flag_view")}
+                                  </button>
+                                )}
+                                <button
+                                  className="btn btn-sm"
+                                  onClick={() => dismissFlag(f.id)}
+                                >
+                                  {t("flag_dismiss")}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
                 <div className="kpi-grid">
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#F5EDD6",color:"#8D742D"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
@@ -1193,7 +1570,7 @@ export default function App() {
 
           {view === "pipeline" && (
             <>
-              <Topbar title="Pipeline" overdue={stats.overdue} />
+              <Topbar title={t("topbar_pipeline")} {...topbarCommon} />
               <div className="content">
                 <div className="kanban-wrap">
                   <div className="kanban">
@@ -1240,7 +1617,7 @@ export default function App() {
 
           {view === "map" && (
             <>
-              <Topbar title="Carte" subtitle="Vue géographique des deals au Québec" overdue={stats.overdue} />
+              <Topbar title={t("topbar_map")} subtitle={t("topbar_map_sub")} {...topbarCommon} />
               <div className="content">
                 <div className="map-layout">
                   <div className="map-wrap">
@@ -1280,7 +1657,7 @@ export default function App() {
 
           {view === "followups" && (
             <>
-              <Topbar title="Follow-ups" overdue={stats.overdue} />
+              <Topbar title={t("topbar_followups")} {...topbarCommon} />
               <div className="content">
                 {followUps.length===0 ? (
                   <div className="card empty">
@@ -1317,7 +1694,7 @@ export default function App() {
 
           {view === "calendar" && (
             <>
-              <Topbar title="Calendrier" overdue={stats.overdue} />
+              <Topbar title={t("topbar_calendar")} {...topbarCommon} />
               <div className="content">
                 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   <button className="btn btn-gold" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?"Connexion...":gcalOk?"Actualiser Google Calendar":"Connecter Google Calendar"}</button>
@@ -1376,7 +1753,7 @@ export default function App() {
 
           {view === "owners" && (
             <>
-              <Topbar title="Investisseurs" subtitle="Un investisseur = une adresse postale. Toutes ses compagnies, numéros et propriétés regroupés." overdue={stats.overdue} />
+              <Topbar title={t("topbar_owners")} subtitle={t("topbar_owners_sub")} {...topbarCommon} />
               <div className="content">
                 <ErrorBoundary label="la page Investisseurs">
                   <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des investisseurs…</div>}>
@@ -1389,7 +1766,7 @@ export default function App() {
 
           {view === "leads" && (
             <>
-              <Topbar title="Leads" subtitle="Importez, enrichissez et gérez vos prospects propriétaires" overdue={stats.overdue} />
+              <Topbar title={t("topbar_leads")} subtitle={t("topbar_leads_sub")} {...topbarCommon} />
               <div className="content">
                 <ErrorBoundary label="la page Leads">
                   <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des leads…</div>}>
@@ -1414,7 +1791,7 @@ export default function App() {
           {view === "workspace" && (
             !current ? (
               <>
-                <Topbar title="Workspace" subtitle="Sélectionnez un deal" overdue={stats.overdue} />
+                <Topbar title={t("topbar_workspace")} subtitle={t("topbar_workspace_empty")} {...topbarCommon} />
                 <div className="content">
                   <div className="card empty">
                     <div className="empty-ico">🏠</div>
@@ -1426,7 +1803,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <Topbar title="Workspace" subtitle={`${currentStageLabel} • ${current.address || "Adresse à compléter"}`} overdue={stats.overdue} />
+                <Topbar title={t("topbar_workspace")} subtitle={`${currentStageLabel} • ${current.address || "Adresse à compléter"}`} {...topbarCommon} />
                 <div className="content">
                   <div className="ws-head">
                     <div style={{minWidth:0,flex:1}}>
@@ -1440,7 +1817,9 @@ export default function App() {
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span className="stage-crumb">Mis à jour le {new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
                       <button className="btn btn-sm" onClick={() => setModal("event")}>＋ Événement</button>
-                      <button className="btn btn-danger btn-sm" onClick={() => deleteDeal(current.id)}>Supprimer</button>
+                      {isAdmin && (
+                        <button className="btn btn-danger btn-sm" onClick={() => deleteDeal(current.id)}>{t("delete")}</button>
+                      )}
                     </div>
                   </div>
 
@@ -1466,6 +1845,14 @@ export default function App() {
 
                   {tab === "crm" && (
                     <>
+                      {!isAdmin && (
+                        <FlagForReviewBanner
+                          dealId={current.id}
+                          existing={flaggedLeads.find(f => f.dealId === current.id) || null}
+                          onFlag={flagDeal}
+                          t={t}
+                        />
+                      )}
                       <div className="ws-grid">
                         <div className="card f-card">
                           <div className="f-title">Contact (vendeur / courtier)</div>
@@ -1829,6 +2216,19 @@ export default function App() {
           {appToast}
         </div>
       )}
+
+      {/* Floating chatbox — bottom-right. Collapsed = 💬 gold bubble; expanded
+          = small chat panel with messages, an input, and a send button. */}
+      <ChatWidget
+        open={chatOpen}
+        setOpen={setChatOpen}
+        messages={chatMessages}
+        input={chatInput}
+        setInput={setChatInput}
+        busy={chatBusy}
+        onSend={sendChat}
+        t={t}
+      />
     </>
   );
 }
@@ -1839,3 +2239,389 @@ export default function App() {
 
 // AddressAutocomplete, DealMap, ActivityLogger moved to ./components/*.jsx
 // (imported at the top of this file).
+
+// ─── ChatWidget ────────────────────────────────────────────────────────────
+// Floating OpenAI chat. Closed state = 💬 gold button bottom-right. Opened
+// = compact chat panel with messages, an input, and a send button. Renders
+// nothing auth-sensitive — `sendChat` / state lives in App().
+function ChatWidget({ open, setOpen, messages, input, setInput, busy, onSend, t }) {
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [open, messages, busy]);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={t("chat_title")}
+        style={{
+          position: "fixed",
+          bottom: 24,
+          right: 24,
+          width: 54,
+          height: 54,
+          borderRadius: "50%",
+          background: "#C9A84C",
+          color: "#fff",
+          border: "none",
+          boxShadow: "0 8px 24px rgba(201,168,76,0.45)",
+          fontSize: 24,
+          cursor: "pointer",
+          zIndex: 9998,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        💬
+      </button>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 24,
+        right: 24,
+        width: 360,
+        maxWidth: "92vw",
+        height: 480,
+        maxHeight: "80vh",
+        background: "#fff",
+        border: "1px solid var(--border)",
+        borderRadius: 14,
+        boxShadow: "0 16px 48px rgba(0,0,0,0.18)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        zIndex: 9999,
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 14px",
+          background: "linear-gradient(90deg, #C9A84C 0%, #D4B765 100%)",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{fontSize: 13, fontWeight: 700, letterSpacing: 0.3}}>
+          ✦ {t("chat_title")}
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          aria-label="close"
+          style={{
+            background: "rgba(255,255,255,0.2)",
+            border: "none",
+            color: "#fff",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+        >×</button>
+      </div>
+
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: 12,
+          background: "#FAF8F2",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            style={{
+              alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+              maxWidth: "85%",
+              background: m.role === "user" ? "#C9A84C" : "#fff",
+              color: m.role === "user" ? "#fff" : "var(--text)",
+              border: m.role === "user" ? "none" : "1px solid var(--border)",
+              borderRadius: 10,
+              padding: "8px 10px",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              lineHeight: 1.45,
+            }}
+          >
+            {m.content}
+          </div>
+        ))}
+        {busy && (
+          <div
+            style={{
+              alignSelf: "flex-start",
+              fontSize: 11,
+              color: "var(--text3)",
+              fontStyle: "italic",
+              padding: "4px 10px",
+            }}
+          >
+            {t("chat_thinking")}
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          padding: 10,
+          borderTop: "1px solid var(--border)",
+          background: "#fff",
+          display: "flex",
+          gap: 6,
+        }}
+      >
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !busy) onSend(input); }}
+          placeholder={t("chat_placeholder")}
+          disabled={busy}
+          style={{
+            flex: 1,
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 12,
+            outline: "none",
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => onSend(input)}
+          disabled={busy || !input.trim()}
+          className="btn btn-gold btn-sm"
+          style={{whiteSpace: "nowrap"}}
+        >
+          {t("chat_send")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── FlagForReviewBanner ───────────────────────────────────────────────────
+// Yellow banner above the Workspace CRM tab. Employees only. Once the deal
+// has a pending flag, the UI switches to "already submitted — update" mode
+// so re-submitting with a new note replaces the prior entry (see flagDeal).
+function FlagForReviewBanner({ dealId, existing, onFlag, t }) {
+  const [note, setNote] = useState(existing?.note || "");
+  const [justSent, setJustSent] = useState(false);
+  const already = !!existing;
+
+  const submit = () => {
+    onFlag(dealId, note);
+    setJustSent(true);
+    setTimeout(() => setJustSent(false), 2500);
+  };
+
+  return (
+    <div style={{
+      background: "#FFF8E1",
+      border: "1px solid #E8D79A",
+      borderRadius: 12,
+      padding: "12px 14px",
+      marginBottom: 14,
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+    }}>
+      <div style={{fontSize: 13, fontWeight: 700, color: "#8D6A15"}}>
+        {t("flag_banner")}
+      </div>
+      <div style={{display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap"}}>
+        <input
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder={t("flag_note_placeholder")}
+          style={{
+            flex: 1, minWidth: 200,
+            border: "1px solid #E8D79A",
+            background: "#fff",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 12,
+          }}
+          onKeyDown={e => { if (e.key === "Enter") submit(); }}
+        />
+        <button
+          type="button"
+          onClick={submit}
+          className="btn btn-gold btn-sm"
+          style={{whiteSpace: "nowrap"}}
+        >
+          {already ? t("flag_resubmit") : t("flag_submit")}
+        </button>
+      </div>
+      {justSent && (
+        <div style={{fontSize: 11, color: "#2D8C4E", fontWeight: 600}}>
+          ✓ {t("flag_submitted")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── LoginScreen ────────────────────────────────────────────────────────────
+// Gold/white PIN login. Two user tiles (click to pick), 4-digit PIN input,
+// Enter button, inline error when PIN is wrong. EN/FR toggle top-right to
+// match the rest of the app. Deliberately tiny — not a security boundary,
+// just a "who am I" picker that feeds the role-gated UI.
+function LoginScreen({ users, onLogin, lang, setLang, t }) {
+  const [selected, setSelected] = useState(users[0]?.id || "");
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    if (!selected) return;
+    const ok = onLogin(selected, pin);
+    if (!ok) {
+      setErr(t("login_error"));
+      setPin("");
+    } else {
+      setErr("");
+    }
+  };
+
+  const switchLabel = lang === "fr" ? "EN" : "FR";
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0,
+      background: "linear-gradient(160deg, #F5F3EE 0%, #FAF7EE 55%, #F0E7C9 100%)",
+      display: "grid", placeItems: "center",
+      fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+      color: "#1A1A1A",
+    }}>
+      <button
+        type="button"
+        onClick={() => setLang(lang === "fr" ? "en" : "fr")}
+        style={{
+          position: "absolute", top: 20, right: 20,
+          border: "1px solid #E8E3D8", background: "#fff",
+          borderRadius: 10, padding: "6px 14px",
+          fontSize: 12, fontWeight: 700, letterSpacing: 0.3,
+          cursor: "pointer",
+        }}
+      >
+        {switchLabel}
+      </button>
+
+      <div style={{
+        width: 400, maxWidth: "92vw",
+        background: "#fff", border: "1px solid #E8E3D8",
+        borderRadius: 16, padding: "32px 28px",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.08)",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <div style={{
+            fontSize: 28, fontWeight: 700, letterSpacing: 2,
+            color: "#1A1A1A",
+          }}>SOCLE</div>
+          <div style={{
+            fontSize: 11, fontWeight: 700, letterSpacing: 4,
+            color: "#C9A84C", marginTop: 2,
+          }}>ACQUISITIONS</div>
+          <div style={{ fontSize: 12, color: "#6B6B6B", marginTop: 10 }}>
+            {t("login_tag")}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+          {users.map(u => {
+            const isActive = selected === u.id;
+            return (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => { setSelected(u.id); setPin(""); setErr(""); }}
+                style={{
+                  flex: 1,
+                  padding: "14px 10px",
+                  borderRadius: 12,
+                  border: `1.5px solid ${isActive ? "#C9A84C" : "#E8E3D8"}`,
+                  background: isActive ? "#FAF5E6" : "#fff",
+                  cursor: "pointer",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+                }}
+              >
+                <div style={{
+                  width: 44, height: 44, borderRadius: "50%",
+                  background: isActive ? "#C9A84C" : "#F5F3EE",
+                  color: isActive ? "#fff" : "#6B6B6B",
+                  display: "grid", placeItems: "center",
+                  fontWeight: 700, fontSize: 14,
+                }}>
+                  {u.initials}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1A1A1A" }}>{u.name}</div>
+                <div style={{ fontSize: 10, color: "#A0A0A0" }}>
+                  {(u.roleLabel && u.roleLabel[lang]) || u.role}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={4}
+          autoFocus
+          value={pin}
+          placeholder={t("login_pin_placeholder")}
+          onChange={e => { setPin(e.target.value.replace(/[^0-9]/g, "").slice(0, 4)); setErr(""); }}
+          onKeyDown={e => { if (e.key === "Enter") submit(); }}
+          style={{
+            width: "100%",
+            padding: "12px 14px",
+            fontSize: 18, letterSpacing: 8, textAlign: "center",
+            border: `1.5px solid ${err ? "#C0392B" : "#E8E3D8"}`,
+            borderRadius: 10,
+            outline: "none",
+            marginBottom: 10,
+          }}
+        />
+        {err && (
+          <div style={{ fontSize: 12, color: "#C0392B", textAlign: "center", marginBottom: 8 }}>
+            {err}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={submit}
+          disabled={pin.length < 4}
+          style={{
+            width: "100%",
+            padding: "12px",
+            background: pin.length < 4 ? "#E8E3D8" : "#C9A84C",
+            color: pin.length < 4 ? "#A0A0A0" : "#fff",
+            border: "none", borderRadius: 10,
+            fontSize: 13, fontWeight: 700, letterSpacing: 0.5,
+            cursor: pin.length < 4 ? "not-allowed" : "pointer",
+          }}
+        >
+          {t("login_submit")}
+        </button>
+      </div>
+    </div>
+  );
+}
