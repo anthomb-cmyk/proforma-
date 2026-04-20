@@ -17,11 +17,6 @@ import {
 import { migrateLeadsToOwners } from "./lib/ownerGrouping.js";
 
 // ─── Runtime constants ───────────────────────────────────────────────────────
-// OpenAI key for the in-app assistant chatbox. Client-side key — this ships in
-// the bundle, so keep it in the admin-configured env when hosted. Left empty
-// here so the repo doesn't leak a credential; Anthony fills it in locally.
-const OPENAI_API_KEY = "";
-
 // Hardcoded per-user PIN access. Client-side only (not a security boundary —
 // anyone with devtools can bypass). Good enough for a small internal team
 // where the real enforcement is "we trust each other" + role-gated UI.
@@ -82,7 +77,6 @@ const I18N = {
     chat_send: "Envoyer",
     chat_placeholder: "Posez votre question…",
     chat_thinking: "Réflexion…",
-    chat_key_missing: "⚠️ Clé OpenAI manquante. Ajoutez-la dans App.js (OPENAI_API_KEY).",
     chat_greet: (name) => `Bonjour ${name} ! Je suis l'assistant SOCLE. Posez-moi vos questions sur le CRM (stages, leads, follow-ups, calendrier, etc.) pour éviter de déranger Anthony.`,
     lang_switch: "EN",
   },
@@ -129,7 +123,6 @@ const I18N = {
     chat_send: "Send",
     chat_placeholder: "Ask a question…",
     chat_thinking: "Thinking…",
-    chat_key_missing: "⚠️ OpenAI key missing. Add it in App.js (OPENAI_API_KEY).",
     chat_greet: (name) => `Hi ${name}! I'm the SOCLE assistant. Ask me anything about the CRM (stages, leads, follow-ups, calendar, etc.) so you don't have to call Anthony.`,
     lang_switch: "FR",
   },
@@ -797,11 +790,11 @@ export default function App() {
     setFlaggedLeads(prev => prev.filter(f => f.id !== flagId));
   }, []);
 
-  // ─── Chatbox → OpenAI gpt-4o-mini ─────────────────────────────────────────
-  // Client-side call (key ships in bundle — see OPENAI_API_KEY note). The
-  // system prompt sketches the CRM so the assistant can answer "what does
-  // Pipeline mean?" / "où est-ce que je flag un lead?" without Gaylord calling
-  // Anthony every ten minutes.
+  // ─── Chatbox → backend /api/chat proxy ────────────────────────────────────
+  // The OpenAI key lives on the server (Railway env var), so we just POST
+  // {messages, lang, user} to /api/chat and get back {ok, reply}. System
+  // prompt + model selection live in server.js — keeps the key out of the
+  // bundle and lets us tweak the prompt without redeploying the frontend.
   const sendChat = useCallback(async (text) => {
     const content = String(text || "").trim();
     if (!content || chatBusy) return;
@@ -809,52 +802,29 @@ export default function App() {
     const history = [...chatMessages.filter(m => m.role !== "system"), userMsg];
     setChatMessages(prev => [...prev, userMsg]);
     setChatInput("");
-    if (!OPENAI_API_KEY) {
-      setChatMessages(prev => [...prev, { role: "assistant", content: t("chat_key_missing") }]);
-      return;
-    }
     setChatBusy(true);
     try {
-      const sysPrompt = lang === "en" ? (
-        `You are the SOCLE ACQUISITIONS assistant — an internal tool for a small Quebec real estate acquisitions team. ` +
-        `Users: Anthony Makeen (admin, President) and Gaylord (employee, Acquisitions). ` +
-        `The CRM has these main views (left sidebar): Dashboard, Pipeline, Map (Carte), Follow-ups, Calendar, Investors (Investisseurs — one mailing address = one person, all their companies and properties grouped), Leads (import/enrich), Phone Finder (admin only, uses Google Places). ` +
-        `Deal stages: prospection → négociation → due diligence → closing → perdu. ` +
-        `Employees can flag a deal for Anthony's review from the Workspace CRM tab (yellow banner "Submit this lead to Anthony"). Submitted flags appear on Anthony's dashboard. Employees cannot delete deals or run phone enrichment. The ✦ IA buttons summarize deal/vendor notes. There's a Google Calendar connection and Twilio-powered call recording per deal. ` +
-        `The user talking to you right now is ${currentUser?.name || "a team member"} (${currentUser?.role || "member"}). Answer concisely in English. If they ask how to do something, describe the exact UI steps. If they ask something outside the CRM scope, politely redirect.`
-      ) : (
-        `Tu es l'assistant de SOCLE ACQUISITIONS, un CRM interne pour une petite équipe d'acquisition immobilière au Québec. ` +
-        `Utilisateurs : Anthony Makeen (admin, Président) et Gaylord (employé, Acquisitions). ` +
-        `Vues principales (barre de gauche) : Dashboard, Pipeline, Carte, Follow-ups, Calendrier, Investisseurs (une adresse postale = une personne, toutes ses compagnies et propriétés regroupées), Leads (importer/enrichir), Recherche Tél. (admin seulement, via Google Places). ` +
-        `Étapes d'un deal : prospection → négociation → due diligence → closing → perdu. ` +
-        `Les employés peuvent soumettre un lead à Anthony depuis l'onglet CRM du Workspace (bandeau jaune « Soumettre ce lead à Anthony »). Les leads soumis apparaissent sur le dashboard d'Anthony. Les employés ne peuvent pas supprimer de deals ni lancer la recherche téléphonique. Les boutons ✦ IA résument les notes du deal ou du vendeur. Il y a une connexion Google Calendar et un enregistrement d'appels Twilio par deal. ` +
-        `L'utilisateur qui te parle est ${currentUser?.name || "un membre de l'équipe"} (${currentUser?.role || "membre"}). Réponds en français, de façon concise. Si on te demande comment faire une action, décris les étapes exactes dans l'UI. Si la question sort du cadre du CRM, redirige poliment.`
-      );
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      const r = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "system", content: sysPrompt }, ...history],
-          temperature: 0.3,
+          messages: history,
+          lang,
+          user: currentUser ? { name: currentUser.name, role: currentUser.role } : null,
         }),
       });
-      const data = await r.json();
-      if (!r.ok) {
-        setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${data.error?.message || `HTTP ${r.status}`}` }]);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${data.error || `HTTP ${r.status}`}` }]);
         return;
       }
-      const reply = data.choices?.[0]?.message?.content || "—";
-      setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
+      setChatMessages(prev => [...prev, { role: "assistant", content: data.reply || "—" }]);
     } catch (err) {
       setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${err?.message || "Erreur réseau."}` }]);
     } finally {
       setChatBusy(false);
     }
-  }, [chatMessages, chatBusy, lang, currentUser, t]);
+  }, [chatMessages, chatBusy, lang, currentUser]);
 
   // Seed the chat with a greeting the first time it opens for a given user/lang.
   useEffect(() => {

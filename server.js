@@ -3961,6 +3961,70 @@ app.post("/api/ai/summarize", async (req, res) => {
   }
 });
 
+// ─── SOCLE Assistant chatbox ────────────────────────────────────────────────
+// Client POSTs { messages, lang, user } — server forwards to OpenAI with
+// the system prompt built here. Key lives server-side (Railway env var
+// OPENAI_API_KEY) so it never ships in the client bundle.
+const CHAT_SYSTEM_PROMPT_FR = [
+  "Tu es l'assistant de SOCLE ACQUISITIONS, un CRM interne pour une petite équipe d'acquisition immobilière au Québec.",
+  "Utilisateurs : Anthony Makeen (admin, Président) et Gaylord (employé, Acquisitions).",
+  "Vues principales (barre de gauche) : Dashboard, Pipeline, Carte, Follow-ups, Calendrier, Investisseurs (une adresse postale = une personne, toutes ses compagnies et propriétés regroupées), Leads (importer/enrichir), Recherche Tél. (admin seulement, via Google Places).",
+  "Étapes d'un deal : prospection → négociation → due diligence → closing → perdu.",
+  "Les employés peuvent soumettre un lead à Anthony depuis l'onglet CRM du Workspace (bandeau jaune « Soumettre ce lead à Anthony »). Les leads soumis apparaissent sur le dashboard d'Anthony. Les employés ne peuvent pas supprimer de deals ni lancer la recherche téléphonique. Les boutons ✦ IA résument les notes du deal ou du vendeur. Il y a une connexion Google Calendar et un enregistrement d'appels Twilio par deal.",
+  "Import du rôle d'évaluation: Investisseurs → « 📥 Importer un rôle » → aperçu (propriétaires uniques, numéros déjà remplis, coût estimé) → « Importer + enrichir » lance Google Places sur les propriétaires sans numéro.",
+  "Réponds en français, de façon concise. Si on te demande comment faire une action, décris les étapes exactes dans l'UI. Si la question sort du cadre du CRM, redirige poliment.",
+].join("\n");
+
+const CHAT_SYSTEM_PROMPT_EN = [
+  "You are the SOCLE ACQUISITIONS assistant — an internal tool for a small Quebec real estate acquisitions team.",
+  "Users: Anthony Makeen (admin, President) and Gaylord (employee, Acquisitions).",
+  "The CRM has these main views (left sidebar): Dashboard, Pipeline, Map (Carte), Follow-ups, Calendar, Investors (Investisseurs — one mailing address = one person, all their companies and properties grouped), Leads (import/enrich), Phone Finder (admin only, uses Google Places).",
+  "Deal stages: prospection → négociation → due diligence → closing → perdu.",
+  "Employees can flag a deal for Anthony's review from the Workspace CRM tab (yellow banner 'Submit this lead to Anthony'). Submitted flags appear on Anthony's dashboard. Employees cannot delete deals or run phone enrichment. The ✦ IA buttons summarize deal/vendor notes. There's a Google Calendar connection and Twilio-powered call recording per deal.",
+  "Rôle d'évaluation import: Investors → '📥 Import a rôle' → preview (unique owners, phones already on file, estimated cost) → 'Import + enrich' runs Google Places on owners with no phone.",
+  "Answer concisely in English. If they ask how to do something, describe the exact UI steps. If they ask something outside the CRM scope, politely redirect.",
+].join("\n");
+
+app.post("/api/chat", async (req, res) => {
+  if (!openai) return res.status(503).json({ ok: false, error: "OPENAI_API_KEY non configurée." });
+
+  const rawMessages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  const lang = req.body?.lang === "en" ? "en" : "fr";
+  const userName = String(req.body?.user?.name || "").trim();
+  const userRole = String(req.body?.user?.role || "").trim();
+
+  // Whitelist only role+content, cap history to last 20 turns, cap each
+  // message at 4 KB so a rogue client can't blow up the prompt.
+  const messages = rawMessages
+    .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-20)
+    .map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
+
+  if (!messages.length) return res.status(400).json({ ok: false, error: "Messages manquants." });
+
+  const base = lang === "en" ? CHAT_SYSTEM_PROMPT_EN : CHAT_SYSTEM_PROMPT_FR;
+  const whoLine = userName
+    ? (lang === "en"
+        ? `The user talking to you right now is ${userName} (${userRole || "member"}).`
+        : `L'utilisateur qui te parle est ${userName} (${userRole || "membre"}).`)
+    : "";
+  const systemPrompt = whoLine ? `${base}\n${whoLine}` : base;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+      temperature: 0.3,
+      max_tokens: 600,
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
+    });
+    const reply = completion.choices?.[0]?.message?.content?.trim() || "—";
+    res.json({ ok: true, reply });
+  } catch (err) {
+    console.error("[api/chat] OpenAI error:", err?.message);
+    res.status(502).json({ ok: false, error: err?.message || "Erreur API OpenAI." });
+  }
+});
+
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
 // All enrichment logic lives in services/phoneEnrichment.js. This endpoint is
 // now a thin HTTP adapter: validate the payload, delegate to the service, map
