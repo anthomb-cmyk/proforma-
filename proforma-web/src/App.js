@@ -14,6 +14,7 @@ import {
   buildCL, createDeal, dealLabel, normalizeDeal,
   buildLeadIdentityKey, getLeadPhones,
 } from "./lib/dealHelpers.js";
+import { migrateLeadsToOwners } from "./lib/ownerGrouping.js";
 
 import NavIcon from "./components/NavIcon.jsx";
 import Topbar from "./components/Topbar.jsx";
@@ -33,6 +34,7 @@ const DealMap = lazyWithPreload(() => import("./components/DealMap.jsx"));
 const XlsxViewer = lazyWithPreload(() => import("./components/XlsxViewer.jsx"));
 const LeadsManager = lazyWithPreload(() => import("./pages/LeadsManager.jsx"));
 const PhoneFinder = lazyWithPreload(() => import("./pages/PhoneFinder.jsx"));
+const OwnersManager = lazyWithPreload(() => import("./pages/OwnersManager.jsx"));
 
 // Map nav-item id → preload function. The nav button's onMouseEnter /
 // onFocus calls this to kick off the chunk fetch. Entries without a
@@ -42,6 +44,7 @@ const NAV_PRELOAD = {
   map: DealMap.preload,
   leads: LeadsManager.preload,
   phonefinder: PhoneFinder.preload,
+  owners: OwnersManager.preload,
 };
 
 const CSS = `
@@ -413,6 +416,7 @@ export default function App() {
   const stored = load();
   const [deals, setDeals]         = useState((stored?.deals || []).map(normalizeDeal));
   const [leads, setLeads]         = useState(Array.isArray(stored?.leads) ? stored.leads : []);
+  const [owners, setOwners]       = useState(Array.isArray(stored?.owners) ? stored.owners : []);
   const [currentId, setCurrentId] = useState(stored?.currentId || null);
   const [gcalOk, setGcalOk]       = useState(stored?.gcalOk || false);
   const [gcalEvents, setGcalEvents] = useState([]);
@@ -453,7 +457,7 @@ export default function App() {
   useEffect(() => {
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      persist({ deals, leads, currentId, gcalOk }, (err) => {
+      persist({ deals, leads, owners, currentId, gcalOk }, (err) => {
         if (isQuotaError(err)) {
           setAppToast("⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.");
           setTimeout(() => setAppToast(""), 8000);
@@ -461,7 +465,7 @@ export default function App() {
       });
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
-  }, [deals, leads, currentId, gcalOk]);
+  }, [deals, leads, owners, currentId, gcalOk]);
 
   // Make sure a pending write is flushed before the tab closes.
   useEffect(() => {
@@ -469,12 +473,28 @@ export default function App() {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
-        persist({ deals, leads, currentId, gcalOk });
+        persist({ deals, leads, owners, currentId, gcalOk });
       }
     };
     window.addEventListener("beforeunload", flush);
     return () => window.removeEventListener("beforeunload", flush);
-  }, [deals, leads, currentId, gcalOk]);
+  }, [deals, leads, owners, currentId, gcalOk]);
+
+  // One-time migration: rebuild the Investisseurs view from legacy Leads.
+  // Runs only when we have leads but no owners yet (fresh install of the
+  // owner-primary model). Subsequent changes to `owners` happen through the
+  // OwnersManager UI or during Phone Finder imports (see Task #4).
+  const migratedRef = useRef(false);
+  useEffect(() => {
+    if (migratedRef.current) return;
+    if (owners.length > 0) { migratedRef.current = true; return; }
+    if (!Array.isArray(leads) || leads.length === 0) return;
+    const migrated = migrateLeadsToOwners(leads);
+    if (migrated.length > 0) {
+      setOwners(migrated);
+    }
+    migratedRef.current = true;
+  }, [leads, owners.length]);
 
   const current = useMemo(() => deals.find(d => d.id === currentId) || null, [deals, currentId]);
   const currentCalls = useMemo(() => {
@@ -1003,6 +1023,7 @@ export default function App() {
               { id:"map", label:"Carte" },
               { id:"followups", label:"Follow-ups" },
               { id:"calendar", label:"Calendrier" },
+              { id:"owners", label:"Investisseurs" },
               { id:"leads", label:"Leads" },
               { id:"phonefinder", label:"Recherche Tél." },
             ].map(item => (
@@ -1349,6 +1370,19 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              </div>
+            </>
+          )}
+
+          {view === "owners" && (
+            <>
+              <Topbar title="Investisseurs" subtitle="Un investisseur = une adresse postale. Toutes ses compagnies, numéros et propriétés regroupés." overdue={stats.overdue} />
+              <div className="content">
+                <ErrorBoundary label="la page Investisseurs">
+                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des investisseurs…</div>}>
+                    <OwnersManager owners={owners} setOwners={setOwners} />
+                  </Suspense>
+                </ErrorBoundary>
               </div>
             </>
           )}
