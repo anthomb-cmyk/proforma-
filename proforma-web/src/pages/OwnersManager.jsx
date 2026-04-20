@@ -3,19 +3,41 @@
 // (aliases), many phone numbers, many buildings, and one mailing address.
 //
 // This page is a minimal, functional investor-centric view:
-//   • Left column: owner list with search + sort
-//   • Right column: owner fiche showing aliases (companies), phones, emails,
-//     buildings, postal address, and call notes
+//   • Left column: owner list with search + sort + source filter
+//   • Right column: owner fiche showing aliases (companies), phones (with
+//     source badges), emails, buildings, postal address, and call notes
+//   • Header: "Importer un rôle" (XLSX) + "Enrichir numéros manquants"
+//     with a "tester 100 d'abord" preset to validate hit rate before
+//     committing to a full batch
 //
 // Owners come from App state (populated either via migration of existing
-// leads or by the importer — see lib/ownerGrouping.js). Call notes and stage
-// persist per-owner, not per-building.
+// leads, via the roleImport flow, or by the Leads importer — see
+// lib/ownerGrouping.js + lib/roleImport.js). Call notes and stage persist
+// per-owner, not per-building.
 
 import { useMemo, useState, useRef } from "react";
 import useFocusHotkey from "../lib/useFocusHotkey.js";
 import useDebouncedValue from "../lib/useDebouncedValue.js";
+import useEscapeKey from "../lib/useEscapeKey.js";
 import { describeOwnerKey } from "../lib/ownerKey.js";
-import { ownersToLookupRows, applyLookupResultsToOwners } from "../lib/ownerGrouping.js";
+import { ownersToLookupRows, applyLookupResultsToOwners, mergeOwners } from "../lib/ownerGrouping.js";
+import { normalizePhoneKey } from "../lib/phoneUtils.js";
+import { parseRoleXlsx, buildOwnersAndLeadsFromRole } from "../lib/roleImport.js";
+import { estimateLookupCost, formatCost } from "../lib/phoneLookupCost.js";
+import { loadTodaySpend, recordBatch } from "../lib/dailySpendTracker.js";
+
+// Batch size for the POST /api/phone-lookup call — matches PhoneFinder's
+// BATCH_SIZE (keeps each request under the proxy/timeout ceiling).
+const BATCH_SIZE = 10;
+
+// Hard daily cap on phone-lookup spend. Mirrors the backend-side budget
+// check so the client refuses to start a batch that would obviously blow
+// past the cap — surfaces the 402 error from the server proactively.
+const DAILY_SPEND_CAP_USD = 50;
+
+// Preset for "Tester 100 d'abord" — lets the user measure Places hit rate
+// before committing the full batch.
+const TEST_BATCH_SIZE = 100;
 
 const STAGES = [
   { id: "new",       label: "Nouveau",    color: "#6B6B6B", bg: "#ECECEC" },
@@ -28,6 +50,22 @@ const STAGES = [
 
 function stageCfg(id) {
   return STAGES.find(s => s.id === id) || STAGES[0];
+}
+
+// Source badge colors + labels. Excel = Rôle d'évaluation import, Places =
+// Google Places lookup, Manual = typed into the fiche, Migrated = pre-dates
+// the phoneSources convention (absent source).
+const SOURCE_CFG = {
+  Excel:    { label: "Excel",    bg: "#ECECEC", color: "#6B6B6B" },
+  Places:   { label: "Places",   bg: "#F5EDD6", color: "#8D742D" },
+  Manual:   { label: "Manuel",   bg: "#E0EAFF", color: "#2563EB" },
+  Migrated: { label: "Importé",  bg: "#F0EDE3", color: "#7B7B7B" },
+};
+
+function sourceFor(owner, phone) {
+  const k = normalizePhoneKey(phone);
+  if (!k) return "Migrated";
+  return owner?.phoneSources?.[k] || "Migrated";
 }
 
 // Case-insensitive accent-less substring match — lets "tremblay" find
@@ -48,15 +86,32 @@ function formatPostalAddress(owner) {
   return describeOwnerKey(owner.ownerKey);
 }
 
-export default function OwnersManager({ owners = [], setOwners }) {
+export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(owners[0]?.id || null);
   const [stageFilter, setStageFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all"); // all | missing | Excel | Places | Manual
   const [sortBy, setSortBy] = useState("buildings"); // buildings | name | phones
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichNotice, setEnrichNotice] = useState("");
+  const [enrichProgress, setEnrichProgress] = useState(null); // { done, total, newlyFound }
+  const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
+
+  // Rôle import modal state. rolePreview holds the parsed structure while
+  // the user reviews stats + filters; null means no modal open.
+  const [rolePreview, setRolePreview] = useState(null);
+  const [roleBusy, setRoleBusy] = useState(false);
+  const [roleError, setRoleError] = useState("");
+  // Targeting filters applied BEFORE we emit Leads. Defaults: all off.
+  const [rfMinValue, setRfMinValue] = useState("");
+  const [rfMaxYear, setRfMaxYear] = useState("");
+  const [rfInscriptionBefore, setRfInscriptionBefore] = useState("");
+  const [rfUnitsMin, setRfUnitsMin] = useState("");
+  const [rfUnitsMax, setRfUnitsMax] = useState("");
+
   const searchRef = useRef(null);
   useFocusHotkey(searchRef);
+  useEscapeKey(() => setRolePreview(null), Boolean(rolePreview) && !roleBusy);
 
   const debouncedSearch = useDebouncedValue(search, 150);
 
@@ -65,10 +120,19 @@ export default function OwnersManager({ owners = [], setOwners }) {
     if (stageFilter !== "all") {
       list = list.filter(o => (o.stage || "new") === stageFilter);
     }
+    if (sourceFilter !== "all") {
+      list = list.filter(o => {
+        const phones = o.phones || [];
+        if (sourceFilter === "missing") return phones.length === 0;
+        // Match if ANY phone on the owner has this source.
+        return phones.some(p => sourceFor(o, p) === sourceFilter);
+      });
+    }
     if (debouncedSearch) {
       list = list.filter(o => {
         if (matches(o.displayName, debouncedSearch)) return true;
         if ((o.aliases || []).some(a => matches(a, debouncedSearch))) return true;
+        if ((o.contactNames || []).some(n => matches(n, debouncedSearch))) return true;
         if ((o.phones || []).some(p => matches(p, debouncedSearch))) return true;
         if (matches(formatPostalAddress(o), debouncedSearch)) return true;
         if ((o.buildings || []).some(b => matches(b.buildingAddress, debouncedSearch))) return true;
@@ -82,7 +146,7 @@ export default function OwnersManager({ owners = [], setOwners }) {
       return (b.buildings?.length || 0) - (a.buildings?.length || 0);
     });
     return list;
-  }, [owners, debouncedSearch, stageFilter, sortBy]);
+  }, [owners, debouncedSearch, stageFilter, sourceFilter, sortBy]);
 
   const selected = useMemo(
     () => (owners || []).find(o => o.id === selectedId) || filteredOwners[0] || null,
@@ -98,65 +162,210 @@ export default function OwnersManager({ owners = [], setOwners }) {
     const owns = Array.isArray(owners) ? owners : [];
     const buildings = owns.reduce((n, o) => n + (o.buildings?.length || 0), 0);
     const phones = owns.reduce((n, o) => n + (o.phones?.length || 0), 0);
-    return { owners: owns.length, buildings, phones };
+    const missing = owns.filter(o => !o.phones || o.phones.length === 0).length;
+    return { owners: owns.length, buildings, phones, missing };
   }, [owners]);
 
-  // Owner-level enrichment: send ONE synthesized row per owner (not one per
-  // building) to /api/phone-lookup. For an investor holding 58 buildings this
-  // collapses 58 API passes into 1 — the whole reason this screen exists.
-  //
-  // Targets owners that don't yet have a phone tracked AND have a mailing
-  // address we can query against. Runs up to 50 at a time (the server's
-  // batch cap).
-  async function enrichPhones() {
-    if (typeof setOwners !== "function") return;
-    if (enrichBusy) return;
-    const candidates = (owners || []).filter(o =>
-      (!o.phones || o.phones.length === 0) && (o.postalAddress?.street || o.postalAddress?.postalCode)
-    );
-    if (!candidates.length) {
-      setEnrichNotice("Tous les investisseurs avec adresse ont déjà au moins un numéro.");
-      setTimeout(() => setEnrichNotice(""), 4000);
-      return;
-    }
-    const batch = candidates.slice(0, 50);
-    const rowLookup = ownersToLookupRows(batch);
-    if (!rowLookup.length) {
-      setEnrichNotice("Aucun investisseur n'a une adresse postale exploitable.");
-      setTimeout(() => setEnrichNotice(""), 4000);
-      return;
-    }
-    setEnrichBusy(true);
-    setEnrichNotice(`Recherche en cours pour ${rowLookup.length} investisseur${rowLookup.length > 1 ? "s" : ""}…`);
-    try {
-      const resp = await fetch("/api/phone-lookup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: rowLookup.map(r => r.row) }),
-      });
-      const data = await resp.json();
-      if (!data.ok) {
-        if (resp.status === 402) {
-          setEnrichNotice(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
-          return;
-        }
-        setEnrichNotice(data.error || `Erreur serveur (${resp.status}).`);
-        return;
+  // ── Rôle import ──────────────────────────────────────────────────────────
+
+  function pickRoleFile() {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
+    inp.onchange = async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      setRoleError("");
+      setRoleBusy(true);
+      try {
+        const parsed = await parseRoleXlsx(f);
+        setRolePreview({ parsed, fileName: f.name });
+      } catch (err) {
+        setRoleError(String(err?.message || err));
+        setRolePreview(null);
+      } finally {
+        setRoleBusy(false);
       }
-      const { owners: next, touched } = applyLookupResultsToOwners(owners, data.results || [], rowLookup);
-      setOwners(next);
-      setEnrichNotice(
-        touched > 0
-          ? `${touched} investisseur${touched > 1 ? "s" : ""} enrichi${touched > 1 ? "s" : ""}.`
-          : "Aucun nouveau numéro trouvé."
+    };
+    inp.click();
+  }
+
+  // Build the filter predicate from the modal's targeting inputs. Each
+  // input is optional — blanks mean "no constraint on that axis".
+  function buildFilterFn() {
+    const minValue = Number(rfMinValue) || 0;
+    const maxYear = Number(rfMaxYear) || 0;
+    const inscriptionYearMax = Number(rfInscriptionBefore) || 0;
+    const unitsMin = Number(rfUnitsMin) || 0;
+    const unitsMax = Number(rfUnitsMax) || 0;
+    if (!minValue && !maxYear && !inscriptionYearMax && !unitsMin && !unitsMax) {
+      return undefined;
+    }
+    return (p) => {
+      if (minValue && (p.valeurImmeuble || 0) < minValue) return false;
+      if (maxYear && (p.yearBuilt || 0) > maxYear) return false;
+      if (inscriptionYearMax && p.dateInscription) {
+        // dateInscription format varies — pull out the year with a regex.
+        const m = String(p.dateInscription).match(/(19|20)\d{2}/);
+        const y = m ? Number(m[0]) : 0;
+        if (y && y > inscriptionYearMax) return false;
+      }
+      const units = p.nbTotalUnites || p.nbLogements || 0;
+      if (unitsMin && units < unitsMin) return false;
+      if (unitsMax && units > unitsMax) return false;
+      return true;
+    };
+  }
+
+  // Apply the staged import and optionally kick off enrichment. `mode`
+  // is one of "import_only" | "import_enrich_all" | "import_enrich_100".
+  async function confirmRoleImport(mode) {
+    if (!rolePreview?.parsed) return;
+    const filterFn = buildFilterFn();
+    const { parsed, fileName } = rolePreview;
+    const { newOwners, updatedOwners, allOwners, leads } = buildOwnersAndLeadsFromRole(
+      parsed,
+      owners,
+      { sourceFile: fileName, filterFn },
+    );
+    // Commit the merge into App state — setOwners receives the full list.
+    if (typeof setOwners === "function") setOwners(allOwners);
+    if (typeof onAddLeads === "function" && leads.length) onAddLeads(leads);
+    setEnrichNotice(
+      `📥 Import terminé · ${newOwners.length} nouveau${newOwners.length > 1 ? "x" : ""} · `
+      + `${updatedOwners.length} mis à jour · ${leads.length} propriété${leads.length > 1 ? "s" : ""} ajoutée${leads.length > 1 ? "s" : ""}.`
+    );
+    setTimeout(() => setEnrichNotice(""), 6000);
+    setRolePreview(null);
+    resetRoleFilters();
+
+    // Kick off enrichment using the freshly merged owner list so we target
+    // the just-imported records, not a stale snapshot.
+    if (mode !== "import_only") {
+      const targets = allOwners.filter(o =>
+        (newOwners.some(n => n.id === o.id) || updatedOwners.some(u => u.id === o.id))
+        && (!o.phones || o.phones.length === 0)
       );
-      setTimeout(() => setEnrichNotice(""), 5000);
-    } catch (err) {
-      setEnrichNotice(err?.message || "Connexion serveur impossible.");
-    } finally {
-      setEnrichBusy(false);
+      const cap = mode === "import_enrich_100" ? TEST_BATCH_SIZE : targets.length;
+      if (targets.length) {
+        await runEnrichment(targets.slice(0, cap), allOwners);
+      }
     }
   }
+
+  function resetRoleFilters() {
+    setRfMinValue("");
+    setRfMaxYear("");
+    setRfInscriptionBefore("");
+    setRfUnitsMin("");
+    setRfUnitsMax("");
+  }
+
+  // ── Places enrichment ────────────────────────────────────────────────────
+
+  // Run the lookup on an arbitrary list of target owners. `seedOwners` is
+  // the "source of truth" owner list we mutate incrementally — defaults to
+  // the current App state but the caller can pass the freshly-merged list
+  // right after an import so we don't lose the rôle's newly added owners
+  // in the first setOwners call.
+  async function runEnrichment(targets, seedOwners) {
+    if (typeof setOwners !== "function") return;
+    if (!Array.isArray(targets) || !targets.length) {
+      setEnrichNotice("Aucun investisseur à enrichir avec ces critères.");
+      setTimeout(() => setEnrichNotice(""), 4000);
+      return;
+    }
+    const rowLookup = ownersToLookupRows(targets);
+    if (!rowLookup.length) {
+      setEnrichNotice("Aucun investisseur ciblé n'a une adresse postale exploitable.");
+      setTimeout(() => setEnrichNotice(""), 4000);
+      return;
+    }
+    // Refuse to start if we're already past the daily cap — the backend
+    // will 402 the request anyway, but surfacing it here keeps the UX
+    // honest.
+    const currentSpend = loadTodaySpend();
+    if (currentSpend.estCost >= DAILY_SPEND_CAP_USD) {
+      setEnrichNotice(`Plafond quotidien atteint (${formatCost(currentSpend.estCost)}). Réessayez demain.`);
+      setTimeout(() => setEnrichNotice(""), 6000);
+      return;
+    }
+
+    setEnrichBusy(true);
+    setEnrichProgress({ done: 0, total: rowLookup.length, newlyFound: 0 });
+
+    let workingOwners = Array.isArray(seedOwners) ? seedOwners : owners;
+    let done = 0;
+    let totalFound = 0;
+    let bail = false;
+
+    for (let i = 0; i < rowLookup.length && !bail; i += BATCH_SIZE) {
+      const slice = rowLookup.slice(i, i + BATCH_SIZE);
+      try {
+        const resp = await fetch("/api/phone-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: slice.map(s => s.row) }),
+        });
+        const data = await resp.json();
+        if (!data?.ok) {
+          if (resp.status === 402) {
+            setEnrichNotice(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+          } else {
+            setEnrichNotice(data?.error || `Erreur serveur (${resp.status}).`);
+          }
+          bail = true;
+          break;
+        }
+        if (data.budget && typeof data.budget.spentUsd === "number") {
+          setDailySpend(prev => ({ ...prev, estCost: data.budget.spentUsd, date: data.budget.date || prev.date }));
+        }
+        const applied = applyLookupResultsToOwners(workingOwners, data.results || [], slice);
+        workingOwners = applied.owners;
+        totalFound += applied.touched;
+        done += slice.length;
+        setEnrichProgress({ done, total: rowLookup.length, newlyFound: totalFound });
+        // Commit intermediate progress so the UI updates row-by-row —
+        // matches PhoneFinder's per-batch setResultRuns pattern.
+        setOwners(workingOwners);
+      } catch (err) {
+        setEnrichNotice(`Erreur réseau: ${err?.message || err}`);
+        bail = true;
+        break;
+      }
+    }
+
+    if (done > 0) {
+      const est = estimateLookupCost(done);
+      setDailySpend(recordBatch(done, est.mid));
+    }
+    setEnrichBusy(false);
+    setEnrichProgress(null);
+    if (!bail) {
+      setEnrichNotice(
+        totalFound > 0
+          ? `✅ ${totalFound} investisseur${totalFound > 1 ? "s" : ""} enrichi${totalFound > 1 ? "s" : ""} sur ${done}.`
+          : `Aucun nouveau numéro trouvé sur ${done} recherche${done > 1 ? "s" : ""}.`
+      );
+      setTimeout(() => setEnrichNotice(""), 6000);
+    }
+  }
+
+  // Public entry points for the two buttons.
+  async function enrichAll() {
+    const targets = (owners || []).filter(o =>
+      (!o.phones || o.phones.length === 0) && (o.postalAddress?.street || o.postalAddress?.postalCode)
+    );
+    await runEnrichment(targets, owners);
+  }
+  async function enrichTest100() {
+    const targets = (owners || []).filter(o =>
+      (!o.phones || o.phones.length === 0) && (o.postalAddress?.street || o.postalAddress?.postalCode)
+    );
+    await runEnrichment(targets.slice(0, TEST_BATCH_SIZE), owners);
+  }
+
+  // ── Rendering ────────────────────────────────────────────────────────────
 
   return (
     <div className="om-shell">
@@ -167,6 +376,7 @@ export default function OwnersManager({ owners = [], setOwners }) {
           <div className="om-title">Investisseurs · {totals.owners}</div>
           <div className="om-sub">
             {totals.buildings} propriété{totals.buildings !== 1 ? "s" : ""} · {totals.phones} numéro{totals.phones !== 1 ? "s" : ""} tracé{totals.phones !== 1 ? "s" : ""}
+            {totals.missing > 0 ? ` · ${totals.missing} sans numéro` : ""}
           </div>
         </div>
         <div className="om-hint">Un propriétaire = une adresse postale. Les compagnies à numéro sont regroupées comme aliases.</div>
@@ -184,26 +394,142 @@ export default function OwnersManager({ owners = [], setOwners }) {
           <option value="all">Tous les statuts</option>
           {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
+        <select className="om-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+          <option value="all">Tous les numéros</option>
+          <option value="missing">Numéro manquant</option>
+          <option value="Excel">Excel</option>
+          <option value="Places">Places</option>
+          <option value="Manual">Manuel</option>
+        </select>
         <select className="om-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value="buildings">Tri: plus de propriétés</option>
           <option value="phones">Tri: plus de numéros</option>
           <option value="name">Tri: nom A–Z</option>
         </select>
         <button
-          className="om-enrich-btn"
-          onClick={enrichPhones}
-          disabled={enrichBusy || totals.owners === 0}
-          title="Enrichit les numéros de téléphone via Google Places — une requête par investisseur plutôt qu'une par immeuble."
+          className="om-import-btn"
+          onClick={pickRoleFile}
+          disabled={roleBusy}
+          title="Importe un rôle d'évaluation XLSX de la Ville (Longueuil, Montréal, etc.). Dédupe par adresse postale du propriétaire."
         >
-          {enrichBusy ? "Recherche…" : "☎ Enrichir les numéros"}
+          {roleBusy ? "Lecture…" : "📥 Importer un rôle"}
+        </button>
+        <button
+          className="om-enrich-btn"
+          onClick={enrichAll}
+          disabled={enrichBusy || totals.missing === 0}
+          title="Enrichit les numéros manquants via Google Places — une requête par investisseur."
+        >
+          {enrichBusy ? "Recherche…" : "🔍 Enrichir numéros manquants"}
+        </button>
+        <button
+          className="om-test-btn"
+          onClick={enrichTest100}
+          disabled={enrichBusy || totals.missing === 0}
+          title={`Teste la recherche Places sur les ${TEST_BATCH_SIZE} premiers investisseurs sans numéro pour mesurer le taux de succès avant un lot complet.`}
+        >
+          ▶︎ Tester 100 d'abord
         </button>
       </div>
       {enrichNotice && <div className="om-notice">{enrichNotice}</div>}
+      {roleError && <div className="om-notice om-notice-err">⚠ {roleError}</div>}
+      {enrichProgress && (
+        <div className="om-progress">
+          <div className="om-progress-row">
+            <span>⏳ {enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound} trouvé{enrichProgress.newlyFound !== 1 ? "s" : ""}</span>
+            <span className="om-progress-spend">Aujourd'hui ~{formatCost(dailySpend.estCost)}</span>
+          </div>
+          <div className="om-progress-bar">
+            <div style={{ width: `${Math.round((enrichProgress.done / Math.max(1, enrichProgress.total)) * 100)}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Rôle preview modal ──────────────────────────────────────────── */}
+      {rolePreview && (() => {
+        const stats = rolePreview.parsed.stats;
+        const needLookup = stats.needLookup;
+        const est = estimateLookupCost(needLookup);
+        // Sanity check: show the first 5 owners' display names.
+        const firstFive = [];
+        for (const drafts of rolePreview.parsed.ownersMap.values()) {
+          if (firstFive.length >= 5) break;
+          const d = drafts[0];
+          firstFive.push({
+            name: (d.firstName && d.lastName) ? `${d.firstName} ${d.lastName}` : d.name,
+            address: [d.postalAddress.street, d.postalAddress.city, d.postalAddress.postalCode].filter(Boolean).join(", "),
+            phones: drafts.flatMap(x => x.phones).slice(0, 2),
+          });
+        }
+        return (
+          <div className="mo" onClick={() => !roleBusy && setRolePreview(null)}>
+            <div className="mo-box" onClick={e => e.stopPropagation()} style={{maxWidth:640}}>
+              <div className="mo-title">Importer un rôle d'évaluation</div>
+              <div className="mo-sub">
+                <strong>{rolePreview.fileName}</strong>
+              </div>
+              <div className="mo-stats">
+                <div><strong>{stats.properties.toLocaleString("fr-CA")}</strong> propriétés</div>
+                <div><strong>{stats.uniquePostal.toLocaleString("fr-CA")}</strong> investisseurs uniques</div>
+                <div>{stats.withPhone.toLocaleString("fr-CA")} avec numéro dans le rôle</div>
+                <div style={{color:"#8D742D",fontWeight:700}}>{needLookup.toLocaleString("fr-CA")} à rechercher via Places</div>
+                <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>
+                  Coût estimé de l'enrichissement: <strong>{formatCost(est.mid)}</strong> ({formatCost(est.lo)}–{formatCost(est.hi)})
+                </div>
+              </div>
+
+              <div className="mo-sec-title">Aperçu — 5 premiers investisseurs</div>
+              <ul className="mo-list">
+                {firstFive.map((o, i) => (
+                  <li key={i}>
+                    <strong>{o.name}</strong>
+                    <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || "(adresse postale manquante)"}</div>
+                    {o.phones.length > 0 && <div style={{fontSize:11,color:"var(--gold)"}}>📞 {o.phones.join(" · ")}</div>}
+                  </li>
+                ))}
+              </ul>
+
+              <div className="mo-sec-title">Filtres de ciblage (optionnels)</div>
+              <div className="mo-filters">
+                <label>
+                  <span>Valeur de l'immeuble ≥</span>
+                  <input type="number" placeholder="$" value={rfMinValue} onChange={e => setRfMinValue(e.target.value)} />
+                </label>
+                <label>
+                  <span>Année de construction ≤</span>
+                  <input type="number" placeholder="1970" value={rfMaxYear} onChange={e => setRfMaxYear(e.target.value)} />
+                </label>
+                <label>
+                  <span>Inscrit au rôle avant</span>
+                  <input type="number" placeholder="2005" value={rfInscriptionBefore} onChange={e => setRfInscriptionBefore(e.target.value)} />
+                </label>
+                <label>
+                  <span>Unités entre</span>
+                  <span style={{display:"flex",gap:6}}>
+                    <input type="number" placeholder="min" value={rfUnitsMin} onChange={e => setRfUnitsMin(e.target.value)} style={{width:"50%"}} />
+                    <input type="number" placeholder="max" value={rfUnitsMax} onChange={e => setRfUnitsMax(e.target.value)} style={{width:"50%"}} />
+                  </span>
+                </label>
+                <div style={{fontSize:11,color:"var(--text3)",gridColumn:"1 / -1"}}>
+                  Les filtres s'appliquent aux Leads (propriétés). Tous les investisseurs sont importés quoi qu'il arrive.
+                </div>
+              </div>
+
+              <div className="mo-foot">
+                <button className="btn" onClick={() => setRolePreview(null)} disabled={roleBusy}>Annuler</button>
+                <button className="btn" onClick={() => confirmRoleImport("import_only")} disabled={roleBusy}>Importer seulement</button>
+                <button className="btn" onClick={() => confirmRoleImport("import_enrich_100")} disabled={roleBusy}>Importer + tester 100</button>
+                <button className="btn btn-gold" onClick={() => confirmRoleImport("import_enrich_all")} disabled={roleBusy}>Importer + enrichir tout</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {totals.owners === 0 ? (
         <div className="om-empty">
           <div style={{fontSize:15, fontWeight:600, marginBottom:6}}>Aucun investisseur pour le moment</div>
-          <div>Importez vos leads depuis la page « Leads » — ils seront automatiquement regroupés par adresse postale du propriétaire.</div>
+          <div>Importez un rôle d'évaluation via le bouton « Importer un rôle » ci-dessus, ou importez vos leads depuis la page « Leads ».</div>
         </div>
       ) : (
         <div className="om-grid">
@@ -246,6 +572,7 @@ export default function OwnersManager({ owners = [], setOwners }) {
 
 function OwnerFiche({ owner, onUpdate }) {
   const s = stageCfg(owner.stage || "new");
+  const contactNames = Array.isArray(owner.contactNames) ? owner.contactNames : [];
 
   return (
     <div className="fiche-body">
@@ -253,6 +580,11 @@ function OwnerFiche({ owner, onUpdate }) {
         <div>
           <div className="fiche-name">{owner.displayName || "(Propriétaire inconnu)"}</div>
           <div className="fiche-addr">📍 {formatPostalAddress(owner) || describeOwnerKey(owner.ownerKey)}</div>
+          {owner.matchedBusinessName ? (
+            <div className="fiche-matched">
+              Places a associé cet investisseur à : <strong>{owner.matchedBusinessName}</strong>
+            </div>
+          ) : null}
         </div>
         <div className="fiche-stage-wrap">
           <span className="om-pill" style={{ background: s.bg, color: s.color }}>{s.label}</span>
@@ -282,15 +614,20 @@ function OwnerFiche({ owner, onUpdate }) {
         <section className="fiche-sec">
           <div className="fiche-sec-title">
             Téléphones ({owner.phones?.length || 0})
-            <span className="fiche-sec-hint">Tous les numéros trouvés à travers les compagnies</span>
+            <span className="fiche-sec-hint">Les badges indiquent la provenance de chaque numéro</span>
           </div>
           {owner.phones?.length ? (
             <ul className="fiche-list">
-              {owner.phones.map((p, i) => (
-                <li key={i}>
-                  <a href={`tel:${String(p).replace(/\D+/g, "")}`} style={{color: "var(--blue)", textDecoration: "none", fontWeight: 600}}>{p}</a>
-                </li>
-              ))}
+              {owner.phones.map((p, i) => {
+                const src = sourceFor(owner, p);
+                const cfg = SOURCE_CFG[src] || SOURCE_CFG.Migrated;
+                return (
+                  <li key={i} className="fiche-phone">
+                    <a href={`tel:${String(p).replace(/\D+/g, "")}`} style={{color: "var(--blue)", textDecoration: "none", fontWeight: 600}}>{p}</a>
+                    <span className="om-src-badge" style={{background: cfg.bg, color: cfg.color}} title={`Source: ${cfg.label}`}>{cfg.label}</span>
+                  </li>
+                );
+              })}
             </ul>
           ) : <div className="fiche-empty">Aucun numéro tracé pour l'instant.</div>}
         </section>
@@ -305,6 +642,18 @@ function OwnerFiche({ owner, onUpdate }) {
             </ul>
           ) : <div className="fiche-empty">Aucun courriel.</div>}
         </section>
+
+        {contactNames.length > 0 && (
+          <section className="fiche-sec">
+            <div className="fiche-sec-title">
+              Personnes physiques ({contactNames.length})
+              <span className="fiche-sec-hint">Les personnes identifiées à cette adresse postale (conjoints, etc.)</span>
+            </div>
+            <ul className="fiche-list">
+              {contactNames.map((n, i) => <li key={i}>{n}</li>)}
+            </ul>
+          </section>
+        )}
 
         <section className="fiche-sec fiche-sec-wide">
           <div className="fiche-sec-title">
@@ -366,10 +715,23 @@ const CSS = `
 .om-search{flex:1;min-width:240px;border:1px solid var(--border);background:#fff;border-radius:8px;padding:9px 12px;font-size:13px;outline:none}
 .om-search:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
 .om-select{border:1px solid var(--border);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none;cursor:pointer}
+.om-import-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.om-import-btn:hover:not(:disabled){background:#FAF8F4}
+.om-import-btn:disabled{opacity:.5;cursor:not-allowed}
 .om-enrich-btn{border:none;background:var(--gold);color:#fff;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
 .om-enrich-btn:hover:not(:disabled){filter:brightness(1.06)}
 .om-enrich-btn:disabled{background:#D6D0BD;cursor:not-allowed}
+.om-test-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.om-test-btn:hover:not(:disabled){background:#FAF8F4}
+.om-test-btn:disabled{opacity:.5;cursor:not-allowed}
 .om-notice{background:#F5EDD6;border:1px solid #E9D9AA;border-radius:8px;padding:9px 12px;font-size:12px;color:#8D742D;font-weight:600}
+.om-notice-err{background:#FCE9E6;border-color:#F5C9C2;color:#A93425}
+
+.om-progress{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.om-progress-row{display:flex;justify-content:space-between;font-size:12px;color:var(--text2);font-weight:600}
+.om-progress-spend{color:var(--text3);font-weight:500}
+.om-progress-bar{height:6px;background:#F0EDE3;border-radius:999px;overflow:hidden}
+.om-progress-bar > div{height:100%;background:var(--gold);border-radius:999px;transition:width .2s}
 
 .om-empty{background:var(--card);border:1px dashed var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--text2);line-height:1.5}
 .om-empty-small{padding:24px;text-align:center;color:var(--text3);font-size:13px}
@@ -387,12 +749,14 @@ const CSS = `
 .om-row-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
 .om-badge{font-size:10px;padding:2px 6px;border-radius:6px;background:#F0EDE3;color:var(--text2);font-weight:600}
 .om-pill{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.2px}
+.om-src-badge{font-size:10px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 
 .om-fiche{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-y:auto;min-height:0;max-height:calc(100vh - 240px)}
 .fiche-body{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
 .fiche-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border);padding-bottom:12px}
 .fiche-name{font-size:20px;font-weight:700;color:var(--text)}
 .fiche-addr{font-size:13px;color:var(--text2);margin-top:4px}
+.fiche-matched{font-size:11px;color:var(--text3);margin-top:4px;font-style:italic}
 .fiche-stage-wrap{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
 .fiche-stage{font-size:12px;padding:4px 8px}
 
@@ -404,6 +768,7 @@ const CSS = `
 .fiche-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--text)}
 .fiche-list li{padding:4px 0;border-bottom:1px dashed var(--border)}
 .fiche-list li:last-child{border-bottom:none}
+.fiche-phone{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .fiche-empty{font-size:12px;color:var(--text3);font-style:italic}
 
 .bld-table-wrap{overflow-x:auto}
@@ -414,6 +779,21 @@ const CSS = `
 
 .fiche-textarea{width:100%;min-height:100px;border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;outline:none;resize:vertical}
 .fiche-textarea:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
+
+/* Modal */
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.42);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.mo-box{background:#fff;border-radius:14px;padding:20px 22px;max-width:520px;width:100%;max-height:88vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.18)}
+.mo-title{font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px}
+.mo-sub{font-size:12px;color:var(--text2);margin-bottom:12px}
+.mo-stats{background:#FAF8F4;border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text);display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.mo-sec-title{font-size:12px;font-weight:700;color:var(--text);margin:14px 0 8px;letter-spacing:.2px;text-transform:uppercase}
+.mo-list{list-style:none;padding:0;margin:0 0 6px;display:flex;flex-direction:column;gap:6px;font-size:12px}
+.mo-list li{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#fff}
+.mo-filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+.mo-filters label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text2);font-weight:600}
+.mo-filters input{border:1px solid var(--border);background:#fff;border-radius:6px;padding:6px 8px;font-size:13px;outline:none;width:100%}
+.mo-filters input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
+.mo-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
 
 @media (max-width: 1100px){
   .om-grid{grid-template-columns:1fr}

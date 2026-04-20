@@ -18,17 +18,26 @@
 //     displayName,                    // most common Propriétaire personal name
 //     postalAddress: { street, city, province, postalCode },
 //     aliases: [string],              // every distinct company name seen for this owner
+//     contactNames: [string],         // natural-person names (spouses etc.) sharing the address
 //     phones: [string],               // deduped, ordered
+//     phoneSources: { [normalizedPhoneKey]: "Excel" | "Places" | "Manual" | "Migrated" },
+//     matchedBusinessName,            // last Places business-name hit (for disclosure in the UI)
 //     emails: [string],
 //     buildings: [{
 //       id, address, city, province, postalCode, buildingAddress,
-//       units, utilisation, assessment, yearBuilt, lotArea, sourceFile, sourceRow
+//       units, utilisation, assessment, yearBuilt, lotArea, sourceFile, sourceRow,
+//       lat, lon, matricule, yearRegistered, valeurImmeuble, valeurTerrain, valeurBatiment,
 //     }],
 //     stage, callStatus, callNotes, lastCallAt, nextCallAt,
 //     createdAt, updatedAt,
 //     lookupStatus,                   // "pending" | "found" | "not_found"
 //     notes,
 //   }
+//
+// phoneSources (new in the rôle-import flow): tags each phone with where it
+// came from. Unknown/absent source is treated as "Migrated" by the UI.
+// Keys are normalizePhoneKey(phone) so re-formatting ("514.555.1111" vs.
+// "(514) 555-1111") still resolves to the same source entry.
 
 import { ownerKey as buildOwnerKey, normalizeStreet, normalizePostal } from "./ownerKey.js";
 import { normalizePhoneKey } from "./phoneUtils.js";
@@ -261,6 +270,20 @@ function buildingFromLead(lead) {
   };
 }
 
+// Given a freshly-deduped phone list and a phoneSources mapping fragment,
+// attach the `Migrated` tag to any phone that doesn't already have a source
+// recorded. Used by groupRowsByOwner (pre-existing CSV data is "Migrated"
+// from the rôle-import era perspective) and migrateLeadsToOwners.
+function tagPhoneSources(phones, existing, defaultSource) {
+  const out = { ...(existing || {}) };
+  for (const p of phones) {
+    const k = normalizePhoneKey(p);
+    if (!k) continue;
+    if (!out[k]) out[k] = defaultSource;
+  }
+  return out;
+}
+
 // Group freshly-imported rows (shape: the `prepared` items in LeadsManager
 // importLeads()) by owner key and roll them up. Returns Array<Owner>.
 export function groupRowsByOwner(rows) {
@@ -312,11 +335,17 @@ export function groupRowsByOwner(rows) {
   }
   const out = [];
   for (const owner of byKey.values()) {
+    const phones = dedupPhones(owner._phones);
+    // Legacy CSV imports predate the phoneSources convention; tag them
+    // `Migrated` so the UI can distinguish them from fresh Excel/Places hits.
+    const phoneSources = tagPhoneSources(phones, {}, "Migrated");
     const finalized = {
       ...owner,
       displayName: mostCommon(owner._contactNames) || mostCommon(owner._companyNames) || "(Propriétaire inconnu)",
       aliases: dedupStrings(owner._companyNames),
-      phones: dedupPhones(owner._phones),
+      contactNames: dedupStrings(owner._contactNames),
+      phones,
+      phoneSources,
       emails: dedupStrings(owner._emails),
     };
     delete finalized._contactNames;
@@ -393,11 +422,15 @@ export function migrateLeadsToOwners(leads) {
   }
   const out = [];
   for (const owner of byKey.values()) {
+    const phones = dedupPhones(owner._phones);
+    const phoneSources = tagPhoneSources(phones, {}, "Migrated");
     const finalized = {
       ...owner,
       displayName: mostCommon(owner._contactNames) || mostCommon(owner._companyNames) || "(Propriétaire inconnu)",
       aliases: dedupStrings(owner._companyNames),
-      phones: dedupPhones(owner._phones),
+      contactNames: dedupStrings(owner._contactNames),
+      phones,
+      phoneSources,
       emails: dedupStrings(owner._emails),
       stage: pickBestStage(owner._stages),
       notes: owner._notes.join("\n\n").trim(),
@@ -446,8 +479,13 @@ export function mergeOwners(existing, incoming) {
     }
     const beforeSerialized = JSON.stringify([prev.aliases, prev.phones, prev.buildings?.length]);
     const mergedAliases = dedupStrings([...(prev.aliases || []), ...(inc.aliases || [])]);
+    const mergedContactNames = dedupStrings([...(prev.contactNames || []), ...(inc.contactNames || [])]);
     const mergedPhones = dedupPhones([...(prev.phones || []), ...(inc.phones || [])]);
     const mergedEmails = dedupStrings([...(prev.emails || []), ...(inc.emails || [])]);
+    // phoneSources: incoming wins only for NEW phones; existing phones keep
+    // their original source tag (a Places hit stays "Places" even if the user
+    // re-imports the CSV with that same number).
+    const mergedPhoneSources = { ...(inc.phoneSources || {}), ...(prev.phoneSources || {}) };
     // Merge buildings by address-postal identity so re-importing the same CSV
     // doesn't stack duplicate building entries.
     const buildingKey = (b) => `${normalizeStreet(b.address)}|${normalizePostal(b.postalCode)}`;
@@ -462,10 +500,13 @@ export function mergeOwners(existing, incoming) {
     const next = {
       ...prev,
       aliases: mergedAliases,
+      contactNames: mergedContactNames,
       phones: mergedPhones,
+      phoneSources: mergedPhoneSources,
       emails: mergedEmails,
       buildings: mergedBuildings,
       displayName: prev.displayName || inc.displayName,
+      matchedBusinessName: prev.matchedBusinessName || inc.matchedBusinessName || "",
       updatedAt: Date.now(),
     };
     byKey.set(inc.ownerKey, next);
@@ -562,9 +603,23 @@ export function applyLookupResultsToOwners(owners, results, rowLookup) {
     }
     const merged = dedupPhones([...(owner.phones || []), ...incomingPhones]);
     const phonesChanged = merged.length !== (owner.phones || []).length;
+    // Tag every NEW phone as Places; keep existing phones' sources intact.
+    const nextPhoneSources = { ...(owner.phoneSources || {}) };
+    for (const p of merged) {
+      const k = normalizePhoneKey(p);
+      if (!k) continue;
+      if (!nextPhoneSources[k]) nextPhoneSources[k] = "Places";
+    }
+    // Preserve the business name Places matched the owner to so the user can
+    // audit "where did that number come from?" from the fiche.
+    const matchedBusinessName = phonesChanged && res.matchedName
+      ? String(res.matchedName)
+      : (owner.matchedBusinessName || "");
     byOwnerId.set(meta.ownerId, {
       ...owner,
       phones: merged,
+      phoneSources: nextPhoneSources,
+      matchedBusinessName,
       lookupStatus: res.status || owner.lookupStatus || "pending",
       updatedAt: Date.now(),
     });

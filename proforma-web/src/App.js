@@ -999,6 +999,22 @@ export default function App() {
     return { added, updated, skipped };
   }, [leads]);
 
+  // Called by OwnersManager after a rôle d'évaluation import. The rôle flow
+  // builds one Lead per property (linked to ownerIds); we prepend them to the
+  // existing leads list, dedup by lead id to tolerate re-imports, and cap at
+  // 6000 to match importPhoneFinderResultsToLeads. No attempt to merge with
+  // existing leads — the rôle Leads have stable ids (lead_role_<matricule>)
+  // and the rare collision just overwrites with the fresh import.
+  const importLeadsFromRole = useCallback((roleLeads) => {
+    if (!Array.isArray(roleLeads) || !roleLeads.length) return;
+    setLeads(prev => {
+      const byId = new Map();
+      for (const l of roleLeads) if (l && l.id) byId.set(l.id, l);
+      const kept = (Array.isArray(prev) ? prev : []).filter(l => !byId.has(l?.id));
+      return [...roleLeads, ...kept].slice(0, 6000);
+    });
+  }, []);
+
   const deleteDeal = (id) => {
     if (!window.confirm("Supprimer ce deal ?")) return;
     setDeals(p => p.filter(d => d.id !== id));
@@ -1757,7 +1773,7 @@ export default function App() {
               <div className="content">
                 <ErrorBoundary label="la page Investisseurs">
                   <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des investisseurs…</div>}>
-                    <OwnersManager owners={owners} setOwners={setOwners} />
+                    <OwnersManager owners={owners} setOwners={setOwners} onAddLeads={importLeadsFromRole} />
                   </Suspense>
                 </ErrorBoundary>
               </div>
