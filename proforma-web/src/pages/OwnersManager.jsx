@@ -502,6 +502,8 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
           <option value="phones">{tr("leads_sort_phones")}</option>
           <option value="name">{tr("leads_sort_name")}</option>
         </select>
+      </div>
+      <div className="om-actions">
         <button
           className="om-import-btn"
           onClick={pickRoleFile}
@@ -673,15 +675,13 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
   );
 }
 
-// Per-building Finances block. Collapsed by default (disclosure triangle).
-// Three numeric inputs for revenue / expenses, a 5-cell grid for the unit
-// mix, and two read-only computed lines (NOI + total units). All edits
-// propagate via onChange (called every keystroke; App-level persist is
-// debounced 500ms).
+// Per-building Finances block. Always expanded (no collapse) — Anthony
+// explicitly wanted these visible without a click. Three numeric inputs
+// for revenue / expenses, a 5-cell grid for the unit mix, and a read-only
+// footer with NOI + total units.
 function BuildingFinances({ building, onChange, tr }) {
   const withFin = ensureBuildingFinances(building);
   const fin = withFin.finances;
-  const [open, setOpen] = useState(false);
 
   const noi = computeBuildingNOI(withFin);
   const totalUnits = computeBuildingTotalUnits(withFin);
@@ -696,63 +696,60 @@ function BuildingFinances({ building, onChange, tr }) {
   };
 
   return (
-    <div className={`bld-fin${open ? " open" : ""}`}>
-      <button type="button" className="bld-fin-toggle" onClick={() => setOpen(o => !o)}>
-        <span className="bld-fin-caret">{open ? "▾" : "▸"}</span>
-        <span>{tr("fin_section")}</span>
+    <div className="bld-fin open">
+      <div className="bld-fin-header">
+        <span className="bld-fin-title">{tr("fin_section")}</span>
         <span className="bld-fin-readouts">
           {tr("fin_noi")}: <strong>{noi == null ? "—" : `$${noi.toLocaleString("en-CA")}`}</strong>
           <span style={{margin:"0 8px",color:"var(--text3)"}}>·</span>
           {tr("fin_total_units")}: <strong>{totalUnits || "—"}</strong>
         </span>
-      </button>
-      {open && (
-        <div className="bld-fin-body">
-          <div className="bld-fin-row">
-            <label className="bld-fin-field">
-              <span>{tr("fin_revenue")}</span>
-              <input
-                type="number"
-                value={fin.revenueAnnuel == null ? "" : fin.revenueAnnuel}
-                placeholder="0"
-                onChange={e => setField("revenueAnnuel", e.target.value)}
-              />
-            </label>
-            <label className="bld-fin-field">
-              <span>{tr("fin_expenses")}</span>
-              <input
-                type="number"
-                value={fin.depensesAnnuelles == null ? "" : fin.depensesAnnuelles}
-                placeholder="0"
-                onChange={e => setField("depensesAnnuelles", e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="bld-fin-mix">
-            <div className="bld-fin-mix-lbl">{tr("fin_unit_mix")}</div>
-            <div className="bld-fin-mix-grid">
-              {[
-                ["u1_5", tr("fin_unit_1_5")],
-                ["u2_5", tr("fin_unit_2_5")],
-                ["u3_5", tr("fin_unit_3_5")],
-                ["u4_5", tr("fin_unit_4_5")],
-                ["u5_5_plus", tr("fin_unit_5_5")],
-              ].map(([k, lbl]) => (
-                <label key={k} className="bld-fin-cell">
-                  <span>{lbl}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={fin.unitMix[k] || ""}
-                    placeholder="0"
-                    onChange={e => setMix(k, e.target.value)}
-                  />
-                </label>
-              ))}
-            </div>
+      </div>
+      <div className="bld-fin-body">
+        <div className="bld-fin-row">
+          <label className="bld-fin-field">
+            <span>{tr("fin_revenue")}</span>
+            <input
+              type="number"
+              value={fin.revenueAnnuel == null ? "" : fin.revenueAnnuel}
+              placeholder="0"
+              onChange={e => setField("revenueAnnuel", e.target.value)}
+            />
+          </label>
+          <label className="bld-fin-field">
+            <span>{tr("fin_expenses")}</span>
+            <input
+              type="number"
+              value={fin.depensesAnnuelles == null ? "" : fin.depensesAnnuelles}
+              placeholder="0"
+              onChange={e => setField("depensesAnnuelles", e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="bld-fin-mix">
+          <div className="bld-fin-mix-lbl">{tr("fin_unit_mix")}</div>
+          <div className="bld-fin-mix-grid">
+            {[
+              ["u1_5", tr("fin_unit_1_5")],
+              ["u2_5", tr("fin_unit_2_5")],
+              ["u3_5", tr("fin_unit_3_5")],
+              ["u4_5", tr("fin_unit_4_5")],
+              ["u5_5_plus", tr("fin_unit_5_5")],
+            ].map(([k, lbl]) => (
+              <label key={k} className="bld-fin-cell">
+                <span>{lbl}</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={fin.unitMix[k] || ""}
+                  placeholder="0"
+                  onChange={e => setMix(k, e.target.value)}
+                />
+              </label>
+            ))}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -917,19 +914,22 @@ const CSS = `
 .om-sub{font-size:12px;color:var(--text3);margin-top:3px}
 .om-hint{font-size:12px;color:var(--text2);max-width:440px;line-height:1.4;text-align:right}
 
-.om-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.om-search{flex:1;min-width:240px;border:1px solid var(--border);background:#fff;border-radius:8px;padding:9px 12px;font-size:13px;outline:none}
-.om-search:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
-.om-select{border:1px solid var(--border);background:#fff;border-radius:8px;padding:8px 10px;font-size:12px;outline:none;cursor:pointer}
-.om-import-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+/* Tight filter row — all four controls live on one line, no wrap on desktop. */
+.om-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
+.om-search{flex:1;min-width:0;border:1px solid var(--border);background:#fff;border-radius:7px;padding:6px 10px;font-size:12px;height:32px;outline:none}
+.om-search:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
+.om-select{flex:0 0 auto;border:1px solid var(--border);background:#fff;border-radius:7px;padding:5px 8px;font-size:11px;height:32px;outline:none;cursor:pointer;max-width:160px}
+.om-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.om-import-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:7px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
 .om-import-btn:hover:not(:disabled){background:#FAF8F4}
 .om-import-btn:disabled{opacity:.5;cursor:not-allowed}
-.om-enrich-btn{border:none;background:var(--gold);color:#fff;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.om-enrich-btn{border:none;background:var(--gold);color:#fff;border-radius:7px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
 .om-enrich-btn:hover:not(:disabled){filter:brightness(1.06)}
 .om-enrich-btn:disabled{background:#D6D0BD;cursor:not-allowed}
-.om-test-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+.om-test-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:7px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
 .om-test-btn:hover:not(:disabled){background:#FAF8F4}
 .om-test-btn:disabled{opacity:.5;cursor:not-allowed}
+@media (max-width: 720px){ .om-toolbar{flex-wrap:wrap} }
 .om-notice{background:#F5EDD6;border:1px solid #E9D9AA;border-radius:8px;padding:9px 12px;font-size:12px;color:#8D742D;font-weight:600}
 .om-notice-err{background:#FCE9E6;border-color:#F5C9C2;color:#A93425}
 
@@ -991,21 +991,23 @@ const CSS = `
 .bld-addr{font-size:13px;font-weight:700;color:var(--text)}
 .bld-meta{font-size:11px;color:var(--text3)}
 
-/* Building finances accordion */
-.bld-fin{border-top:1px dashed var(--border);padding-top:8px}
-.bld-fin-toggle{display:flex;align-items:center;gap:10px;background:transparent;border:none;cursor:pointer;padding:0;width:100%;text-align:left;color:var(--text);font-size:12px;font-weight:700}
-.bld-fin-caret{display:inline-block;width:10px;color:var(--text3)}
-.bld-fin-readouts{margin-left:auto;font-size:11px;font-weight:500;color:var(--text2)}
+/* Building finances — the primary content under each property. Always
+   open, bigger inputs, subtle gold frame so it reads as THE thing to
+   fill in (revenue + dépenses + unit mix). */
+.bld-fin{background:#fff;border:1px solid #E9D9AA;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:14px}
+.bld-fin-header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.bld-fin-title{font-size:11px;font-weight:700;color:#8D742D;letter-spacing:.6px;text-transform:uppercase}
+.bld-fin-readouts{font-size:12px;font-weight:500;color:var(--text2)}
 .bld-fin-readouts strong{color:var(--text);font-weight:700}
-.bld-fin-body{margin-top:10px;display:flex;flex-direction:column;gap:10px}
-.bld-fin-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.bld-fin-field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text2);font-weight:600}
-.bld-fin-field input{border:1px solid var(--border);background:#fff;border-radius:6px;padding:6px 8px;font-size:13px;outline:none}
-.bld-fin-field input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
-.bld-fin-mix-lbl{font-size:11px;color:var(--text2);font-weight:600;margin-bottom:4px}
-.bld-fin-mix-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
-.bld-fin-cell{display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:700;color:var(--text2);text-align:center}
-.bld-fin-cell input{border:1px solid var(--border);background:#fff;border-radius:6px;padding:5px 4px;font-size:12px;text-align:center;outline:none;min-width:0;width:100%}
+.bld-fin-body{display:flex;flex-direction:column;gap:14px}
+.bld-fin-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.bld-fin-field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--text2);font-weight:700;letter-spacing:.2px;text-transform:uppercase}
+.bld-fin-field input{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px 12px;font-size:15px;font-weight:600;outline:none}
+.bld-fin-field input:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
+.bld-fin-mix-lbl{font-size:11px;color:var(--text2);font-weight:700;letter-spacing:.2px;text-transform:uppercase;margin-bottom:6px}
+.bld-fin-mix-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.bld-fin-cell{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:var(--text2);text-align:center}
+.bld-fin-cell input{border:1px solid var(--border);background:#fff;border-radius:8px;padding:8px 6px;font-size:14px;font-weight:600;text-align:center;outline:none;min-width:0;width:100%}
 .bld-fin-cell input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
 
 .fiche-notes{display:flex;flex-direction:column;gap:8px}
