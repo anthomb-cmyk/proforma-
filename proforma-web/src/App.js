@@ -1925,6 +1925,35 @@ export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
+  // ─── Mobile detection ────────────────────────────────────────────────────
+  // Tracks ≤760px viewports (phone-size). Used to hide the map entirely on
+  // phones — Leaflet has been unreliable on Gaylord's device and the value
+  // on a small screen is low. Desktop/tablet keep the full map experience.
+  // Re-evaluates on resize + orientation change so rotating the phone works.
+  const [isPhone, setIsPhone] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 760px)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 760px)");
+    const onChange = (e) => setIsPhone(e.matches);
+    // Safari pre-14 uses addListener instead of addEventListener.
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  }, []);
+
+  // If we're on phone and somehow landed on the map view (e.g. stale tab,
+  // deep link, cached state), bounce to dashboard. Belt-and-suspenders —
+  // the nav item is also hidden on phones below.
+  useEffect(() => {
+    if (isPhone && view === "map") setView("dashboard");
+  }, [isPhone, view]);
+
   // Global ESC handler: closes the mobile drawer if open, then falls back
   // to popping us out of any full-viewport "stuck" view (map, calendar)
   // back to Dashboard. Gives keyboard users and iPad-with-keyboard users a
@@ -2777,7 +2806,10 @@ export default function App() {
             {[
               { id:"dashboard", label:t("nav_dashboard") },
               { id:"pipeline", label:t("nav_pipeline") },
-              { id:"map", label:t("nav_map") },
+              // Map is desktop-only — Leaflet has been flaky on phones and
+              // the value on a ≤760px screen is low. Hidden from the phone
+              // nav; desktop/tablet keep it.
+              ...(isPhone ? [] : [{ id:"map", label:t("nav_map") }]),
               { id:"followups", label:t("nav_followups") },
               { id:"calendar", label:t("nav_calendar") },
               // Leads is now the merged owner-grouped page — "Investors"
@@ -2975,18 +3007,20 @@ export default function App() {
                           );
                         })}
                       </div>
-                      <div>
-                        <div className="map-wrap">
-                          <ErrorBoundary label={t("map_err_label")}>
-                            <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>{t("dashboard_map_loading")}</div>}>
-                              <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
-                            </Suspense>
-                          </ErrorBoundary>
+                      {!isPhone && (
+                        <div>
+                          <div className="map-wrap">
+                            <ErrorBoundary label={t("map_err_label")}>
+                              <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>{t("dashboard_map_loading")}</div>}>
+                                <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
+                              </Suspense>
+                            </ErrorBoundary>
+                          </div>
+                          <div className="map-mini-foot">
+                            <button className="btn btn-sm" onClick={() => setView("map")}>{t("dashboard_map_full")}</button>
+                          </div>
                         </div>
-                        <div className="map-mini-foot">
-                          <button className="btn btn-sm" onClick={() => setView("map")}>{t("dashboard_map_full")}</button>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </div>
 
