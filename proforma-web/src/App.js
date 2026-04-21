@@ -210,6 +210,15 @@ const I18N = {
     dashboard_kpi_overdue: "Follow-ups Retard",
     dashboard_kpi_overdue_action: "Action requise",
     dashboard_kpi_overdue_ok: "Sous contrôle",
+    dashboard_today_title: "À faire aujourd'hui",
+    dashboard_today_empty: "Rien de prévu — bonne journée.",
+    dashboard_today_overdue: (n) => `${n} en retard`,
+    dashboard_today_due: (n) => `${n} aujourd'hui`,
+    dashboard_today_events: (n) => `${n} événement${n > 1 ? "s" : ""}`,
+    dashboard_today_followup_label: "Follow-up",
+    dashboard_today_event_label: "Événement",
+    dashboard_today_overdue_by: (n) => `en retard de ${n} jour${n > 1 ? "s" : ""}`,
+    dashboard_today_due_today: "à faire aujourd'hui",
     dashboard_kpi_prospection: "En Prospection",
     dashboard_kpi_prospection_sub: "Flux actif",
     dashboard_section_pipeline: "Pipeline des Acquisitions",
@@ -804,6 +813,15 @@ const I18N = {
     dashboard_kpi_overdue: "Overdue Follow-ups",
     dashboard_kpi_overdue_action: "Action needed",
     dashboard_kpi_overdue_ok: "On track",
+    dashboard_today_title: "To do today",
+    dashboard_today_empty: "Nothing scheduled — enjoy your day.",
+    dashboard_today_overdue: (n) => `${n} overdue`,
+    dashboard_today_due: (n) => `${n} today`,
+    dashboard_today_events: (n) => `${n} event${n > 1 ? "s" : ""}`,
+    dashboard_today_followup_label: "Follow-up",
+    dashboard_today_event_label: "Event",
+    dashboard_today_overdue_by: (n) => `${n} day${n > 1 ? "s" : ""} overdue`,
+    dashboard_today_due_today: "due today",
     dashboard_kpi_prospection: "Prospecting",
     dashboard_kpi_prospection_sub: "Active flow",
     dashboard_section_pipeline: "Acquisitions Pipeline",
@@ -1992,10 +2010,23 @@ export default function App() {
       }).catch(() => {});
     };
     // Delay the first kick by 8 s so server hydration + push subscription
-    // have time to land before we try to notify.
+    // have time to land before we try to notify. Then poll every 15 minutes
+    // — the backend ledger (state.__reminderLog[tag]=todayISO) makes the
+    // endpoint idempotent, so running it "often" is safe. This gets a newly
+    // added same-day follow-up on the user's phone within 15 minutes
+    // instead of up to an hour.
     const first = setTimeout(kick, 8000);
-    const interval = setInterval(kick, 60 * 60 * 1000); // hourly
-    return () => { cancelled = true; clearTimeout(first); clearInterval(interval); };
+    const interval = setInterval(kick, 15 * 60 * 1000); // every 15 min
+    // Also kick when the tab regains focus after being backgrounded — catches
+    // the case where the phone was asleep and the user comes back to the app.
+    const onVisibility = () => { if (!document.hidden) kick(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      clearTimeout(first);
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [currentUser]);
   const persistTimerRef = useRef(null);
   // Guard so the debounced persist effect doesn't fire a server write during
@@ -2713,6 +2744,67 @@ export default function App() {
     };
   }, [deals]);
 
+  // ─── Today's alerts (dashboard banner) ─────────────────────────────────────
+  // Drives the in-app "À faire aujourd'hui" widget. Includes:
+  //   - overdue follow-ups (followUpDate < today, deal not lost)
+  //   - follow-ups due today
+  //   - deal events scheduled for today
+  // Each item has { kind, dealId, title, sub, sortKey, urgency }. Sorted so
+  // overdue items float to the top. React recomputes on every state change
+  // of `deals`, so adding a follow-up updates the banner instantly — no
+  // polling or push round-trip needed for local changes.
+  const todaysAlerts = useMemo(() => {
+    const todayISO = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Toronto",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+    const items = [];
+    deals.forEach((d) => {
+      if (!d || d.stage === "perdu") return;
+      const label = d.title || dealLabel(d) || d.id;
+      // Follow-up due today or overdue
+      if (typeof d.followUpDate === "string" && d.followUpDate && d.followUpDate <= todayISO) {
+        const daysOverdue = Math.round(
+          (Date.parse(todayISO + "T12:00:00Z") - Date.parse(d.followUpDate + "T12:00:00Z")) / 86400000
+        );
+        items.push({
+          kind: "followup",
+          dealId: d.id,
+          title: label,
+          daysOverdue,
+          isOverdue: daysOverdue > 0,
+          sortKey: -daysOverdue, // most overdue first
+        });
+      }
+      // Events scheduled for today
+      (Array.isArray(d.events) ? d.events : []).forEach((ev) => {
+        if (!ev || ev.date !== todayISO) return;
+        items.push({
+          kind: "event",
+          dealId: d.id,
+          eventId: ev.id,
+          title: ev.title || label,
+          sub: label,
+          time: ev.time || "",
+          sortKey: ev.time ? Number(String(ev.time).replace(":", "")) : 9999,
+        });
+      });
+    });
+    items.sort((a, b) => {
+      // Overdue follow-ups first, then today's follow-ups, then events by time
+      const rank = (x) =>
+        x.kind === "followup" && x.isOverdue ? 0 :
+        x.kind === "followup" ? 1 : 2;
+      const rankDiff = rank(a) - rank(b);
+      if (rankDiff !== 0) return rankDiff;
+      return a.sortKey - b.sortKey;
+    });
+    const overdueCount  = items.filter(i => i.kind === "followup" && i.isOverdue).length;
+    const dueTodayCount = items.filter(i => i.kind === "followup" && !i.isOverdue).length;
+    const eventsCount   = items.filter(i => i.kind === "event").length;
+    return { items, overdueCount, dueTodayCount, eventsCount };
+  }, [deals]);
+
   const followUps = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     return deals.filter(d => d.followUpDate)
@@ -2970,6 +3062,107 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {/* "À faire aujourd'hui" — in-app notification banner. Mirrors
+                    what the push-scan endpoint fires, but lives on the page
+                    so users get a visible cue every visit regardless of
+                    whether push is enabled. */}
+                <div
+                  className="card sec"
+                  style={{
+                    marginBottom: 16,
+                    borderLeft: todaysAlerts.overdueCount > 0
+                      ? "4px solid var(--red, #C0392B)"
+                      : todaysAlerts.items.length > 0
+                      ? "4px solid #D4A017"
+                      : "4px solid var(--green, #2D8C4E)",
+                  }}
+                >
+                  <div className="sec-head" style={{flexWrap: "wrap", gap: 8}}>
+                    <div className="sec-title">
+                      🔔 {t("dashboard_today_title")}
+                    </div>
+                    <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
+                      {todaysAlerts.overdueCount > 0 && (
+                        <span className="k-count" style={{background: "#FCE9E6", color: "#C0392B", fontWeight: 700}}>
+                          {t("dashboard_today_overdue", todaysAlerts.overdueCount)}
+                        </span>
+                      )}
+                      {todaysAlerts.dueTodayCount > 0 && (
+                        <span className="k-count" style={{background: "#FFF4D6", color: "#8D6A15", fontWeight: 700}}>
+                          {t("dashboard_today_due", todaysAlerts.dueTodayCount)}
+                        </span>
+                      )}
+                      {todaysAlerts.eventsCount > 0 && (
+                        <span className="k-count" style={{background: "#EAF1FF", color: "#2563EB", fontWeight: 700}}>
+                          {t("dashboard_today_events", todaysAlerts.eventsCount)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {todaysAlerts.items.length === 0 ? (
+                    <div className="status-note" style={{padding: "6px 2px"}}>
+                      ✓ {t("dashboard_today_empty")}
+                    </div>
+                  ) : (
+                    <div style={{display: "flex", flexDirection: "column", gap: 6}}>
+                      {todaysAlerts.items.slice(0, 8).map((item, idx) => {
+                        const tone =
+                          item.kind === "event" ? {bg: "#EAF1FF", fg: "#2563EB", icon: "📅"} :
+                          item.isOverdue       ? {bg: "#FCE9E6", fg: "#C0392B", icon: "⚠️"} :
+                                                 {bg: "#FFF4D6", fg: "#8D6A15", icon: "🔔"};
+                        const sub =
+                          item.kind === "event"
+                            ? (item.time ? `${item.time} · ${item.sub}` : item.sub)
+                            : item.isOverdue
+                            ? t("dashboard_today_overdue_by", item.daysOverdue)
+                            : t("dashboard_today_due_today");
+                        return (
+                          <button
+                            key={`${item.kind}-${item.dealId}-${item.eventId || idx}`}
+                            type="button"
+                            onClick={() => openDeal(item.dealId)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              padding: "8px 10px",
+                              border: "1px solid var(--border)",
+                              borderRadius: 10,
+                              background: "#fff",
+                              cursor: "pointer",
+                              textAlign: "left",
+                              width: "100%",
+                              minHeight: 44,
+                            }}
+                          >
+                            <span style={{
+                              flex: "0 0 auto",
+                              fontSize: 14,
+                              width: 28, height: 28,
+                              display: "grid", placeItems: "center",
+                              borderRadius: 999,
+                              background: tone.bg, color: tone.fg,
+                            }}>{tone.icon}</span>
+                            <span style={{flex: 1, minWidth: 0}}>
+                              <span style={{
+                                display: "block", fontWeight: 700, fontSize: 13,
+                                color: "var(--text)",
+                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              }}>{item.title}</span>
+                              <span style={{
+                                display: "block", fontSize: 11, marginTop: 2,
+                                color: tone.fg, fontWeight: 600,
+                              }}>
+                                {item.kind === "event" ? t("dashboard_today_event_label") : t("dashboard_today_followup_label")} · {sub}
+                              </span>
+                            </span>
+                            <span style={{flex: "0 0 auto", color: "var(--text3)", fontSize: 18}}>›</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <div className="kpi-grid">
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#F5EDD6",color:"#8D742D"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
