@@ -5,13 +5,25 @@
 // control that silently does nothing; re-introduce as a real global
 // search when we wire one up.
 
-export default function Topbar({ title, subtitle, overdue, userName, badgeCount, lang, onToggleLang, langSwitchLabel }) {
+export default function Topbar({ title, subtitle, overdue, userName, badgeCount, lang, onToggleLang, langSwitchLabel, onOpenNav }) {
   const badge = typeof badgeCount === "number" ? badgeCount : overdue;
   return (
     <div className="topbar">
-      <div>
-        <div className="tb-title">{title}</div>
-        {subtitle ? <div className="tb-sub">{subtitle}</div> : null}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        {onOpenNav && (
+          <button
+            type="button"
+            className="mobile-hamburger"
+            onClick={onOpenNav}
+            aria-label="Menu"
+          >
+            ☰
+          </button>
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div className="tb-title">{title}</div>
+          {subtitle ? <div className="tb-sub">{subtitle}</div> : null}
+        </div>
       </div>
       <div className="tb-right">
         {onToggleLang && (

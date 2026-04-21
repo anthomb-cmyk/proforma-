@@ -35,7 +35,13 @@ const PF_ACTIVE_RUN_KEY = "pf_active_run";
 // Cap on the number of runs we keep in memory (oldest evicted).
 const MAX_PHONE_RUNS = 40;
 
-function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
+function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langProp }) {
+  // Fallbacks keep the component standalone-renderable (e.g. storybook/tests)
+  // when hosted outside the main App shell that normally provides the i18n
+  // plumbing. `t` passes through the raw key, `lang` stays FR by default.
+  const t = tProp || ((k) => k);
+  const lang = langProp || "fr";
+  const localeTag = lang === "en" ? "en-CA" : "fr-CA";
   function normalizeResultRowPhones(row = {}) {
     const validPhones = mergePhoneLists(row?.phone, row?.inputPhones);
     const status = validPhones.length > 0
@@ -66,7 +72,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         .map((run, idx) => {
           const rows = Array.isArray(run.rows) ? run.rows.map(normalizeResultRowPhones) : [];
           const createdAt = run.createdAt || new Date().toISOString();
-          const fallbackTitle = `Import du ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`;
+          const fallbackTitle = t("pf_run_import_of", new Date(createdAt).toLocaleString(localeTag, { dateStyle:"medium", timeStyle:"short" }));
           return {
             id: run.id || `pf_run_${Date.now()}_${idx}`,
             title: run.title || fallbackTitle,
@@ -93,7 +99,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         localStorage.removeItem("pf_results");
         return [{
           id: `pf_run_legacy_${Date.now()}`,
-          title: `Historique importé · ${new Date(createdAt).toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" })}`,
+          title: t("pf_run_legacy", new Date(createdAt).toLocaleString(localeTag, { dateStyle:"medium", timeStyle:"short" })),
           source: "legacy",
           createdAt,
           updatedAt: createdAt,
@@ -213,13 +219,13 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     if (!value) return "";
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleString("fr-CA", { dateStyle:"medium", timeStyle:"short" });
+    return d.toLocaleString(localeTag, { dateStyle:"medium", timeStyle:"short" });
   }
 
   function makeRunTitle(source, createdAt = new Date().toISOString()) {
     const stamp = formatRunDate(createdAt);
-    if (source === "manual") return `Recherche manuelle · ${stamp}`;
-    return `Import CSV · ${stamp}`;
+    if (source === "manual") return t("pf_run_default_manual", stamp);
+    return t("pf_run_default_csv", stamp);
   }
 
   function buildRunPatch(rows) {
@@ -257,16 +263,16 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
   function askRenameRun(run) {
     if (!run) return;
-    const next = window.prompt("Nouveau titre pour cet import :", run.title || "");
+    const next = window.prompt(t("pf_rename_prompt"), run.title || "");
     if (next === null) return;
     const ok = renameRun(run.id, next);
     if (!ok) {
-      showToast("Le titre ne peut pas être vide.", 3500);
+      showToast(t("pf_rename_err_empty"), 3500);
     }
   }
 
   function clearAllRuns() {
-    if (!window.confirm("Effacer tous les imports sauvegardés ?")) return;
+    if (!window.confirm(t("pf_delete_all_confirm"))) return;
     setResultRuns([]);
     setActiveRunId(null);
     setReviewRow(null);
@@ -284,11 +290,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     if (!run) return;
     const rowsToExport = (run.rows || []).filter(rowHasAnyPhone);
     if (!rowsToExport.length) {
-      showToast("Aucun numéro trouvé à exporter.", 3500);
+      showToast(t("pf_export_no_phones"), 3500);
       return;
     }
     if (typeof onExportFoundToLeads !== "function") {
-      showToast("Export vers Leads indisponible.", 3500);
+      showToast(t("pf_export_unavailable"), 3500);
       return;
     }
 
@@ -308,18 +314,18 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       const skipped = Number(result?.skipped || 0);
       if (added > 0 || updated > 0) {
         const parts = [];
-        if (added > 0) parts.push(`${added} nouveau${added > 1 ? "x" : ""}`);
-        if (updated > 0) parts.push(`${updated} enrichi${updated > 1 ? "s" : ""}`);
-        if (skipped > 0) parts.push(`${skipped} inchangé${skipped > 1 ? "s" : ""}`);
-        showToast(`✅ Leads mis à jour: ${parts.join(" · ")} · aucune donnée supprimée`, 5000);
+        if (added > 0) parts.push(t("pf_export_part_new", added));
+        if (updated > 0) parts.push(t("pf_export_part_updated", updated));
+        if (skipped > 0) parts.push(t("pf_export_part_skipped", skipped));
+        showToast(t("pf_export_leads_updated", parts.join(" · ")), 5000);
         if (typeof onOpenLeads === "function") {
           setTimeout(() => onOpenLeads(), 250);
         }
       } else {
-        showToast("Tous les numéros trouvés sont déjà dans Leads.", 5000);
+        showToast(t("pf_export_nothing_new"), 5000);
       }
     } catch (err) {
-      showToast(`Export impossible: ${String(err?.message || err)}`, 5000);
+      showToast(t("pf_export_impossible", String(err?.message || err)), 5000);
     } finally {
       setExportBusy(false);
     }
@@ -451,7 +457,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         phone: allPhones[0] || "",
         inputPhones: allPhones,
         status,
-        statusLabel: status === "found" ? "Trouvé" : "Non trouvé",
+        statusLabel: status === "found" ? t("pf_status_found") : t("pf_status_not_found"),
         matchedName: survivingOnline.length ? r.matchedName : "",
         matchedAddress: survivingOnline.length ? r.matchedAddress : "",
         website: survivingOnline.length ? r.website : "",
@@ -474,10 +480,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       const data = await resp.json();
       if (!data.ok) {
         if (resp.status === 402) {
-          setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+          setApiError(data.error || t("pf_err_budget"));
           return;
         }
-        setApiError(data.error || "Erreur serveur");
+        setApiError(data.error || t("pf_err_server"));
         return;
       }
       if (data.budget && typeof data.budget.spentUsd === "number") {
@@ -504,11 +510,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       });
       updateActiveRunRows(prev => prev.map(r => r.id === resultRow.id ? updated : r));
       showToast(
-        updated.status === "found" ? "🔄 Relancé · numéro trouvé !" : "🔄 Relancé · toujours introuvable",
+        updated.status === "found" ? t("pf_rerun_toast_found") : t("pf_rerun_toast_not_found"),
         4000,
       );
     } catch (err) {
-      setApiError(`Erreur: ${err.message}`);
+      setApiError(t("pf_err_generic", err.message));
     } finally {
       setLoading(false);
     }
@@ -518,7 +524,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
   async function rerunNotFound() {
     const notFoundRows = results.filter(r => r.status === "not_found" && r._src);
     if (!notFoundRows.length) {
-      showToast("Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).", 5000);
+      showToast(t("pf_rerun_none"), 5000);
       return;
     }
     stopRef.current = false;
@@ -540,10 +546,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         const data = await resp.json();
         if (!data.ok) {
           if (resp.status === 402) {
-            setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+            setApiError(data.error || t("pf_err_budget"));
             break;
           }
-          setApiError(data.error || "Erreur serveur");
+          setApiError(data.error || t("pf_err_server"));
           break;
         }
         if (data.budget && typeof data.budget.spentUsd === "number") {
@@ -575,14 +581,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         done += sliceRows.length;
         setProgress({ done, total: notFoundRows.length });
       } catch (err) {
-        setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
+        setApiError(t("pf_err_network_batch", Math.floor(i / BATCH_SIZE) + 1, err.message));
         break;
       }
     }
     updateActiveRunRows(prev => prev.map(r => updatedById.has(r.id) ? updatedById.get(r.id) : r));
     const newlyFound = [...updatedById.values()].filter(r => r.status === "found").length;
     showToast(
-      `🔄 ${done} relancés · ${newlyFound} nouveau${newlyFound !== 1 ? "x" : ""} numéro${newlyFound !== 1 ? "s" : ""} trouvé${newlyFound !== 1 ? "s" : ""}`,
+      t("pf_rerun_summary", done, newlyFound),
       6000,
     );
     setLoading(false);
@@ -632,10 +638,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         const data = await resp.json();
         if (!data.ok) {
           if (resp.status === 402) {
-            setApiError(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+            setApiError(data.error || t("pf_err_budget"));
             break;
           }
-          setApiError(data.error || "Erreur serveur");
+          setApiError(data.error || t("pf_err_server"));
           break;
         }
         if (data.budget && typeof data.budget.spentUsd === "number") {
@@ -670,7 +676,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       } catch (err) {
         // AbortError fires when the user clicks Stop — exit the loop silently.
         if (err?.name === "AbortError") break;
-        setApiError(`Erreur réseau (lot ${Math.floor(i / BATCH_SIZE) + 1}): ${err.message}`);
+        setApiError(t("pf_err_network_batch", Math.floor(i / BATCH_SIZE) + 1, err.message));
         break;
       } finally {
         if (lookupAbortRef.current === controller) lookupAbortRef.current = null;
@@ -700,7 +706,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
     if (done > 0) {
       const finalFound = cappedRows.filter(rowHasAnyPhone).length;
-      showToast(`✅ ${done} lignes traitées · ${finalFound} numéros trouvés`, 6000);
+      showToast(t("pf_batch_ok", done, finalFound), 6000);
       setPfPage("results");
     } else {
       setResultRuns(prev => prev.filter(r => r.id !== runId));
@@ -710,7 +716,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
   async function searchManual() {
     const lookupName = firstBusinessLookupName(form.name);
-    if (!lookupName && !form.address) { setApiError("Entrez un nom d'entreprise ou une adresse."); return; }
+    if (!lookupName && !form.address) { setApiError(t("pf_err_need_name_or_addr")); return; }
     setApiError("");
     await doLookupBatched([{ ...form, name: lookupName }], "manual");
   }
@@ -748,7 +754,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         rawRow: r,
       };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
-    if (!rows.length) { setApiError("Aucune ligne exploitable dans ce fichier."); return; }
+    if (!rows.length) { setApiError(t("pf_err_no_rows")); return; }
     // Rather than firing the batch immediately, stage it behind the
     // cost-confirmation modal so the user gets an explicit "about to
     // spend ~$X" moment. Cheap to cancel, expensive to un-spend.
@@ -777,14 +783,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         parsed = parseCSV(text);
       }
       if (!parsed?.rows?.length) {
-        setApiError("Le fichier ne contient pas de lignes importables.");
+        setApiError(t("pf_err_no_rows_parsed"));
         return;
       }
       setCsvFile(parsed);
       setColMap(autoDetectCols(parsed.headers || []));
       setShowColMap(false);
     } catch (err) {
-      setApiError(`Import impossible: ${String(err?.message || err)}`);
+      setApiError(t("pf_err_import", String(err?.message || err)));
     }
   }
 
@@ -798,7 +804,22 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
 
   function exportCSV() {
     if (!activeRun) return;
-    const headers = ["Entreprise", "Contact", "Bâtiment", "Nom saisi", "Adresse saisie", "Nom trouvé", "Adresse trouvée", "Téléphone trouvé", "Téléphones fichier", "Site web", "Source", "Confiance %", "Statut", "Date"];
+    const headers = [
+      t("pf_csv_hdr_company"),
+      t("pf_csv_hdr_contact"),
+      t("pf_csv_hdr_building"),
+      t("pf_csv_hdr_input_name"),
+      t("pf_csv_hdr_input_address"),
+      t("pf_csv_hdr_matched_name"),
+      t("pf_csv_hdr_matched_address"),
+      t("pf_csv_hdr_phone"),
+      t("pf_csv_hdr_file_phones"),
+      t("pf_csv_hdr_website"),
+      t("pf_csv_hdr_source"),
+      t("pf_csv_hdr_confidence"),
+      t("pf_csv_hdr_status"),
+      t("pf_csv_hdr_date"),
+    ];
     const body = filteredResults.map(r => [
       r.companyName || "",
       r.leadContact || "",
@@ -810,7 +831,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const runDate = (activeRun.createdAt || new Date().toISOString()).slice(0, 10);
-    const a = document.createElement("a"); a.href = url; a.download = `recherche-tel-${runDate}.csv`; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `${t("pf_csv_download_stem")}-${runDate}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -830,40 +851,37 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
     filteredResults.filter(r => r.status === "found" && rowHasAnyPhone(r))
   ), [filteredResults]);
 
-  const exportStatusLabel = "Trouvé uniquement (filtre affiché)";
+  const exportStatusLabel = t("pf_export_status_current");
 
   const pagedResults = filteredResults.slice(0, page * PAGE_SIZE);
   const FIELD_LABELS = {
-    name:"Nom de recherche",
-    company:"Entreprise / Organisation",
-    leadContact:"Contact / Propriétaire",
-    phone:"Téléphone (déjà connu)",
-    address:"Adresse immeuble",
-    city:"Ville",
-    province:"Province",
-    postalCode:"Code postal",
-    country:"Pays",
+    name: t("pf_fl_name"),
+    company: t("pf_fl_company"),
+    leadContact: t("pf_fl_leadContact"),
+    phone: t("pf_fl_phone"),
+    address: t("pf_fl_address"),
+    city: t("pf_fl_city"),
+    province: t("pf_fl_province"),
+    postalCode: t("pf_fl_postalCode"),
+    country: t("pf_fl_country"),
   };
   const FIELD_HINTS  = {
-    name:"optionnel, utilisé pour la recherche Places",
-    company:"optionnel, prioritaire pour la recherche si présent",
-    leadContact:"optionnel, conservé pour savoir qui appeler",
-    phone:"optionnel, ajouté au lead à l'export",
-    address:"très recommandé",
-    city:"optionnel",
-    province:"optionnel",
-    postalCode:"optionnel",
-    country:"optionnel",
+    name: t("pf_fh_name"),
+    company: t("pf_fh_company"),
+    leadContact: t("pf_fh_leadContact"),
+    phone: t("pf_fh_phone"),
+    address: t("pf_fh_address"),
+    city: t("pf_fh_city"),
+    province: t("pf_fh_province"),
+    postalCode: t("pf_fh_postalCode"),
+    country: t("pf_fh_country"),
   };
 
   function confClass(n) { return n >= 80 ? "hi" : n >= 60 ? "mid" : n >= 40 ? "lo" : "zero"; }
 
-  const STATUS_CFG = {
-    found:            { label:"Trouvé",         cls:"found" },
-    needs_review:     { label:"À vérifier",     cls:"needs_review" },
-    multiple_matches: { label:"Choix multiple", cls:"multiple_matches" },
-    not_found:        { label:"Non trouvé",     cls:"not_found" },
-  };
+  // STATUS_CFG lives in <PhoneResultRow> now — it owns the status pill
+  // rendering and its own label strings. Removed from this file along
+  // with the i18n sweep.
 
   // Stable row handlers for <PhoneResultRow memo>. updateActiveRunRows /
   // rerunSingleRow are recreated every render, so we mirror them through
@@ -888,9 +906,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       {reviewRow && (
         <div className="mo" onClick={() => setReviewRow(null)}>
           <div className="mo-box" onClick={e => e.stopPropagation()} style={{maxWidth:560}}>
-            <div className="mo-title">Choisir le bon résultat</div>
+            <div className="mo-title">{t("pf_review_title")}</div>
             <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
-              Recherche : <strong>{reviewRow.inputName || reviewRow.inputAddress}</strong>
+              {t("pf_review_query")} <strong>{reviewRow.inputName || reviewRow.inputAddress}</strong>
             </div>
             {[
               { name:reviewRow.matchedName, address:reviewRow.matchedAddress, phone:reviewRow.phone, website:reviewRow.website, confidence:reviewRow.confidence },
@@ -904,7 +922,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                   setReviewRow(null);
                 }}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <span style={{fontWeight:700,fontSize:13}}>{c.name || "(sans nom)"}</span>
+                  <span style={{fontWeight:700,fontSize:13}}>{c.name || t("pf_review_anon")}</span>
                   <span className={`pf-conf ${confClass(c.confidence)}`}>{c.confidence}%</span>
                 </div>
                 <div style={{fontSize:11,color:"var(--text2)"}}>{c.address}</div>
@@ -913,8 +931,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
               </div>
             ))}
             <div className="mo-foot">
-              <button className="btn btn-danger btn-sm" onClick={() => { updateActiveRunRows(prev => prev.map(r => r.id === reviewRow.id ? { ...r, status:"not_found" } : r)); setReviewRow(null); }}>Marquer introuvable</button>
-              <button className="btn" onClick={() => setReviewRow(null)}>Annuler</button>
+              <button className="btn btn-danger btn-sm" onClick={() => { updateActiveRunRows(prev => prev.map(r => r.id === reviewRow.id ? { ...r, status:"not_found" } : r)); setReviewRow(null); }}>{t("pf_review_mark_notfound")}</button>
+              <button className="btn" onClick={() => setReviewRow(null)}>{t("pf_review_cancel")}</button>
             </div>
           </div>
         </div>
@@ -924,23 +942,32 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
       {showColMap && csvFile && (
         <div className="mo">
             <div className="mo-box" style={{maxWidth:520,maxHeight:"85vh",overflow:"auto"}}>
-            <div className="mo-title">Mapper les colonnes d'import</div>
+            <div className="mo-title">{t("pf_colmap_title")}</div>
             <div style={{fontSize:12,color:"var(--text2)",marginBottom:14}}>
-              <strong>{csvFile.rows.length}</strong> lignes · <strong>{csvFile.headers.length}</strong> colonnes détectées (séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code>)<br/>
-              Assignez vos colonnes (adresse, entreprise, contact). L'adresse immeuble est recommandée pour une recherche fiable.
+              {/* The pf_colmap_stats key gives us the full plain-text
+                  sentence; here we inline a React-rich version so the
+                  row and column counts render in <strong> and the
+                  separator glyph renders in <code>. Falling back to
+                  the string key would lose that formatting. */}
+              <strong>{csvFile.rows.length}</strong>
+              {lang === "en" ? " rows · " : " lignes · "}
+              <strong>{csvFile.headers.length}</strong>
+              {lang === "en" ? " columns detected (separator: " : " colonnes détectées (séparateur : "}
+              <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? t("pf_sep_tab") : csvFile.delim}</code>)<br/>
+              {t("pf_colmap_hint")}
             </div>
             {Object.entries(FIELD_LABELS).map(([f, lbl]) => (
               <div className="f-row" key={f}>
                 <div className="f-lbl">{lbl} <span style={{color:"var(--text3)",fontWeight:400}}>— {FIELD_HINTS[f]}</span></div>
                 <select value={colMap[f] || ""} onChange={e => setColMap(m => ({ ...m, [f]: e.target.value }))}>
-                  <option value="">— Ignorer —</option>
-                  {csvFile.headers.map(h => <option key={h} value={h}>{h} {csvFile.rows[0]?.[h] ? `→ ex: "${String(csvFile.rows[0][h]).slice(0,30)}"` : ""}</option>)}
+                  <option value="">{t("pf_colmap_ignore")}</option>
+                  {csvFile.headers.map(h => <option key={h} value={h}>{h} {csvFile.rows[0]?.[h] ? t("pf_csv_example", String(csvFile.rows[0][h]).slice(0,30)) : ""}</option>)}
                 </select>
               </div>
             ))}
             <div className="mo-foot">
-              <button className="btn" onClick={() => setShowColMap(false)}>Fermer</button>
-              <button className="btn btn-gold" onClick={() => { setShowColMap(false); }}>Confirmer le mappage</button>
+              <button className="btn" onClick={() => setShowColMap(false)}>{t("pf_colmap_close")}</button>
+              <button className="btn btn-gold" onClick={() => { setShowColMap(false); }}>{t("pf_colmap_confirm")}</button>
             </div>
           </div>
         </div>
@@ -959,27 +986,30 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         return (
           <div className="mo" onClick={() => setPendingLookup(null)}>
             <div className="mo-box" style={{maxWidth:480}} onClick={e => e.stopPropagation()}>
-              <div className="mo-title">Confirmer la recherche téléphones</div>
+              <div className="mo-title">{t("pf_confirm_title")}</div>
               <div style={{fontSize:13,lineHeight:1.6,color:"var(--text2)",marginBottom:14}}>
-                Vous êtes sur le point d'enrichir{" "}
-                <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong>{" "}
-                {pendingLookup.rows.length === 1 ? "ligne" : "lignes"} via Google Places.
+                {/* Rich inline rendering: key strings the count in <strong> */}
+                {lang === "en" ? (
+                  <>You are about to enrich <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong> {pendingLookup.rows.length === 1 ? "row" : "rows"} via Google Places.</>
+                ) : (
+                  <>Vous êtes sur le point d'enrichir <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong> {pendingLookup.rows.length === 1 ? "ligne" : "lignes"} via Google Places.</>
+                )}
               </div>
               <div style={{background:"#FAF8F4",border:"1px solid var(--border)",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
-                  <div style={{fontSize:12,color:"var(--text2)"}}>Coût estimé</div>
+                  <div style={{fontSize:12,color:"var(--text2)"}}>{t("pf_confirm_est_label")}</div>
                   <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{formatCost(est.mid)}</div>
                 </div>
                 <div style={{fontSize:11,color:"var(--text3)",lineHeight:1.5}}>
-                  Fourchette&nbsp;: {formatCost(est.lo)} – {formatCost(est.hi)}<br/>
-                  Appels estimés&nbsp;: {Math.round(est.callsLoTextSearch)}–{Math.round(est.callsHiTextSearch)} Text Search + {Math.round(est.callsLoDetails)}–{Math.round(est.callsHiDetails)} Details<br/>
-                  Les lignes résidentielles (Logement · Physique) ne font aucun appel. Les doublons d'adresse dans le même lot sont mis en cache.
+                  {t("pf_confirm_range", formatCost(est.lo), formatCost(est.hi))}<br/>
+                  {t("pf_confirm_calls", Math.round(est.callsLoTextSearch), Math.round(est.callsHiTextSearch), Math.round(est.callsLoDetails), Math.round(est.callsHiDetails))}<br/>
+                  {t("pf_confirm_note")}
                 </div>
               </div>
               <div className="mo-foot">
-                <button className="btn" onClick={() => setPendingLookup(null)}>Annuler</button>
+                <button className="btn" onClick={() => setPendingLookup(null)}>{t("pf_confirm_cancel")}</button>
                 <button className="btn btn-gold" onClick={confirmPendingLookup}>
-                  Lancer la recherche
+                  {t("pf_confirm_launch")}
                 </button>
               </div>
             </div>
@@ -992,10 +1022,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
-              <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>Recherche de Numéros</div>
+              <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{t("pf_header_title")}</div>
               {dailySpend.rows > 0 && (
                 <span
-                  title={`${dailySpend.rows} lignes enrichies aujourd'hui (estimation Google Places Essentials 2025)`}
+                  title={t("pf_spend_tooltip", dailySpend.rows)}
                   style={{
                     fontSize:11,
                     fontWeight:700,
@@ -1008,11 +1038,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                     whiteSpace:"nowrap",
                   }}
                 >
-                  Aujourd'hui · {dailySpend.rows} lignes · ~{formatCost(dailySpend.estCost)}
+                  {t("pf_spend_today", dailySpend.rows, formatCost(dailySpend.estCost))}
                 </span>
               )}
             </div>
-            <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Google Places · imports sauvegardés localement</div>
+            <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>{t("pf_header_sub")}</div>
           </div>
           {activeRun && (
             <div style={{display:"flex",gap:8}}>
@@ -1021,17 +1051,17 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                 onClick={() => exportRunToLeads({ ...activeRun, rows: exportFoundRows })}
                 disabled={exportBusy || exportFoundRows.length === 0}
               >
-                {exportBusy ? "Export…" : `⇢ Leads trouvés (${exportFoundRows.length})`}
+                {exportBusy ? t("pf_export_busy") : t("pf_export_found_btn", exportFoundRows.length)}
               </button>
-              {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>Voir résultats</button>}
-              <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter CSV</button>
-              <button className="btn btn-danger btn-sm" onClick={clearAllRuns}>Vider</button>
+              {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>{t("pf_view_results")}</button>}
+              <button className="btn btn-sm" onClick={exportCSV}>{t("pf_export_csv")}</button>
+              <button className="btn btn-danger btn-sm" onClick={clearAllRuns}>{t("pf_clear_all")}</button>
             </div>
           )}
         </div>
         <div className="tabs">
-          <button className={`tab${pfPage==="search"?" active":""}`} onClick={() => setPfPage("search")}>🔎 Recherche</button>
-          <button className={`tab${pfPage==="results"?" active":""}`} onClick={() => setPfPage("results")}>📚 Résultats ({resultRuns.length})</button>
+          <button className={`tab${pfPage==="search"?" active":""}`} onClick={() => setPfPage("search")}>{t("pf_tab_search")}</button>
+          <button className={`tab${pfPage==="results"?" active":""}`} onClick={() => setPfPage("results")}>{t("pf_tab_results", resultRuns.length)}</button>
         </div>
       </div>
 
@@ -1042,7 +1072,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           <div className="card" style={{padding:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
-                ⏳ {progress.done} / {progress.total} lignes traitées
+                {t("pf_processing", progress.done, progress.total)}
               </div>
               <button
                 className="btn btn-danger btn-sm"
@@ -1054,40 +1084,40 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                   if (lookupAbortRef.current) lookupAbortRef.current.abort();
                 }}
               >
-                ⏹ Arrêter
+                {t("pf_stop")}
               </button>
             </div>
             <div style={{height:8,background:"#F0E8D8",borderRadius:999,overflow:"hidden"}}>
               <div style={{height:"100%",background:"var(--gold)",borderRadius:999,width:`${Math.round((progress.done/progress.total)*100)}%`,transition:"width .3s"}} />
             </div>
             <div style={{fontSize:11,color:"var(--text3)",marginTop:5,textAlign:"right"}}>
-              {Math.round((progress.done/progress.total)*100)}% · ~{Math.round(((progress.total - progress.done) / BATCH_SIZE) * 3)}s restantes
+              {t("pf_remaining", Math.round((progress.done/progress.total)*100), Math.round(((progress.total - progress.done) / BATCH_SIZE) * 3))}
             </div>
           </div>
         )}
         {loading && !progress && (
-          <div className="status-note" style={{textAlign:"center",padding:18}}>⏳ Connexion à Google Places…</div>
+          <div className="status-note" style={{textAlign:"center",padding:18}}>{t("pf_connecting")}</div>
         )}
 
         {/* ── Search Page ───────────────────────────────────────────── */}
         {pfPage === "search" && (
           <>
             <div className="tabs" style={{paddingLeft:2}}>
-              <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>🔍 Recherche manuelle</button>
-              <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>📂 Import CSV / XLSX</button>
+              <button className={`tab${pfTab==="manual"?" active":""}`} onClick={() => setPfTab("manual")}>{t("pf_tab_manual")}</button>
+              <button className={`tab${pfTab==="csv"?" active":""}`} onClick={() => setPfTab("csv")}>{t("pf_tab_csv")}</button>
             </div>
 
             {pfTab === "manual" && (
               <div className="card f-card">
-                <div className="f-title">Informations de recherche</div>
+                <div className="f-title">{t("pf_manual_section")}</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
                   {[
-                    ["name","Nom de l'entreprise","Ex: Dépanneur Bélanger"],
-                    ["address","Adresse","Ex: 320 rue Bouchard"],
-                    ["city","Ville","Ex: Saint-Jean-sur-Richelieu"],
-                    ["province","Province","Ex: Québec"],
-                    ["postalCode","Code postal","Ex: J3B 6N5"],
-                    ["country","Pays","Canada"],
+                    ["name",    t("pf_field_name"),     t("pf_field_name_ph")],
+                    ["address", t("pf_field_address"),  t("pf_field_address_ph")],
+                    ["city",    t("pf_field_city"),     t("pf_field_city_ph")],
+                    ["province",t("pf_field_province"), t("pf_field_province_ph")],
+                    ["postalCode", t("pf_field_postal"), t("pf_field_postal_ph")],
+                    ["country", t("pf_field_country"),  t("pf_field_country_ph")],
                   ].map(([field, lbl, ph]) => (
                     <div className="f-row" key={field}>
                       <div className="f-lbl">{lbl}</div>
@@ -1097,32 +1127,46 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                 </div>
                 {apiError && <div className="status-note error" style={{marginBottom:8}}>{apiError}</div>}
                 <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
-                  <button className="btn btn-gold" onClick={searchManual} disabled={loading}>{loading ? "Recherche…" : "🔍 Rechercher"}</button>
+                  <button className="btn btn-gold" onClick={searchManual} disabled={loading}>{loading ? t("pf_btn_searching") : t("pf_btn_search")}</button>
                 </div>
               </div>
             )}
 
             {pfTab === "csv" && (
               <div className="card f-card">
-                <div className="f-title">Import CSV / XLSX</div>
+                <div className="f-title">{t("pf_csv_section")}</div>
                 <div className="pf-drop"
                   onDragOver={e => e.preventDefault()}
                   onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
                   onClick={pickCSVFile}>
                   <div style={{fontSize:32,marginBottom:8}}>📂</div>
                   {csvFile
-                    ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{csvFile.rows.length} lignes · {csvFile.headers.length} colonnes · séparateur : <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? "TAB" : csvFile.delim}</code></div>
-                    : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un CSV/XLSX ou cliquez pour choisir</div>}
-                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>Colonnes utiles : adresse immeuble, entreprise, nom complet, ville, province, code postal</div>
+                    ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                        {/* Inline the stats sentence so the separator can
+                            render inside a styled <code>. pf_csv_stats
+                            lives as a string for non-JSX callers (tests,
+                            csv import toast) but here we split manually. */}
+                        {csvFile.rows.length}
+                        {lang === "en" ? " rows · " : " lignes · "}
+                        {csvFile.headers.length}
+                        {lang === "en" ? " columns · separator: " : " colonnes · séparateur : "}
+                        <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? t("pf_sep_tab") : csvFile.delim}</code>
+                      </div>
+                    : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>{t("pf_csv_drop")}</div>}
+                  <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>{t("pf_csv_hint")}</div>
                 </div>
                 {csvFile && (
                   <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                     <div style={{fontSize:12,color:"var(--text2)"}}>
-                      <strong>{csvFile.rows.length}</strong> lignes •{" "}
-                      <strong>{Object.values(colMap).filter(Boolean).length}</strong> colonnes détectées automatiquement
-                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>mappage avancé (optionnel)</button>)
+                      {/* Inline a React-rich version of pf_csv_detected so
+                          the row + column counts render in <strong>. */}
+                      <strong>{csvFile.rows.length}</strong>{" "}
+                      {lang === "en" ? "rows •" : "lignes •"}{" "}
+                      <strong>{Object.values(colMap).filter(Boolean).length}</strong>{" "}
+                      {lang === "en" ? "columns auto-detected" : "colonnes détectées automatiquement"}
+                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>{t("pf_csv_advanced_mapping")}</button>)
                     </div>
-                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? "Recherche en cours…" : `🔍 Rechercher ${csvFile.rows.length} lignes`}</button>
+                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? t("pf_csv_running") : t("pf_csv_search_n", csvFile.rows.length)}</button>
                   </div>
                 )}
                 {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
@@ -1132,17 +1176,23 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
             {!loading && resultRuns.length === 0 && (
               <div className="card empty">
                 <div className="empty-ico">📞</div>
-                <div className="empty-title">Aucun import sauvegardé</div>
-                <div className="empty-sub">Lancez une recherche manuelle ou un import CSV. Chaque import sera enregistré dans l'onglet Résultats avec une date.</div>
+                <div className="empty-title">{t("pf_empty_saved_title")}</div>
+                <div className="empty-sub">{t("pf_empty_saved_sub")}</div>
               </div>
             )}
 
             {!loading && resultRuns.length > 0 && (
               <div className="card" style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                 <div style={{fontSize:12,color:"var(--text2)"}}>
-                  Dernier import : <strong style={{color:"var(--text)"}}>{resultRuns[0].title}</strong> · {resultRuns[0].totalRows} lignes
+                  {/* Render the "last import" sentence inline with a <strong>
+                      for the title — pf_last_import exists as a string for
+                      other use-sites (toasts) but here we inline for rich
+                      formatting. */}
+                  {lang === "en" ? "Last import: " : "Dernier import : "}
+                  <strong style={{color:"var(--text)"}}>{resultRuns[0].title}</strong>
+                  {" · "}{resultRuns[0].totalRows}{" "}{lang === "en" ? "rows" : "lignes"}
                 </div>
-                <button className="btn btn-gold" onClick={() => { setActiveRunId(resultRuns[0].id); setPfPage("results"); }}>Ouvrir les résultats</button>
+                <button className="btn btn-gold" onClick={() => { setActiveRunId(resultRuns[0].id); setPfPage("results"); }}>{t("pf_open_results")}</button>
               </div>
             )}
           </>
@@ -1153,15 +1203,15 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
           resultRuns.length === 0 ? (
             <div className="card empty">
               <div className="empty-ico">📚</div>
-              <div className="empty-title">Aucun import sauvegardé</div>
-              <div className="empty-sub">Retournez dans l'onglet Recherche pour lancer une recherche. Les résultats seront sauvegardés automatiquement avec la date.</div>
-              <button className="btn btn-gold" onClick={() => setPfPage("search")}>Aller à la recherche</button>
+              <div className="empty-title">{t("pf_empty_saved_title")}</div>
+              <div className="empty-sub">{t("pf_empty_results_sub")}</div>
+              <button className="btn btn-gold" onClick={() => setPfPage("search")}>{t("pf_empty_results_cta")}</button>
             </div>
           ) : (
             <div style={{display:"grid",gridTemplateColumns:"280px minmax(0, 1fr)",gap:14,alignItems:"start"}}>
               <div className="card" style={{overflow:"hidden",display:"flex",flexDirection:"column",minHeight:120}}>
                 <div style={{padding:"10px 12px",borderBottom:"1px solid var(--border)",fontSize:11,fontWeight:700,letterSpacing:".4px",textTransform:"uppercase",color:"var(--text3)"}}>
-                  Imports sauvegardés
+                  {t("pf_saved_imports")}
                 </div>
                 <div style={{padding:10,display:"flex",flexDirection:"column",gap:8,maxHeight:"calc(100vh - 290px)",overflowY:"auto"}}>
                   {resultRuns.map(run => {
@@ -1175,11 +1225,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                         >
                           <div style={{fontSize:12,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{run.title}</div>
                           <div style={{fontSize:10,color:"var(--text3)",marginTop:3}}>
-                            {run.totalRows || 0} lignes · {run.foundCount || 0} trouvés
+                            {t("pf_rows_found_sub", run.totalRows || 0, run.foundCount || 0)}
                           </div>
                         </button>
-                        <button className="btn btn-sm" title="Renommer" onClick={() => askRenameRun(run)}>✎</button>
-                        <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm("Supprimer cet import sauvegardé ?")) removeRun(run.id); }}>✕</button>
+                        <button className="btn btn-sm" title={t("pf_rename_title")} onClick={() => askRenameRun(run)}>✎</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm(t("pf_confirm_delete_run"))) removeRun(run.id); }}>✕</button>
                       </div>
                     );
                   })}
@@ -1192,10 +1242,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                     <div>
                       <div style={{fontSize:14,fontWeight:700,color:"var(--text)"}}>{activeRun.title}</div>
                       <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>
-                        {formatRunDate(activeRun.createdAt)} · {activeRun.totalRows || 0} lignes · {activeRun.foundCount || 0} numéros trouvés
+                        {t("pf_active_run_summary", formatRunDate(activeRun.createdAt), activeRun.totalRows || 0, activeRun.foundCount || 0)}
                       </div>
                       <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>
-                        Export vers Leads: <strong style={{color:"var(--text2)"}}>{exportStatusLabel}</strong> ({exportFoundRows.length})
+                        {t("pf_export_status_label_prefix")} <strong style={{color:"var(--text2)"}}>{exportStatusLabel}</strong> ({exportFoundRows.length})
                       </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1204,10 +1254,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                         onClick={() => exportRunToLeads({ ...activeRun, rows: exportFoundRows })}
                         disabled={exportBusy || exportFoundRows.length === 0}
                       >
-                        {exportBusy ? "Export…" : `⇢ Exporter ${exportFoundRows.length} leads trouvés`}
+                        {exportBusy ? t("pf_export_busy") : t("pf_export_found_leads", exportFoundRows.length)}
                       </button>
-                      <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>✎ Renommer</button>
-                      <button className="btn btn-sm" onClick={exportCSV}>⬇ Exporter cet import</button>
+                      <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>{t("pf_rename_btn")}</button>
+                      <button className="btn btn-sm" onClick={exportCSV}>{t("pf_export_this_import")}</button>
                     </div>
                   </div>
                 )}
@@ -1216,44 +1266,44 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                   filteredResults.length > 0 ? (
                     <div className="card" style={{overflow:"hidden"}}>
                       <div style={{padding:"10px 14px",borderBottom:"1px solid var(--border)",display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                        <input ref={searchRef} className="tb-search" style={{width:200}} placeholder="Filtrer les résultats… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+                        <input ref={searchRef} className="tb-search" style={{width:200}} placeholder={t("pf_filter_ph")} value={searchInput} onChange={e => setSearchInput(e.target.value)} />
                         <select style={{width:"auto",padding:"7px 10px",fontSize:12}} value={filter.status} onChange={e => { setFilter(f => ({ ...f, status:e.target.value })); setPage(1); }}>
-                          <option value="all">Tous les statuts</option>
-                          <option value="found">Trouvé</option>
-                          <option value="needs_review">À vérifier</option>
-                          <option value="multiple_matches">Choix multiple</option>
-                          <option value="not_found">Non trouvé</option>
+                          <option value="all">{t("pf_filter_status_all")}</option>
+                          <option value="found">{t("pf_filter_status_found")}</option>
+                          <option value="needs_review">{t("pf_filter_status_review")}</option>
+                          <option value="multiple_matches">{t("pf_filter_status_multi")}</option>
+                          <option value="not_found">{t("pf_filter_status_not_found")}</option>
                         </select>
                         {results.some(r => r.status === "not_found" && r._src) && (
                           <button
                             className="btn btn-sm"
                             onClick={rerunNotFound}
                             disabled={loading}
-                            title="Relancer la recherche Google Places pour toutes les lignes non trouvées dans cette session"
+                            title={t("pf_rerun_not_found_tt")}
                             style={{whiteSpace:"nowrap"}}
                           >
-                            🔄 Relancer non trouvés
+                            {t("pf_rerun_not_found")}
                           </button>
                         )}
                         <span style={{fontSize:11,color:"var(--text3)",marginLeft:"auto"}}>
                           {pagedResults.length < filteredResults.length
-                            ? `${pagedResults.length} affichés sur ${filteredResults.length}`
-                            : `${filteredResults.length} résultat${filteredResults.length !== 1 ? "s" : ""}`}
-                          {results.length !== filteredResults.length ? ` (total: ${results.length})` : ""}
+                            ? t("pf_shown_of", pagedResults.length, filteredResults.length)
+                            : t("pf_results_count", filteredResults.length)}
+                          {results.length !== filteredResults.length ? t("pf_total_suffix", results.length) : ""}
                         </span>
                       </div>
                       <div style={{overflowX:"auto"}}>
                         <table className="pf-tbl">
                           <thead>
                             <tr>
-                              <th>#</th>
-                              <th>Recherche</th>
-                              <th>Correspondance trouvée</th>
-                              <th>Téléphone</th>
-                              <th>Site web</th>
-                              <th style={{textAlign:"center"}}>Conf.</th>
-                              <th>Statut</th>
-                              <th>Actions</th>
+                              <th>{t("pf_th_num")}</th>
+                              <th>{t("pf_th_search")}</th>
+                              <th>{t("pf_th_match")}</th>
+                              <th>{t("pf_th_phone")}</th>
+                              <th>{t("pf_th_website")}</th>
+                              <th style={{textAlign:"center"}}>{t("pf_th_conf")}</th>
+                              <th>{t("pf_th_status")}</th>
+                              <th>{t("pf_th_actions")}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1274,7 +1324,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                       {pagedResults.length < filteredResults.length && (
                         <div style={{padding:"12px 14px",borderTop:"1px solid var(--border)",textAlign:"center"}}>
                           <button className="btn" onClick={() => setPage(p => p + 1)}>
-                            Afficher {Math.min(PAGE_SIZE, filteredResults.length - pagedResults.length)} de plus ({filteredResults.length - pagedResults.length} restants)
+                            {t("pf_show_more", Math.min(PAGE_SIZE, filteredResults.length - pagedResults.length), filteredResults.length - pagedResults.length)}
                           </button>
                         </div>
                       )}
@@ -1282,8 +1332,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads }) {
                   ) : (
                     <div className="card empty">
                       <div className="empty-ico">📄</div>
-                      <div className="empty-title">Aucun résultat dans cet import</div>
-                      <div className="empty-sub">Cet import existe mais ne contient pas de lignes affichables avec le filtre actuel.</div>
+                      <div className="empty-title">{t("pf_no_results_title")}</div>
+                      <div className="empty-sub">{t("pf_no_results_sub")}</div>
                     </div>
                   )
                 )}

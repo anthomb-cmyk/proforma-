@@ -11,6 +11,7 @@ import {
 } from "./lib/format.js";
 import { load, isQuotaError, persist } from "./lib/storage.js";
 import { fetchServerState, pushServerState } from "./lib/syncState.js";
+import { pushSupported, pushPermission, subscribeToPush, unsubscribeFromPush } from "./lib/pushSubscribe.js";
 import {
   buildCL, createDeal, dealLabel, normalizeDeal,
   buildLeadIdentityKey, getLeadPhones,
@@ -194,6 +195,445 @@ const I18N = {
     toast_saved: "Enregistré.",
     toast_storage_full: "⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.",
     loading_generic: "Chargement…",
+
+    // --- Sidebar ---
+    sidebar_tag: "Investissement Immobilier",
+    sidebar_recent_deals: "Deals récents",
+    sidebar_no_deals: "Aucun deal encore.",
+    sidebar_no_contact: "Sans contact",
+
+    // --- Dashboard ---
+    dashboard_kpi_total: "Deals Total",
+    dashboard_kpi_total_sub: (n) => `+${n} cette semaine`,
+    dashboard_kpi_closing: "En Closing",
+    dashboard_kpi_closing_sub: "Progression solide",
+    dashboard_kpi_overdue: "Follow-ups Retard",
+    dashboard_kpi_overdue_action: "Action requise",
+    dashboard_kpi_overdue_ok: "Sous contrôle",
+    dashboard_kpi_prospection: "En Prospection",
+    dashboard_kpi_prospection_sub: "Flux actif",
+    dashboard_section_pipeline: "Pipeline des Acquisitions",
+    dashboard_section_pipeline_full: "Vue complète",
+    dashboard_section_activity: "Activité Récente",
+    dashboard_activity_empty: "Aucune activité encore.",
+    dashboard_section_tasks: "Tâches à Compléter",
+    dashboard_section_tasks_all: "Voir tout",
+    dashboard_section_top_opps: "Top Opportunités",
+    dashboard_no_followups: "Aucun follow-up planifié.",
+    dashboard_no_opps: "Ajoutez des deals pour voir les opportunités.",
+    dashboard_task_default: "Suivi à compléter",
+    dashboard_followup_label: "Suivi requis",
+    dashboard_followup_today: "Aujourd'hui",
+    dashboard_followup_overdue: (n) => `${n}j retard`,
+    dashboard_followup_in: (n) => `Dans ${n}j`,
+    dashboard_map_full: "Voir la carte complète",
+    dashboard_map_loading: "Chargement de la carte…",
+
+    // --- Pipeline ---
+    pipeline_empty_col: "Aucun deal",
+    pipeline_no_contact: "Contact à définir",
+    pipeline_price_tbd: "Prix: À valider",
+    pipeline_followup_label: "Suivi",
+    pipeline_documents_label: "Documents",
+    pipeline_checklist_label: (pct) => `Checklist ${pct}%`,
+
+    // --- Map ---
+    map_stages_header: "Étapes",
+    map_filter_label: "Filtrer",
+    map_filter_all: "Toutes les étapes",
+    map_status_shown: (n) => `${n} deal(s) affiché(s) sur la carte.`,
+    map_status_empty: "Aucun deal géocodé pour ce filtre. Ajoutez une adresse dans CRM & Suivi pour afficher un pin.",
+    map_err_label: "la carte",
+
+    // --- Follow-ups view ---
+    followups_empty_title: "Aucun Follow-up",
+    followups_empty_sub: "Ajoutez une date de suivi dans l'onglet CRM d'un deal.",
+
+    // --- Calendar ---
+    cal_btn_connecting: "Connexion...",
+    cal_btn_refresh: "Actualiser Google Calendar",
+    cal_btn_connect: "Connecter Google Calendar",
+    cal_connected: "Google Calendar connecté",
+    cal_new_event: "＋ Événement",
+    cal_loading_events: "Chargement des événements Google Calendar…",
+    cal_err_client_missing: "REACT_APP_GCAL_CLIENT_ID manquant.",
+    cal_err_oauth_missing: "Google OAuth non chargé. Rafraîchissez la page.",
+    cal_err_auth: "Authentification Google refusée ou invalide.",
+    cal_err_load: "Impossible de charger les événements Google Calendar.",
+    cal_event_untitled: "(Sans titre)",
+    cal_next_events: "Prochains Événements",
+    cal_no_upcoming: "Aucun événement à venir.",
+    cal_source_google: "Google Calendar",
+    cal_month_0: "Janvier",
+    cal_month_1: "Février",
+    cal_month_2: "Mars",
+    cal_month_3: "Avril",
+    cal_month_4: "Mai",
+    cal_month_5: "Juin",
+    cal_month_6: "Juillet",
+    cal_month_7: "Août",
+    cal_month_8: "Septembre",
+    cal_month_9: "Octobre",
+    cal_month_10: "Novembre",
+    cal_month_11: "Décembre",
+    cal_day_0: "Dim",
+    cal_day_1: "Lun",
+    cal_day_2: "Mar",
+    cal_day_3: "Mer",
+    cal_day_4: "Jeu",
+    cal_day_5: "Ven",
+    cal_day_6: "Sam",
+
+    // --- Workspace (deal detail) ---
+    ws_empty_title: "Aucun Deal",
+    ws_empty_sub: "Sélectionnez un deal dans la barre de gauche pour commencer.",
+    ws_empty_cta: "＋ Nouveau deal",
+    ws_address_todo: "Adresse à compléter",
+    ws_address_placeholder: "Adresse / secteur à renseigner",
+    ws_units_suffix: (n) => `• ${n} unités`,
+    ws_updated_on: (d) => `Mis à jour le ${d}`,
+    ws_phonefinder_err_label: "Recherche Tél",
+    ws_phonefinder_loading: "Chargement de Recherche Tél…",
+
+    // Workspace tabs
+    ws_tab_crm: "CRM & Suivi",
+    ws_tab_notes: "Notes",
+    ws_tab_documents: "Documents",
+    ws_tab_checklist: "Checklist",
+    ws_tab_activity: "Activité",
+
+    // Contact card
+    ws_contact_title: "Contact (vendeur / courtier)",
+    ws_contact_main: "Contact principal",
+    ws_contact_role_todo: "Rôle à définir",
+    ws_contact_name: "Nom",
+    ws_contact_phone: "Téléphone",
+    ws_contact_email: "Email",
+    ws_contact_company: "Compagnie",
+    ws_contact_role: "Rôle",
+    ws_call_start: "📞 Appeler ce contact",
+    ws_call_busy: "Appel en cours...",
+    ws_call_refresh: "Actualiser appels",
+    ws_call_loading: "Chargement...",
+    ws_call_history_title: "Historique des appels",
+    ws_call_history_empty: "Aucun appel enregistré pour ce deal.",
+    ws_call_err_no_phone: "Ajoutez un téléphone dans la fiche contact avant d'appeler.",
+    ws_call_err_generic: "Impossible de lancer l'appel.",
+    ws_call_err_history: "Impossible de charger l'historique des appels.",
+    ws_call_err_transcript: "Impossible de relancer la transcription.",
+    ws_call_ok_launched: "Appel lancé. Le statut et l'enregistrement vont se mettre à jour automatiquement.",
+    ws_call_ok_transcript: "Transcription relancée. Rafraîchissez dans quelques secondes.",
+    ws_call_act_launched: (name) => `📞 Appel lancé vers ${name}`,
+    ws_call_unknown: "inconnu",
+    ws_call_contact_fallback: "Contact",
+    ws_call_transcript_prefix: "Transcript:",
+    ws_call_listen: "Écouter",
+    ws_call_retry_transcript: "Relancer transcript",
+    ws_call_show_transcript: "Voir la transcription",
+    err_status: (s) => `Erreur ${s}`,
+
+    // Suivi & priorité card
+    ws_section_priority: "Suivi & Priorité",
+    ws_priority_label: "Priorité",
+    ws_priority_high: "Haute",
+    ws_priority_medium: "Moyenne",
+    ws_priority_low: "Basse",
+    ws_priority_tag_high: "CHAUD",
+    ws_priority_tag_medium: "TIÈDE",
+    ws_priority_tag_low: "FROID",
+    ws_field_units: "Nombre d'unités",
+    ws_field_units_ph: "Ex: 6",
+    ws_field_price: "Prix demandé ($)",
+    ws_field_price_ph: "Ex: 900000",
+    ws_field_followup_date: "Date de follow-up",
+    ws_field_followup_note: "Note de suivi",
+    ws_field_followup_note_ph: "Ex: Rappeler pour contre-offre…",
+    ws_field_next_action: "Prochaine action",
+    ws_field_next_action_ph: "Ex: Déposer l'offre d'achat",
+    ws_field_address: "Adresse",
+    ws_field_address_ph: "Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu",
+
+    ws_section_activity: "Enregistrer une activité",
+
+    // Notes tab
+    ws_notes_deal: "Notes deal",
+    ws_notes_vendor: "Notes vendeur",
+    ws_notes_deal_ph: "Prix demandé, état général, potentiel, quartier, historique, stratégie…",
+    ws_notes_vendor_ph: "Motivation du vendeur, délai, flexibilité prix, points sensibles, style de négociation…",
+    ws_ai_btn: "✦ Formater",
+    ws_ai_btn_busy: "Formatage...",
+    ws_ai_box_label: "✦ Notes CRM formatées",
+    ws_ai_clear: "Effacer",
+    ws_ai_err_empty: "Ajoutez des notes avant de formater.",
+    ws_ai_err_api: "Erreur API.",
+    ws_ai_err_server: "Erreur de connexion au serveur.",
+    ws_ai_err_network: "Erreur réseau.",
+
+    // Documents tab
+    ws_doc_download: "Télécharger",
+    ws_doc_close: "Fermer",
+    ws_doc_viewer_err: "le tableur",
+    ws_doc_viewer_loading: "Chargement du tableur…",
+    ws_doc_preview_unavailable: "Prévisualisation non disponible.",
+    ws_doc_drop_title: "Glissez vos fichiers ici ou cliquez pour sélectionner",
+    ws_doc_drop_sub: "PDF, images, Word, Excel — tous formats acceptés",
+    ws_doc_empty: "Aucun document pour ce deal.",
+    ws_doc_added: (n, names) => `📎 ${n} document${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}: ${names}`,
+
+    // Checklist tab
+    ws_checklist_title: "Checklist par étape",
+    ws_checklist_add_ph: "Ajouter un item…",
+    ws_checklist_add_btn: "Ajouter",
+
+    // Activity tab
+    ws_activity_history: "Historique",
+    ws_activity_stage_move: (lbl) => `Étape → ${lbl}`,
+
+    // --- Stage catalog (deal pipeline) ---
+    stage_prospection: "Prospection",
+    stage_analyse: "Analyse",
+    stage_offre: "Offre déposée",
+    stage_due_diligence: "Due diligence",
+    stage_financement: "Financement",
+    stage_closing: "Closing",
+    stage_perdu: "Perdu",
+
+    // --- Modals ---
+    modal_new_deal_title: "Nouveau deal",
+    modal_new_field_address: "Adresse de la propriété",
+    modal_new_address_ph: "Ex: 11 rue Molleur, Saint-Jean-sur-Richelieu",
+    modal_cancel: "Annuler",
+    modal_new_submit: "Créer le deal",
+    modal_event_title: "Nouvel événement",
+    modal_event_field_title: "Titre",
+    modal_event_title_ph: "Ex: Inspection 320 rue Bouchard",
+    modal_event_field_date: "Date",
+    modal_event_field_time: "Heure (optionnel)",
+    modal_event_field_deal: "Associer à un deal",
+    modal_event_select_placeholder: "— Sélectionner —",
+    modal_event_submit: "Créer",
+    modal_event_err_no_deal: "Associez l'événement à un deal.",
+    modal_event_act_created: (title, date) => `📅 Événement: ${title} le ${date}`,
+
+    // Deal defaults
+    deal_default_title: "Nouveau deal",
+    deal_lead_imported: "Lead importé",
+    deal_lead_other_phones: (list) => `Autres numéros: ${list}`,
+    deal_lead_converted: "Lead converti en deal",
+    deal_confirm_delete: "Supprimer ce deal ?",
+
+    // --- PhoneFinder (page) ---
+    pf_source_title: (t) => `Recherche Tél. · ${t}`,
+    pf_source_default: "Recherche Tél.",
+    pf_imported_from_with: (t) => `Importé depuis Recherche Tél. (${t})`,
+    pf_imported_from: "Importé depuis Recherche Tél.",
+    pf_header_title: "Recherche de Numéros",
+    pf_header_sub: "Google Places · imports sauvegardés localement",
+    pf_spend_today: (rows, cost) => `Aujourd'hui · ${rows} lignes · ~${cost}`,
+    pf_spend_tooltip: (rows) => `${rows} lignes enrichies aujourd'hui (estimation Google Places Essentials 2025)`,
+    pf_export_busy: "Export…",
+    pf_export_found_btn: (n) => `⇢ Leads trouvés (${n})`,
+    pf_view_results: "Voir résultats",
+    pf_export_csv: "⬇ Exporter CSV",
+    pf_clear_all: "Vider",
+    pf_tab_search: "🔎 Recherche",
+    pf_tab_results: (n) => `📚 Résultats (${n})`,
+    pf_tab_manual: "🔍 Recherche manuelle",
+    pf_tab_csv: "📂 Import CSV / XLSX",
+    pf_manual_section: "Informations de recherche",
+    pf_field_name: "Nom de l'entreprise",
+    pf_field_name_ph: "Ex: Dépanneur Bélanger",
+    pf_field_address: "Adresse",
+    pf_field_address_ph: "Ex: 320 rue Bouchard",
+    pf_field_city: "Ville",
+    pf_field_city_ph: "Ex: Saint-Jean-sur-Richelieu",
+    pf_field_province: "Province",
+    pf_field_province_ph: "Ex: Québec",
+    pf_field_postal: "Code postal",
+    pf_field_postal_ph: "Ex: J3B 6N5",
+    pf_field_country: "Pays",
+    pf_field_country_ph: "Canada",
+    pf_btn_search: "🔍 Rechercher",
+    pf_btn_searching: "Recherche…",
+    pf_csv_section: "Import CSV / XLSX",
+    pf_csv_stats: (rows, cols, sep) => `${rows} lignes · ${cols} colonnes · séparateur : ${sep}`,
+    pf_csv_drop: "Glissez un CSV/XLSX ou cliquez pour choisir",
+    pf_csv_hint: "Colonnes utiles : adresse immeuble, entreprise, nom complet, ville, province, code postal",
+    pf_csv_detected: (rows, mapped) => `${rows} lignes • ${mapped} colonnes détectées automatiquement`,
+    pf_csv_advanced_mapping: "mappage avancé (optionnel)",
+    pf_csv_search_n: (n) => `🔍 Rechercher ${n} lignes`,
+    pf_csv_running: "Recherche en cours…",
+    pf_empty_saved_title: "Aucun import sauvegardé",
+    pf_empty_saved_sub: "Lancez une recherche manuelle ou un import CSV. Chaque import sera enregistré dans l'onglet Résultats avec une date.",
+    pf_empty_results_sub: "Retournez dans l'onglet Recherche pour lancer une recherche. Les résultats seront sauvegardés automatiquement avec la date.",
+    pf_empty_results_cta: "Aller à la recherche",
+    pf_last_import: (title, n) => `Dernier import : ${title} · ${n} lignes`,
+    pf_open_results: "Ouvrir les résultats",
+    pf_saved_imports: "Imports sauvegardés",
+    pf_rows_found_sub: (rows, found) => `${rows} lignes · ${found} trouvés`,
+    pf_rename_title: "Renommer",
+    pf_confirm_delete_run: "Supprimer cet import sauvegardé ?",
+    pf_delete_all_confirm: "Effacer tous les imports sauvegardés ?",
+    pf_rename_prompt: "Nouveau titre pour cet import :",
+    pf_rename_err_empty: "Le titre ne peut pas être vide.",
+    pf_export_no_phones: "Aucun numéro trouvé à exporter.",
+    pf_export_unavailable: "Export vers Leads indisponible.",
+    pf_export_leads_updated: (parts) => `✅ Leads mis à jour: ${parts} · aucune donnée supprimée`,
+    pf_export_part_new: (n) => `${n} nouveau${n > 1 ? "x" : ""}`,
+    pf_export_part_updated: (n) => `${n} enrichi${n > 1 ? "s" : ""}`,
+    pf_export_part_skipped: (n) => `${n} inchangé${n > 1 ? "s" : ""}`,
+    pf_export_nothing_new: "Tous les numéros trouvés sont déjà dans Leads.",
+    pf_export_impossible: (e) => `Export impossible: ${e}`,
+    pf_active_run_summary: (date, rows, found) => `${date} · ${rows} lignes · ${found} numéros trouvés`,
+    pf_export_status_label_prefix: "Export vers Leads:",
+    pf_export_status_current: "Trouvé uniquement (filtre affiché)",
+    pf_export_found_leads: (n) => `⇢ Exporter ${n} leads trouvés`,
+    pf_rename_btn: "✎ Renommer",
+    pf_export_this_import: "⬇ Exporter cet import",
+    pf_filter_ph: "Filtrer les résultats… (⌘K)",
+    pf_filter_status_all: "Tous les statuts",
+    pf_filter_status_found: "Trouvé",
+    pf_filter_status_review: "À vérifier",
+    pf_filter_status_multi: "Choix multiple",
+    pf_filter_status_not_found: "Non trouvé",
+    pf_rerun_not_found: "🔄 Relancer non trouvés",
+    pf_rerun_not_found_tt: "Relancer la recherche Google Places pour toutes les lignes non trouvées dans cette session",
+    pf_shown_of: (shown, total) => `${shown} affichés sur ${total}`,
+    pf_results_count: (n) => `${n} résultat${n !== 1 ? "s" : ""}`,
+    pf_total_suffix: (n) => ` (total: ${n})`,
+    pf_th_num: "#",
+    pf_th_search: "Recherche",
+    pf_th_match: "Correspondance trouvée",
+    pf_th_phone: "Téléphone",
+    pf_th_website: "Site web",
+    pf_th_conf: "Conf.",
+    pf_th_status: "Statut",
+    pf_th_actions: "Actions",
+    pf_show_more: (count, remaining) => `Afficher ${count} de plus (${remaining} restants)`,
+    pf_no_results_title: "Aucun résultat dans cet import",
+    pf_no_results_sub: "Cet import existe mais ne contient pas de lignes affichables avec le filtre actuel.",
+    pf_stop: "⏹ Arrêter",
+    pf_processing: (done, total) => `⏳ ${done} / ${total} lignes traitées`,
+    pf_remaining: (pct, seconds) => `${pct}% · ~${seconds}s restantes`,
+    pf_connecting: "⏳ Connexion à Google Places…",
+    pf_progress_label: (pct) => `${pct}%`,
+    pf_review_title: "Choisir le bon résultat",
+    pf_review_query: "Recherche :",
+    pf_review_anon: "(sans nom)",
+    pf_review_mark_notfound: "Marquer introuvable",
+    pf_review_cancel: "Annuler",
+    pf_colmap_title: "Mapper les colonnes d'import",
+    pf_colmap_stats: (rows, cols, sep) => `${rows} lignes · ${cols} colonnes détectées (séparateur : ${sep})`,
+    pf_colmap_hint: "Assignez vos colonnes (adresse, entreprise, contact). L'adresse immeuble est recommandée pour une recherche fiable.",
+    pf_colmap_ignore: "— Ignorer —",
+    pf_colmap_close: "Fermer",
+    pf_colmap_confirm: "Confirmer le mappage",
+    pf_confirm_title: "Confirmer la recherche téléphones",
+    pf_confirm_body: (n) => `Vous êtes sur le point d'enrichir ${n} ${n === 1 ? "ligne" : "lignes"} via Google Places.`,
+    pf_confirm_est_label: "Coût estimé",
+    pf_confirm_range: (lo, hi) => `Fourchette : ${lo} – ${hi}`,
+    pf_confirm_calls: (lo1, hi1, lo2, hi2) => `Appels estimés : ${lo1}–${hi1} Text Search + ${lo2}–${hi2} Details`,
+    pf_confirm_note: "Les lignes résidentielles (Logement · Physique) ne font aucun appel. Les doublons d'adresse dans le même lot sont mis en cache.",
+    pf_confirm_cancel: "Annuler",
+    pf_confirm_launch: "Lancer la recherche",
+    pf_status_found: "Trouvé",
+    pf_status_review: "À vérifier",
+    pf_status_multi: "Choix multiple",
+    pf_status_not_found: "Non trouvé",
+    pf_err_need_name_or_addr: "Entrez un nom d'entreprise ou une adresse.",
+    pf_err_no_rows: "Aucune ligne exploitable dans ce fichier.",
+    pf_err_budget: "Budget quotidien Google Places atteint. Réessayez demain.",
+    pf_err_server: "Erreur serveur",
+    pf_err_server_code: (code) => `Erreur serveur (${code}).`,
+    pf_err_import: (e) => `Import impossible: ${e}`,
+    pf_err_no_rows_parsed: "Le fichier ne contient pas de lignes importables.",
+    pf_err_network_batch: (n, m) => `Erreur réseau (lot ${n}): ${m}`,
+    pf_err_network: (e) => `Erreur réseau: ${e}`,
+    pf_err_generic: (e) => `Erreur: ${e}`,
+    pf_rerun_toast_found: "🔄 Relancé · numéro trouvé !",
+    pf_rerun_toast_not_found: "🔄 Relancé · toujours introuvable",
+    pf_rerun_none: "Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).",
+    pf_rerun_summary: (done, found) => `🔄 ${done} relancés · ${found} nouveau${found !== 1 ? "x" : ""} numéro${found !== 1 ? "s" : ""} trouvé${found !== 1 ? "s" : ""}`,
+    pf_batch_ok: (done, found) => `✅ ${done} lignes traitées · ${found} numéros trouvés`,
+    pf_sep_tab: "TAB",
+    pf_run_default_manual: (stamp) => `Recherche manuelle · ${stamp}`,
+    pf_run_default_csv: (stamp) => `Import CSV · ${stamp}`,
+    pf_run_legacy: (stamp) => `Historique importé · ${stamp}`,
+    pf_run_import_of: (stamp) => `Import du ${stamp}`,
+
+    // PhoneFinder column-mapping field labels
+    pf_fl_name: "Nom de recherche",
+    pf_fl_company: "Entreprise / Organisation",
+    pf_fl_leadContact: "Contact / Propriétaire",
+    pf_fl_phone: "Téléphone (déjà connu)",
+    pf_fl_address: "Adresse immeuble",
+    pf_fl_city: "Ville",
+    pf_fl_province: "Province",
+    pf_fl_postalCode: "Code postal",
+    pf_fl_country: "Pays",
+    pf_fh_name: "optionnel, utilisé pour la recherche Places",
+    pf_fh_company: "optionnel, prioritaire pour la recherche si présent",
+    pf_fh_leadContact: "optionnel, conservé pour savoir qui appeler",
+    pf_fh_phone: "optionnel, ajouté au lead à l'export",
+    pf_fh_address: "très recommandé",
+    pf_fh_city: "optionnel",
+    pf_fh_province: "optionnel",
+    pf_fh_postalCode: "optionnel",
+    pf_fh_country: "optionnel",
+
+    pf_csv_example: (v) => `→ ex: "${v}"`,
+    // PhoneFinder exportCSV headers + file name stem
+    pf_csv_hdr_company: "Entreprise",
+    pf_csv_hdr_contact: "Contact",
+    pf_csv_hdr_building: "Bâtiment",
+    pf_csv_hdr_input_name: "Nom saisi",
+    pf_csv_hdr_input_address: "Adresse saisie",
+    pf_csv_hdr_matched_name: "Nom trouvé",
+    pf_csv_hdr_matched_address: "Adresse trouvée",
+    pf_csv_hdr_phone: "Téléphone trouvé",
+    pf_csv_hdr_file_phones: "Téléphones fichier",
+    pf_csv_hdr_website: "Site web",
+    pf_csv_hdr_source: "Source",
+    pf_csv_hdr_confidence: "Confiance %",
+    pf_csv_hdr_status: "Statut",
+    pf_csv_hdr_date: "Date",
+    pf_csv_download_stem: "recherche-tel",
+    fmt_date_unknown: "Date inconnue",
+
+    // OwnersManager extras (some FR-only literals)
+    owner_unknown: "(Propriétaire inconnu)",
+    om_fiche_props_count: (n) => `${n} × propriét${n === 1 ? "é" : "és"}`,
+    om_progress: (done, total, found) => `⏳ ${done} / ${total} · ${found}`,
+    om_import_stats_properties: "propriétés",
+    om_import_stats_unique: "propriétaires uniques",
+    om_import_stats_with_phone: "avec numéro dans le rôle",
+    om_import_stats_to_lookup: "à rechercher via Places",
+    om_import_est_cost: "Coût estimé de l'enrichissement:",
+    om_missing_mailing: "(adresse postale manquante)",
+    om_import_no_address: "(adresse postale manquante)",
+    om_filter_min_value: "Valeur de l'immeuble ≥",
+    om_filter_max_year: "Année de construction ≤",
+    om_filter_inscription: "Inscrit au rôle avant",
+    om_filter_units_between: "Unités entre",
+    om_err_server_generic: (code) => `Erreur serveur (${code}).`,
+    om_err_network: (e) => `Erreur réseau: ${e}`,
+
+    // ChatWidget aria
+    chat_close_label: "Fermer",
+
+    // ─── Push notifications ───
+    push_enable: "Activer les notifications",
+    push_enabled: "Notifications activées",
+    push_disable: "Désactiver",
+    push_unsupported: "Notifications non supportées sur ce navigateur.",
+    push_denied: "Notifications bloquées. Activez-les dans les réglages du navigateur.",
+    push_subscribing: "Activation…",
+    push_test: "Envoyer un test",
+    push_test_title: "SOCLE — Test",
+    push_test_body: "Les notifications push fonctionnent 🎉",
+    push_flag_title: "Nouveau lead à revoir",
+    push_flag_body: (user, label) => `${user} a signalé « ${label || "un lead"} » pour revue.`,
+    push_not_configured: "Serveur push non configuré.",
   },
   en: {
     login_title: "SOCLE Sign-in",
@@ -346,6 +786,445 @@ const I18N = {
     toast_saved: "Saved.",
     toast_storage_full: "⚠️ Local storage full. Export and remove leads to free up space.",
     loading_generic: "Loading…",
+
+    // --- Sidebar ---
+    sidebar_tag: "Real Estate Investment",
+    sidebar_recent_deals: "Recent deals",
+    sidebar_no_deals: "No deals yet.",
+    sidebar_no_contact: "No contact",
+
+    // --- Dashboard ---
+    dashboard_kpi_total: "Total Deals",
+    dashboard_kpi_total_sub: (n) => `+${n} this week`,
+    dashboard_kpi_closing: "Closing",
+    dashboard_kpi_closing_sub: "Steady progress",
+    dashboard_kpi_overdue: "Overdue Follow-ups",
+    dashboard_kpi_overdue_action: "Action needed",
+    dashboard_kpi_overdue_ok: "On track",
+    dashboard_kpi_prospection: "Prospecting",
+    dashboard_kpi_prospection_sub: "Active flow",
+    dashboard_section_pipeline: "Acquisitions Pipeline",
+    dashboard_section_pipeline_full: "Full view",
+    dashboard_section_activity: "Recent Activity",
+    dashboard_activity_empty: "No activity yet.",
+    dashboard_section_tasks: "Tasks to Complete",
+    dashboard_section_tasks_all: "View all",
+    dashboard_section_top_opps: "Top Opportunities",
+    dashboard_no_followups: "No follow-ups scheduled.",
+    dashboard_no_opps: "Add deals to see opportunities.",
+    dashboard_task_default: "Follow-up to complete",
+    dashboard_followup_label: "Follow-up needed",
+    dashboard_followup_today: "Today",
+    dashboard_followup_overdue: (n) => `${n}d overdue`,
+    dashboard_followup_in: (n) => `In ${n}d`,
+    dashboard_map_full: "Open full map",
+    dashboard_map_loading: "Loading map…",
+
+    // --- Pipeline ---
+    pipeline_empty_col: "No deals",
+    pipeline_no_contact: "Contact to be set",
+    pipeline_price_tbd: "Price: TBD",
+    pipeline_followup_label: "Follow-up",
+    pipeline_documents_label: "Documents",
+    pipeline_checklist_label: (pct) => `Checklist ${pct}%`,
+
+    // --- Map ---
+    map_stages_header: "Stages",
+    map_filter_label: "Filter",
+    map_filter_all: "All stages",
+    map_status_shown: (n) => `${n} deal${n === 1 ? "" : "s"} shown on the map.`,
+    map_status_empty: "No geocoded deals for this filter. Add an address in CRM & Follow-up to drop a pin.",
+    map_err_label: "the map",
+
+    // --- Follow-ups view ---
+    followups_empty_title: "No Follow-ups",
+    followups_empty_sub: "Add a follow-up date in the CRM tab of a deal.",
+
+    // --- Calendar ---
+    cal_btn_connecting: "Connecting...",
+    cal_btn_refresh: "Refresh Google Calendar",
+    cal_btn_connect: "Connect Google Calendar",
+    cal_connected: "Google Calendar connected",
+    cal_new_event: "＋ Event",
+    cal_loading_events: "Loading Google Calendar events…",
+    cal_err_client_missing: "REACT_APP_GCAL_CLIENT_ID is missing.",
+    cal_err_oauth_missing: "Google OAuth not loaded. Please refresh the page.",
+    cal_err_auth: "Google authentication refused or invalid.",
+    cal_err_load: "Unable to load Google Calendar events.",
+    cal_event_untitled: "(Untitled)",
+    cal_next_events: "Upcoming Events",
+    cal_no_upcoming: "No upcoming events.",
+    cal_source_google: "Google Calendar",
+    cal_month_0: "January",
+    cal_month_1: "February",
+    cal_month_2: "March",
+    cal_month_3: "April",
+    cal_month_4: "May",
+    cal_month_5: "June",
+    cal_month_6: "July",
+    cal_month_7: "August",
+    cal_month_8: "September",
+    cal_month_9: "October",
+    cal_month_10: "November",
+    cal_month_11: "December",
+    cal_day_0: "Sun",
+    cal_day_1: "Mon",
+    cal_day_2: "Tue",
+    cal_day_3: "Wed",
+    cal_day_4: "Thu",
+    cal_day_5: "Fri",
+    cal_day_6: "Sat",
+
+    // --- Workspace (deal detail) ---
+    ws_empty_title: "No Deal",
+    ws_empty_sub: "Select a deal from the left sidebar to get started.",
+    ws_empty_cta: "＋ New deal",
+    ws_address_todo: "Address to be set",
+    ws_address_placeholder: "Address / area to fill in",
+    ws_units_suffix: (n) => `• ${n} units`,
+    ws_updated_on: (d) => `Updated on ${d}`,
+    ws_phonefinder_err_label: "Phone Finder",
+    ws_phonefinder_loading: "Loading Phone Finder…",
+
+    // Workspace tabs
+    ws_tab_crm: "CRM & Follow-up",
+    ws_tab_notes: "Notes",
+    ws_tab_documents: "Documents",
+    ws_tab_checklist: "Checklist",
+    ws_tab_activity: "Activity",
+
+    // Contact card
+    ws_contact_title: "Contact (seller / broker)",
+    ws_contact_main: "Main contact",
+    ws_contact_role_todo: "Role to be set",
+    ws_contact_name: "Name",
+    ws_contact_phone: "Phone",
+    ws_contact_email: "Email",
+    ws_contact_company: "Company",
+    ws_contact_role: "Role",
+    ws_call_start: "📞 Call this contact",
+    ws_call_busy: "Calling...",
+    ws_call_refresh: "Refresh calls",
+    ws_call_loading: "Loading...",
+    ws_call_history_title: "Call history",
+    ws_call_history_empty: "No calls logged for this deal.",
+    ws_call_err_no_phone: "Add a phone number to the contact before calling.",
+    ws_call_err_generic: "Unable to start the call.",
+    ws_call_err_history: "Unable to load call history.",
+    ws_call_err_transcript: "Unable to restart the transcription.",
+    ws_call_ok_launched: "Call started. Status and recording will update automatically.",
+    ws_call_ok_transcript: "Transcription restarted. Refresh in a few seconds.",
+    ws_call_act_launched: (name) => `📞 Call started to ${name}`,
+    ws_call_unknown: "unknown",
+    ws_call_contact_fallback: "Contact",
+    ws_call_transcript_prefix: "Transcript:",
+    ws_call_listen: "Listen",
+    ws_call_retry_transcript: "Retry transcript",
+    ws_call_show_transcript: "Show transcription",
+    err_status: (s) => `Error ${s}`,
+
+    // Suivi & priorité card
+    ws_section_priority: "Follow-up & Priority",
+    ws_priority_label: "Priority",
+    ws_priority_high: "High",
+    ws_priority_medium: "Medium",
+    ws_priority_low: "Low",
+    ws_priority_tag_high: "HOT",
+    ws_priority_tag_medium: "WARM",
+    ws_priority_tag_low: "COLD",
+    ws_field_units: "Number of units",
+    ws_field_units_ph: "Ex: 6",
+    ws_field_price: "Asking price ($)",
+    ws_field_price_ph: "Ex: 900000",
+    ws_field_followup_date: "Follow-up date",
+    ws_field_followup_note: "Follow-up note",
+    ws_field_followup_note_ph: "Ex: Call back for counter-offer…",
+    ws_field_next_action: "Next action",
+    ws_field_next_action_ph: "Ex: Submit the offer",
+    ws_field_address: "Address",
+    ws_field_address_ph: "Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu",
+
+    ws_section_activity: "Log an activity",
+
+    // Notes tab
+    ws_notes_deal: "Deal notes",
+    ws_notes_vendor: "Seller notes",
+    ws_notes_deal_ph: "Asking price, condition, potential, neighborhood, history, strategy…",
+    ws_notes_vendor_ph: "Seller motivation, timing, price flexibility, pressure points, negotiation style…",
+    ws_ai_btn: "✦ Format",
+    ws_ai_btn_busy: "Formatting...",
+    ws_ai_box_label: "✦ Formatted CRM notes",
+    ws_ai_clear: "Clear",
+    ws_ai_err_empty: "Add notes before formatting.",
+    ws_ai_err_api: "API error.",
+    ws_ai_err_server: "Server connection error.",
+    ws_ai_err_network: "Network error.",
+
+    // Documents tab
+    ws_doc_download: "Download",
+    ws_doc_close: "Close",
+    ws_doc_viewer_err: "the spreadsheet viewer",
+    ws_doc_viewer_loading: "Loading spreadsheet…",
+    ws_doc_preview_unavailable: "Preview not available.",
+    ws_doc_drop_title: "Drag files here or click to pick",
+    ws_doc_drop_sub: "PDF, images, Word, Excel — any format",
+    ws_doc_empty: "No documents for this deal.",
+    ws_doc_added: (n, names) => `📎 ${n} document${n > 1 ? "s" : ""} added: ${names}`,
+
+    // Checklist tab
+    ws_checklist_title: "Checklist per stage",
+    ws_checklist_add_ph: "Add an item…",
+    ws_checklist_add_btn: "Add",
+
+    // Activity tab
+    ws_activity_history: "History",
+    ws_activity_stage_move: (lbl) => `Stage → ${lbl}`,
+
+    // --- Stage catalog (deal pipeline) ---
+    stage_prospection: "Prospecting",
+    stage_analyse: "Analysis",
+    stage_offre: "Offer submitted",
+    stage_due_diligence: "Due diligence",
+    stage_financement: "Financing",
+    stage_closing: "Closing",
+    stage_perdu: "Lost",
+
+    // --- Modals ---
+    modal_new_deal_title: "New deal",
+    modal_new_field_address: "Property address",
+    modal_new_address_ph: "Ex: 11 rue Molleur, Saint-Jean-sur-Richelieu",
+    modal_cancel: "Cancel",
+    modal_new_submit: "Create deal",
+    modal_event_title: "New event",
+    modal_event_field_title: "Title",
+    modal_event_title_ph: "Ex: Inspection 320 rue Bouchard",
+    modal_event_field_date: "Date",
+    modal_event_field_time: "Time (optional)",
+    modal_event_field_deal: "Link to a deal",
+    modal_event_select_placeholder: "— Select —",
+    modal_event_submit: "Create",
+    modal_event_err_no_deal: "Link the event to a deal.",
+    modal_event_act_created: (title, date) => `📅 Event: ${title} on ${date}`,
+
+    // Deal defaults
+    deal_default_title: "New deal",
+    deal_lead_imported: "Imported lead",
+    deal_lead_other_phones: (list) => `Other numbers: ${list}`,
+    deal_lead_converted: "Lead converted to deal",
+    deal_confirm_delete: "Delete this deal?",
+
+    // --- PhoneFinder (page) ---
+    pf_source_title: (t) => `Phone Finder · ${t}`,
+    pf_source_default: "Phone Finder",
+    pf_imported_from_with: (t) => `Imported from Phone Finder (${t})`,
+    pf_imported_from: "Imported from Phone Finder",
+    pf_header_title: "Phone Number Finder",
+    pf_header_sub: "Google Places · imports saved locally",
+    pf_spend_today: (rows, cost) => `Today · ${rows} rows · ~${cost}`,
+    pf_spend_tooltip: (rows) => `${rows} rows enriched today (Google Places Essentials 2025 estimate)`,
+    pf_export_busy: "Exporting…",
+    pf_export_found_btn: (n) => `⇢ Found leads (${n})`,
+    pf_view_results: "View results",
+    pf_export_csv: "⬇ Export CSV",
+    pf_clear_all: "Clear",
+    pf_tab_search: "🔎 Search",
+    pf_tab_results: (n) => `📚 Results (${n})`,
+    pf_tab_manual: "🔍 Manual search",
+    pf_tab_csv: "📂 CSV / XLSX import",
+    pf_manual_section: "Search details",
+    pf_field_name: "Business name",
+    pf_field_name_ph: "Ex: Dépanneur Bélanger",
+    pf_field_address: "Address",
+    pf_field_address_ph: "Ex: 320 rue Bouchard",
+    pf_field_city: "City",
+    pf_field_city_ph: "Ex: Saint-Jean-sur-Richelieu",
+    pf_field_province: "Province",
+    pf_field_province_ph: "Ex: Québec",
+    pf_field_postal: "Postal code",
+    pf_field_postal_ph: "Ex: J3B 6N5",
+    pf_field_country: "Country",
+    pf_field_country_ph: "Canada",
+    pf_btn_search: "🔍 Search",
+    pf_btn_searching: "Searching…",
+    pf_csv_section: "CSV / XLSX import",
+    pf_csv_stats: (rows, cols, sep) => `${rows} rows · ${cols} columns · separator: ${sep}`,
+    pf_csv_drop: "Drop a CSV/XLSX here or click to pick",
+    pf_csv_hint: "Useful columns: building address, company, full name, city, province, postal code",
+    pf_csv_detected: (rows, mapped) => `${rows} rows • ${mapped} columns auto-detected`,
+    pf_csv_advanced_mapping: "advanced mapping (optional)",
+    pf_csv_search_n: (n) => `🔍 Search ${n} rows`,
+    pf_csv_running: "Search in progress…",
+    pf_empty_saved_title: "No saved imports",
+    pf_empty_saved_sub: "Run a manual search or a CSV import. Each import will be saved in the Results tab with a date.",
+    pf_empty_results_sub: "Switch to the Search tab to start a search. Results will be saved automatically with the date.",
+    pf_empty_results_cta: "Go to search",
+    pf_last_import: (title, n) => `Last import: ${title} · ${n} rows`,
+    pf_open_results: "Open results",
+    pf_saved_imports: "Saved imports",
+    pf_rows_found_sub: (rows, found) => `${rows} rows · ${found} found`,
+    pf_rename_title: "Rename",
+    pf_confirm_delete_run: "Delete this saved import?",
+    pf_delete_all_confirm: "Delete all saved imports?",
+    pf_rename_prompt: "New title for this import:",
+    pf_rename_err_empty: "Title cannot be empty.",
+    pf_export_no_phones: "No phone numbers to export.",
+    pf_export_unavailable: "Export to Leads is unavailable.",
+    pf_export_leads_updated: (parts) => `✅ Leads updated: ${parts} · no data deleted`,
+    pf_export_part_new: (n) => `${n} new`,
+    pf_export_part_updated: (n) => `${n} enriched`,
+    pf_export_part_skipped: (n) => `${n} unchanged`,
+    pf_export_nothing_new: "All found numbers are already in Leads.",
+    pf_export_impossible: (e) => `Export failed: ${e}`,
+    pf_active_run_summary: (date, rows, found) => `${date} · ${rows} rows · ${found} numbers found`,
+    pf_export_status_label_prefix: "Export to Leads:",
+    pf_export_status_current: "Found only (current filter)",
+    pf_export_found_leads: (n) => `⇢ Export ${n} found leads`,
+    pf_rename_btn: "✎ Rename",
+    pf_export_this_import: "⬇ Export this import",
+    pf_filter_ph: "Filter results… (⌘K)",
+    pf_filter_status_all: "All statuses",
+    pf_filter_status_found: "Found",
+    pf_filter_status_review: "Needs review",
+    pf_filter_status_multi: "Multiple matches",
+    pf_filter_status_not_found: "Not found",
+    pf_rerun_not_found: "🔄 Retry not-found",
+    pf_rerun_not_found_tt: "Rerun the Google Places search for every not-found row in this session",
+    pf_shown_of: (shown, total) => `${shown} shown of ${total}`,
+    pf_results_count: (n) => `${n} result${n !== 1 ? "s" : ""}`,
+    pf_total_suffix: (n) => ` (total: ${n})`,
+    pf_th_num: "#",
+    pf_th_search: "Query",
+    pf_th_match: "Matched entity",
+    pf_th_phone: "Phone",
+    pf_th_website: "Website",
+    pf_th_conf: "Conf.",
+    pf_th_status: "Status",
+    pf_th_actions: "Actions",
+    pf_show_more: (count, remaining) => `Show ${count} more (${remaining} remaining)`,
+    pf_no_results_title: "No results in this import",
+    pf_no_results_sub: "This import exists but has no rows matching the current filter.",
+    pf_stop: "⏹ Stop",
+    pf_processing: (done, total) => `⏳ ${done} / ${total} rows processed`,
+    pf_remaining: (pct, seconds) => `${pct}% · ~${seconds}s remaining`,
+    pf_connecting: "⏳ Connecting to Google Places…",
+    pf_progress_label: (pct) => `${pct}%`,
+    pf_review_title: "Pick the right match",
+    pf_review_query: "Query:",
+    pf_review_anon: "(no name)",
+    pf_review_mark_notfound: "Mark as not found",
+    pf_review_cancel: "Cancel",
+    pf_colmap_title: "Map your import columns",
+    pf_colmap_stats: (rows, cols, sep) => `${rows} rows · ${cols} columns detected (separator: ${sep})`,
+    pf_colmap_hint: "Assign your columns (address, company, contact). A building address is recommended for reliable lookups.",
+    pf_colmap_ignore: "— Ignore —",
+    pf_colmap_close: "Close",
+    pf_colmap_confirm: "Confirm mapping",
+    pf_confirm_title: "Confirm phone-number search",
+    pf_confirm_body: (n) => `You are about to enrich ${n} ${n === 1 ? "row" : "rows"} via Google Places.`,
+    pf_confirm_est_label: "Estimated cost",
+    pf_confirm_range: (lo, hi) => `Range: ${lo} – ${hi}`,
+    pf_confirm_calls: (lo1, hi1, lo2, hi2) => `Estimated API calls: ${lo1}–${hi1} Text Search + ${lo2}–${hi2} Details`,
+    pf_confirm_note: "Residential entries (Logement · Physique) make no API calls. Duplicate addresses in the same batch are cached.",
+    pf_confirm_cancel: "Cancel",
+    pf_confirm_launch: "Launch search",
+    pf_status_found: "Found",
+    pf_status_review: "Needs review",
+    pf_status_multi: "Multiple matches",
+    pf_status_not_found: "Not found",
+    pf_err_need_name_or_addr: "Enter a business name or an address.",
+    pf_err_no_rows: "No usable rows in this file.",
+    pf_err_budget: "Daily Google Places budget hit. Try again tomorrow.",
+    pf_err_server: "Server error",
+    pf_err_server_code: (code) => `Server error (${code}).`,
+    pf_err_import: (e) => `Import failed: ${e}`,
+    pf_err_no_rows_parsed: "The file has no importable rows.",
+    pf_err_network_batch: (n, m) => `Network error (batch ${n}): ${m}`,
+    pf_err_network: (e) => `Network error: ${e}`,
+    pf_err_generic: (e) => `Error: ${e}`,
+    pf_rerun_toast_found: "🔄 Re-ran · number found!",
+    pf_rerun_toast_not_found: "🔄 Re-ran · still not found",
+    pf_rerun_none: "No retryable not-found results (file not reloaded since this session started).",
+    pf_rerun_summary: (done, found) => `🔄 ${done} retried · ${found} new number${found !== 1 ? "s" : ""} found`,
+    pf_batch_ok: (done, found) => `✅ ${done} rows processed · ${found} numbers found`,
+    pf_sep_tab: "TAB",
+    pf_run_default_manual: (stamp) => `Manual search · ${stamp}`,
+    pf_run_default_csv: (stamp) => `CSV import · ${stamp}`,
+    pf_run_legacy: (stamp) => `Imported history · ${stamp}`,
+    pf_run_import_of: (stamp) => `Import from ${stamp}`,
+
+    // PhoneFinder column-mapping field labels
+    pf_fl_name: "Search name",
+    pf_fl_company: "Company / Organization",
+    pf_fl_leadContact: "Contact / Owner",
+    pf_fl_phone: "Phone (already known)",
+    pf_fl_address: "Building address",
+    pf_fl_city: "City",
+    pf_fl_province: "Province",
+    pf_fl_postalCode: "Postal code",
+    pf_fl_country: "Country",
+    pf_fh_name: "optional, used for the Places query",
+    pf_fh_company: "optional, prioritized for search when present",
+    pf_fh_leadContact: "optional, kept so you know who to call",
+    pf_fh_phone: "optional, added to the lead on export",
+    pf_fh_address: "strongly recommended",
+    pf_fh_city: "optional",
+    pf_fh_province: "optional",
+    pf_fh_postalCode: "optional",
+    pf_fh_country: "optional",
+
+    pf_csv_example: (v) => `→ ex: "${v}"`,
+    // PhoneFinder exportCSV headers + file name stem
+    pf_csv_hdr_company: "Company",
+    pf_csv_hdr_contact: "Contact",
+    pf_csv_hdr_building: "Building",
+    pf_csv_hdr_input_name: "Input name",
+    pf_csv_hdr_input_address: "Input address",
+    pf_csv_hdr_matched_name: "Matched name",
+    pf_csv_hdr_matched_address: "Matched address",
+    pf_csv_hdr_phone: "Matched phone",
+    pf_csv_hdr_file_phones: "File phones",
+    pf_csv_hdr_website: "Website",
+    pf_csv_hdr_source: "Source",
+    pf_csv_hdr_confidence: "Confidence %",
+    pf_csv_hdr_status: "Status",
+    pf_csv_hdr_date: "Date",
+    pf_csv_download_stem: "phone-search",
+    fmt_date_unknown: "Unknown date",
+
+    // OwnersManager extras
+    owner_unknown: "(Unknown owner)",
+    om_fiche_props_count: (n) => `${n} × propert${n === 1 ? "y" : "ies"}`,
+    om_progress: (done, total, found) => `⏳ ${done} / ${total} · ${found}`,
+    om_import_stats_properties: "properties",
+    om_import_stats_unique: "unique owners",
+    om_import_stats_with_phone: "already with a phone",
+    om_import_stats_to_lookup: "to look up via Places",
+    om_import_est_cost: "Estimated enrichment cost:",
+    om_missing_mailing: "(missing mailing address)",
+    om_import_no_address: "(missing mailing address)",
+    om_filter_min_value: "Property value ≥",
+    om_filter_max_year: "Year built ≤",
+    om_filter_inscription: "Registered before",
+    om_filter_units_between: "Units between",
+    om_err_server_generic: (code) => `Server error (${code}).`,
+    om_err_network: (e) => `Network error: ${e}`,
+
+    // ChatWidget aria
+    chat_close_label: "Close",
+
+    // ─── Push notifications ───
+    push_enable: "Enable notifications",
+    push_enabled: "Notifications on",
+    push_disable: "Turn off",
+    push_unsupported: "Push isn't supported in this browser.",
+    push_denied: "Notifications blocked — enable them in your browser settings.",
+    push_subscribing: "Enabling…",
+    push_test: "Send test",
+    push_test_title: "SOCLE — Test",
+    push_test_body: "Push notifications are working 🎉",
+    push_flag_title: "New lead to review",
+    push_flag_body: (user, label) => `${user} flagged "${label || "a lead"}" for review.`,
+    push_not_configured: "Push server not configured.",
   },
 };
 
@@ -353,6 +1232,93 @@ function tr(lang, key, ...args) {
   const val = (I18N[lang] && I18N[lang][key] !== undefined) ? I18N[lang][key] : I18N.fr[key];
   if (val === undefined) return key;
   return typeof val === "function" ? val(...args) : val;
+}
+
+// ─── PushToggle ──────────────────────────────────────────────────────────────
+// Small button that reflects the browser's current Notification permission.
+// Click to subscribe → prompts for permission, registers with the push
+// service, persists the subscription on the backend. Long-press (or alt-click)
+// fires a test notification so we can verify the pipeline end-to-end without
+// waiting for a real trigger.
+function PushToggle({ t, currentUser }) {
+  const [state, setState] = useState(() => (pushSupported() ? pushPermission() : "unsupported"));
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    setState(pushSupported() ? pushPermission() : "unsupported");
+  };
+
+  const handleClick = async () => {
+    if (busy) return;
+    if (state === "unsupported") { alert(t("push_unsupported")); return; }
+    if (state === "denied")      { alert(t("push_denied"));      return; }
+    if (state === "granted") {
+      setBusy(true);
+      await unsubscribeFromPush();
+      setBusy(false);
+      refresh();
+      return;
+    }
+    setBusy(true);
+    const res = await subscribeToPush(currentUser);
+    setBusy(false);
+    if (!res.ok) {
+      if (res.error === "no-vapid-key" || res.error === "push-not-configured") {
+        alert(t("push_not_configured"));
+      } else if (res.error === "denied") {
+        alert(t("push_denied"));
+      }
+    }
+    refresh();
+  };
+
+  // Alt-click or right-click sends a test notification.
+  const handleTest = async (e) => {
+    e.preventDefault();
+    if (state !== "granted") return;
+    try {
+      await fetch("/api/push/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser?.id,
+          title: t("push_test_title"),
+          body: t("push_test_body"),
+        }),
+      });
+    } catch {}
+  };
+
+  if (state === "unsupported") return null;
+
+  const label = busy
+    ? t("push_subscribing")
+    : state === "granted" ? t("push_enabled")
+    : state === "denied"  ? t("push_denied")
+    : t("push_enable");
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      onContextMenu={handleTest}
+      title={state === "granted" ? t("push_test") : label}
+      aria-label={label}
+      style={{
+        border: "1px solid var(--border)",
+        background: state === "granted" ? "#0F766E" : "#fff",
+        color: state === "granted" ? "#fff" : "var(--text2)",
+        borderRadius: 8,
+        width: 30, height: 30,
+        display: "grid", placeItems: "center",
+        fontSize: 14, cursor: busy ? "wait" : "pointer",
+        flexShrink: 0,
+        opacity: busy ? 0.6 : 1,
+      }}
+    >
+      {state === "granted" ? "🔔" : "🔕"}
+    </button>
+  );
 }
 
 import NavIcon from "./components/NavIcon.jsx";
@@ -443,7 +1409,7 @@ a{color:inherit}
 .new-btn{margin:10px 12px 12px;border:none;background:var(--gold);color:#fff;border-radius:10px;padding:11px 12px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:var(--shadow)}
 .new-btn:hover{filter:brightness(1.04)}
 
-.sb-profile{border-top:1px solid var(--border);padding:12px;display:flex;gap:10px;align-items:center}
+.sb-profile{border-top:1px solid var(--border);padding:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .p-avatar{width:36px;height:36px;border-radius:50%;background:var(--gold-light);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
 .p-name{font-size:13px;font-weight:700;color:var(--text)}
 .p-role{font-size:11px;color:var(--text3)}
@@ -749,8 +1715,90 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 }
 @media (max-width:960px){
   .app-shell{grid-template-columns:1fr}
-  .sidebar{display:none}
   .doc-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  /* Mobile sidebar: hidden by default, slides in as an overlay when .open. */
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;width:280px;max-width:85vw;
+    z-index:60;
+    transform:translateX(-100%);
+    transition:transform .24s ease;
+    box-shadow:0 20px 60px rgba(0,0,0,.24);
+    display:flex;
+  }
+  .sidebar.open{transform:translateX(0)}
+  .sidebar-scrim{
+    position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:55;
+    opacity:0;pointer-events:none;transition:opacity .24s ease;
+  }
+  .sidebar-scrim.open{opacity:1;pointer-events:auto}
+  .mobile-hamburger{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:40px;height:40px;border:1px solid var(--border);
+    background:#fff;border-radius:10px;cursor:pointer;
+    font-size:20px;line-height:1;flex-shrink:0;
+  }
+}
+@media (min-width:961px){
+  .mobile-hamburger{display:none}
+  .sidebar-scrim{display:none}
+}
+
+/* ─── Mobile layout (≤768px) ───────────────────────────────────────────────
+   The 960px breakpoint handles the sidebar drawer. This one handles actual
+   phone-sized content: stacked rows, single-column grids, larger tap
+   targets, form input font-size ≥ 16px (prevents iOS Safari auto-zoom on
+   focus), and full-screen modals. */
+@media (max-width:768px){
+  body,html,#root{overflow-x:hidden}
+  /* Topbar: stack title + actions, reduce padding */
+  .topbar{padding:12px 14px;gap:10px;flex-wrap:wrap}
+  .tb-title{font-size:17px}
+  .tb-sub{font-size:12px;display:none}
+  /* Content padding tighter on phones */
+  .content{padding:14px;gap:12px}
+  /* KPI / dashboard cards stack */
+  .kpi-grid{grid-template-columns:1fr;gap:10px}
+  .doc-grid{grid-template-columns:1fr}
+  /* Pipeline kanban: horizontal scroll stays, narrower columns */
+  .kanban{gap:8px}
+  .kanban-col{min-width:220px;max-width:240px}
+  /* Modals go full-screen */
+  .mo-box{width:100vw;max-width:100vw;min-height:100vh;border-radius:0;
+    padding:16px;box-shadow:none;border:none}
+  /* Forms: bump input font to prevent iOS zoom */
+  input,select,textarea,button{font-size:16px}
+  /* Tap targets */
+  button,.btn,.nav-item{min-height:40px}
+  /* Table horizontal scroll instead of overflow cut-off */
+  table{min-width:0}
+  /* Owner/Leads toolbar: wrap filters, full-width search */
+  .om-toolbar,.om-actions{flex-wrap:wrap}
+  .om-search{min-width:100%;flex:1 1 100%}
+  .om-toolbar select,.om-actions button{flex:1 1 auto;min-width:0}
+  /* Owner fiche sections stack */
+  .om-fiche-grid,.om-split{grid-template-columns:1fr !important}
+  /* Chatbox: full-screen on mobile */
+  .chat-root{bottom:0 !important;right:0 !important;left:0 !important;top:auto !important;width:100% !important;max-width:100% !important;border-radius:0 !important}
+  .chat-window{width:100vw !important;height:80vh !important;max-height:80vh !important;border-radius:0 !important}
+  /* Sidebar profile area: stack logout + push toggle below user info */
+  .sb-profile{padding:10px;gap:4px}
+  .p-name{font-size:14px}
+  .p-role{font-size:11px}
+  /* Login screen: remove big card padding */
+  .login-card{padding:20px !important;width:100% !important;max-width:100% !important;border-radius:0 !important}
+  /* Dashboard flag banner stays tight */
+  .card.sec{padding:12px}
+  /* Kanban deal cards */
+  .kb-card{padding:10px;font-size:13px}
+  /* Filter bar selects single-column when wrapped */
+  .om-toolbar select{flex:1 1 48%}
+}
+
+/* iPhone notch safe area */
+@supports (padding:env(safe-area-inset-top)){
+  .topbar{padding-top:calc(14px + env(safe-area-inset-top))}
+  .sidebar{padding-top:env(safe-area-inset-top)}
+  .content{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
 }
 `;
 
@@ -833,6 +1881,10 @@ export default function App() {
   const [newAskingPrice, setNewAskingPrice] = useState("");
   // App-level toast for persist/quota errors (rare but user-visible when it happens).
   const [appToast, setAppToast] = useState("");
+  // Mobile nav drawer — only meaningful on ≤960px screens; the CSS hides the
+  // toggle button on wider viewports so desktop stays unchanged.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
   const persistTimerRef = useRef(null);
   // Guard so the debounced persist effect doesn't fire a server write during
   // the initial mount/hydration — otherwise we'd immediately overwrite the
@@ -906,7 +1958,7 @@ export default function App() {
       const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
       persist(payload, (err) => {
         if (isQuotaError(err)) {
-          setAppToast("⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.");
+          setAppToast(tr(lang, "toast_storage_full"));
           setTimeout(() => setAppToast(""), 8000);
         }
       });
@@ -917,6 +1969,10 @@ export default function App() {
       }
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
+    // lang is only read from the quota-error toast branch; adding it as a
+    // dep would rerun this debounced persist every language switch which is
+    // noisy and wasteful. Acceptable stale-closure on purpose.
+    // eslint-disable-next-line
   }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
 
   // Make sure a pending write is flushed before the tab closes.
@@ -997,26 +2053,26 @@ export default function App() {
       const response = await fetch(`/api/deals/${encodeURIComponent(dealId)}/calls`);
       const data = await response.json();
       if (!response.ok || !data?.ok) {
-        throw new Error(data?.error || `Erreur ${response.status}`);
+        throw new Error(data?.error || t("err_status", response.status));
       }
       setCallsByDeal((prev) => ({ ...prev, [dealId]: data.calls || [] }));
     } catch (error) {
       if (!options.silent) {
-        setCallNotice({ type: "error", text: error.message || "Impossible de charger l'historique des appels." });
+        setCallNotice({ type: "error", text: error.message || t("ws_call_err_history") });
       }
     } finally {
       if (!options.silent) {
         setCallsLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   const startDealCall = useCallback(async () => {
     if (!current?.id) return;
 
     const contactPhone = String(current.contact?.phone || "").trim();
     if (!contactPhone) {
-      setCallNotice({ type: "error", text: "Ajoutez un téléphone dans la fiche contact avant d'appeler." });
+      setCallNotice({ type: "error", text: t("ws_call_err_no_phone") });
       return;
     }
 
@@ -1037,18 +2093,18 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok || !data?.ok) {
-        throw new Error(data?.error || `Erreur ${response.status}`);
+        throw new Error(data?.error || t("err_status", response.status));
       }
 
-      addAct(current.id, `📞 Appel lancé vers ${current.contact?.name || contactPhone}`);
-      setCallNotice({ type: "success", text: "Appel lancé. Le statut et l'enregistrement vont se mettre à jour automatiquement." });
+      addAct(current.id, t("ws_call_act_launched", current.contact?.name || contactPhone));
+      setCallNotice({ type: "success", text: t("ws_call_ok_launched") });
       await loadCallsForDeal(current.id, { silent: true });
     } catch (error) {
-      setCallNotice({ type: "error", text: error.message || "Impossible de lancer l'appel." });
+      setCallNotice({ type: "error", text: error.message || t("ws_call_err_generic") });
     } finally {
       setCalling(false);
     }
-  }, [addAct, current, loadCallsForDeal]);
+  }, [addAct, current, loadCallsForDeal, t]);
 
   const retryCallTranscription = useCallback(async (callId) => {
     if (!callId || !current?.id) return;
@@ -1058,14 +2114,14 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok || !data?.ok) {
-        throw new Error(data?.error || `Erreur ${response.status}`);
+        throw new Error(data?.error || t("err_status", response.status));
       }
-      setCallNotice({ type: "success", text: "Transcription relancée. Rafraîchissez dans quelques secondes." });
+      setCallNotice({ type: "success", text: t("ws_call_ok_transcript") });
       await loadCallsForDeal(current.id, { silent: true });
     } catch (error) {
-      setCallNotice({ type: "error", text: error.message || "Impossible de relancer la transcription." });
+      setCallNotice({ type: "error", text: error.message || t("ws_call_err_transcript") });
     }
-  }, [current?.id, loadCallsForDeal]);
+  }, [current?.id, loadCallsForDeal, t]);
 
   useEffect(() => {
     if (!current?.id) return;
@@ -1101,7 +2157,27 @@ export default function App() {
         },
       ];
     });
-  }, [currentUser]);
+    // Fire a push to admins — only when flagged by a non-admin. Best-effort;
+    // failures don't block the flag itself.
+    if (currentUser.role !== "admin") {
+      const deal = deals.find(d => d.id === dealId);
+      const label = deal ? (deal.title || dealLabel(deal) || "") : "";
+      try {
+        fetch("/api/push/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: "anthony",
+            title: t("push_flag_title"),
+            body: t("push_flag_body", currentUser.name, label),
+            url: "/",
+            tag: `flag-${dealId}`,
+            requireInteraction: true,
+          }),
+        }).catch(() => {});
+      } catch {}
+    }
+  }, [currentUser, deals, t]);
 
   const dismissFlag = useCallback((flagId) => {
     setFlaggedLeads(prev => prev.filter(f => f.id !== flagId));
@@ -1137,11 +2213,11 @@ export default function App() {
       }
       setChatMessages(prev => [...prev, { role: "assistant", content: data.reply || "—" }]);
     } catch (err) {
-      setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${err?.message || "Erreur réseau."}` }]);
+      setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${err?.message || t("ws_ai_err_network")}` }]);
     } finally {
       setChatBusy(false);
     }
-  }, [chatMessages, chatBusy, lang, currentUser]);
+  }, [chatMessages, chatBusy, lang, currentUser, t]);
 
   // Seed the chat with a greeting the first time it opens for a given user/lang.
   useEffect(() => {
@@ -1153,7 +2229,7 @@ export default function App() {
   }, [chatOpen, chatMessages.length, currentUser, t]);
 
   const createDealFn = () => {
-    const d = createDeal(newTitle.trim() || "Nouveau deal", newAddress.trim(), newAddrCoords, newUnits.trim(), newAskingPrice.trim());
+    const d = createDeal(newTitle.trim() || t("deal_default_title"), newAddress.trim(), newAddrCoords, newUnits.trim(), newAskingPrice.trim());
     setDeals(p => [d, ...p]);
     setCurrentId(d.id);
     setModal(null);
@@ -1168,7 +2244,7 @@ export default function App() {
 
   const createDealFromLead = useCallback((lead) => {
     if (!lead) return null;
-    const title = (lead.companyName || lead.contactName || lead.buildingAddress || "Lead importé").trim();
+    const title = (lead.companyName || lead.contactName || lead.buildingAddress || t("deal_lead_imported")).trim();
     const address = (lead.buildingAddress || lead.address || "").trim();
     const phones = getLeadPhones(lead);
     const nextDeal = {
@@ -1180,8 +2256,8 @@ export default function App() {
         company: lead.companyName || "",
         role: "Lead",
       },
-      notesDeal: `${lead.notes || ""}${phones.length > 1 ? `\nAutres numéros: ${phones.slice(1).join(" · ")}` : ""}`.trim(),
-      activities: [{ id: Date.now(), text: "Lead converti en deal", time: Date.now() }],
+      notesDeal: `${lead.notes || ""}${phones.length > 1 ? `\n${t("deal_lead_other_phones", phones.slice(1).join(" · "))}` : ""}`.trim(),
+      activities: [{ id: Date.now(), text: t("deal_lead_converted"), time: Date.now() }],
     };
     setDeals(prev => [nextDeal, ...prev]);
     setCurrentId(nextDeal.id);
@@ -1189,14 +2265,14 @@ export default function App() {
     setTab("crm");
     setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, stage: "converted", linkedDealId: nextDeal.id, updatedAt: Date.now() } : l));
     return nextDeal.id;
-  }, []);
+  }, [t]);
 
   const importPhoneFinderResultsToLeads = useCallback((rows, meta = {}) => {
     let added = 0;
     let updated = 0;
     let skipped = 0;
     const sourceTitle = String(meta?.title || "").trim();
-    const sourceFile = sourceTitle ? `Recherche Tél. · ${sourceTitle}` : "Recherche Tél.";
+    const sourceFile = sourceTitle ? t("pf_source_title", sourceTitle) : t("pf_source_default");
     const now = Date.now();
     const current = (Array.isArray(leads) ? leads : []).map(lead => {
       const phones = getLeadPhones(lead);
@@ -1265,7 +2341,7 @@ export default function App() {
         assessment,
         yearBuilt,
         lotArea,
-        notes: sourceTitle ? `Importé depuis Recherche Tél. (${sourceTitle})` : "Importé depuis Recherche Tél.",
+        notes: sourceTitle ? t("pf_imported_from_with", sourceTitle) : t("pf_imported_from"),
         sourceFile,
         matchedName: String(row?.matchedName || ""),
         matchedAddress: String(row?.matchedAddress || ""),
@@ -1284,7 +2360,7 @@ export default function App() {
     }
 
     return { added, updated, skipped };
-  }, [leads]);
+  }, [leads, t]);
 
   // Called by OwnersManager after a rôle d'évaluation import. The rôle flow
   // builds one Lead per property (linked to ownerIds); we prepend them to the
@@ -1303,7 +2379,7 @@ export default function App() {
   }, []);
 
   const deleteDeal = (id) => {
-    if (!window.confirm("Supprimer ce deal ?")) return;
+    if (!window.confirm(t("deal_confirm_delete"))) return;
     setDeals(p => p.filter(d => d.id !== id));
     setCallsByDeal((prev) => {
       const next = { ...prev };
@@ -1316,7 +2392,7 @@ export default function App() {
   const setStage = (sid) => {
     if (!currentId) return;
     upd(currentId, d => ({ ...d, stage: sid, checklists: { ...d.checklists, [sid]: d.checklists?.[sid] || buildCL(sid) } }));
-    addAct(currentId, `Étape → ${STAGES.find(s => s.id === sid)?.label}`);
+    addAct(currentId, t("ws_activity_stage_move", t("stage_" + sid)));
     setClStage(sid);
   };
 
@@ -1334,8 +2410,8 @@ export default function App() {
       r.readAsDataURL(f);
     })));
     upd(currentId, d => ({ ...d, files: [...(d.files || []), ...done] }));
-    addAct(currentId, `📎 ${done.length} document${done.length>1?"s":""} ajouté${done.length>1?"s":""}: ${done.map(f=>f.name).join(", ")}`);
-  }, [currentId, upd, addAct]);
+    addAct(currentId, t("ws_doc_added", done.length, done.map(f=>f.name).join(", ")));
+  }, [currentId, upd, addAct, t]);
 
   const delFile = (fid) => {
     if (!currentId) return;
@@ -1408,7 +2484,7 @@ export default function App() {
   const aiSummarize = async (type) => {
     if (!current) return;
     const text = type === "deal" ? current.notesDeal : current.notesVendeur;
-    if (!text?.trim()) { alert("Ajoutez des notes avant de formater."); return; }
+    if (!text?.trim()) { alert(t("ws_ai_err_empty")); return; }
     type === "deal" ? setAiLoadD(true) : setAiLoadV(true);
     try {
       const res = await fetch("/api/ai/summarize", {
@@ -1417,10 +2493,10 @@ export default function App() {
         body: JSON.stringify({ type: type === "deal" ? "deal" : "vendeur", text })
       });
       const data = await res.json();
-      const summary = data.ok ? data.summary : (data.error || "Erreur API.");
+      const summary = data.ok ? data.summary : (data.error || t("ws_ai_err_api"));
       upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: summary }));
     } catch {
-      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: "Erreur de connexion au serveur." }));
+      upd(current.id, d => ({ ...d, [type==="deal"?"aiDeal":"aiVendeur"]: t("ws_ai_err_server") }));
     } finally {
       type === "deal" ? setAiLoadD(false) : setAiLoadV(false);
     }
@@ -1428,8 +2504,8 @@ export default function App() {
 
   const connectGoogleCalendar = useCallback(() => {
     const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
-    if (!clientId) { setGcalError("REACT_APP_GCAL_CLIENT_ID manquant."); return; }
-    if (!window.google?.accounts?.oauth2) { setGcalError("Google OAuth non chargé. Rafraîchissez la page."); return; }
+    if (!clientId) { setGcalError(t("cal_err_client_missing")); return; }
+    if (!window.google?.accounts?.oauth2) { setGcalError(t("cal_err_oauth_missing")); return; }
 
     setGcalLoading(true);
     setGcalError("");
@@ -1441,7 +2517,7 @@ export default function App() {
         if (tokenResponse?.error || !tokenResponse?.access_token) {
           setGcalOk(false);
           setGcalLoading(false);
-          setGcalError("Authentification Google refusée ou invalide.");
+          setGcalError(t("cal_err_auth"));
           return;
         }
         try {
@@ -1457,7 +2533,7 @@ export default function App() {
             if (!event.start?.dateTime && !event.start?.date) return null;
             return {
               id: event.id,
-              title: event.summary || "(Sans titre)",
+              title: event.summary || t("cal_event_untitled"),
               date: event.start.dateTime ? event.start.dateTime.split("T")[0] : event.start.date,
               time: event.start.dateTime ? event.start.dateTime.split("T")[1].slice(0,5) : "",
               type: "google",
@@ -1470,7 +2546,7 @@ export default function App() {
         } catch {
           setGcalOk(false);
           setGcalEvents([]);
-          setGcalError("Impossible de charger les événements Google Calendar.");
+          setGcalError(t("cal_err_load"));
         } finally {
           setGcalLoading(false);
         }
@@ -1478,7 +2554,7 @@ export default function App() {
     });
 
     tokenClient.requestAccessToken({ prompt: gcalOk ? "" : "consent" });
-  }, [gcalOk]);
+  }, [gcalOk, t]);
 
   const allEvents = useMemo(() => {
     const evs = [];
@@ -1493,7 +2569,7 @@ export default function App() {
   const addEvent = () => {
     if (!newEv.title.trim() || !newEv.date) return;
     const did = newEv.dealId || currentId;
-    if (!did) { alert("Associez l'événement à un deal."); return; }
+    if (!did) { alert(t("modal_event_err_no_deal")); return; }
 
     const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(newEv.date)
       ? newEv.date
@@ -1501,7 +2577,7 @@ export default function App() {
 
     const ev = { id:`ev_${Date.now()}`, title:newEv.title, date:normalizedDate, time:newEv.time, type:"deal" };
     setDeals(prev => prev.map(d => d.id === did ? { ...d, events: [...(d.events || []), ev], updatedAt: Date.now() } : d));
-    addAct(did, `📅 Événement: ${newEv.title} le ${normalizedDate}`);
+    addAct(did, t("modal_event_act_created", newEv.title, normalizedDate));
 
     if (normalizedDate) {
       const [yy, mm] = normalizedDate.split("-").map(Number);
@@ -1569,7 +2645,7 @@ export default function App() {
   const stageCL = current?.checklists?.[current?.stage] || [];
   const stagePct = stageCL.length ? Math.round(stageCL.filter(i=>i.done).length/stageCL.length*100) : 0;
 
-  const currentStageLabel = STAGES.find(s => s.id === current?.stage)?.label || "—";
+  const currentStageLabel = current?.stage ? t("stage_" + current.stage) : "—";
 
   // Admin sees the combined count of overdue follow-ups + submitted flags in
   // the topbar bell; employees keep the original overdue-only count.
@@ -1584,6 +2660,7 @@ export default function App() {
     lang,
     onToggleLang: () => setLang(lang === "fr" ? "en" : "fr"),
     langSwitchLabel: t("lang_switch"),
+    onOpenNav: () => setMobileNavOpen(true),
   } : {};
 
   // Gate the app behind a PIN login. Session lives in localStorage so a
@@ -1601,11 +2678,16 @@ export default function App() {
     <>
       <style>{CSS}</style>
       <div className="app-shell">
-        <aside className="sidebar">
+        <div
+          className={`sidebar-scrim${mobileNavOpen ? " open" : ""}`}
+          onClick={closeMobileNav}
+          aria-hidden="true"
+        />
+        <aside className={`sidebar${mobileNavOpen ? " open" : ""}`}>
           <div className="sb-head">
             <div className="sb-logo">SOCLE</div>
             <div className="sb-logo-sub">ACQUISITIONS</div>
-            <div className="sb-tag">Investissement Immobilier</div>
+            <div className="sb-tag">{t("sidebar_tag")}</div>
           </div>
 
           <div className="sb-nav">
@@ -1626,7 +2708,7 @@ export default function App() {
               <button
                 key={item.id}
                 className={`nav-item${view===item.id?" active":""}`}
-                onClick={() => setView(item.id)}
+                onClick={() => { setView(item.id); closeMobileNav(); }}
                 onMouseEnter={NAV_PRELOAD[item.id]}
                 onFocus={NAV_PRELOAD[item.id]}
               >
@@ -1637,9 +2719,9 @@ export default function App() {
             ))}
           </div>
 
-          <div className="sb-sec">Deals récents</div>
+          <div className="sb-sec">{t("sidebar_recent_deals")}</div>
           <div className="deal-scroll">
-            {deals.length===0 && <div className="status-note">Aucun deal encore.</div>}
+            {deals.length===0 && <div className="status-note">{t("sidebar_no_deals")}</div>}
             {deals.slice(0, 30).map(d => {
               const st = STAGES.find(s => s.id === d.stage) || STAGES[0];
               return (
@@ -1648,8 +2730,8 @@ export default function App() {
                   <div className="deal-main">
                     <div className="deal-title">{dealLabel(d)}</div>
                     <div className="deal-meta">
-                      <span className="stage-pill-mini" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
-                      <span style={{fontSize:10,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.contact?.name || "Sans contact"}</span>
+                      <span className="stage-pill-mini" style={{background:st.color+"22",color:st.color}}>{t("stage_" + st.id)}</span>
+                      <span style={{fontSize:10,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{d.contact?.name || t("sidebar_no_contact")}</span>
                     </div>
                   </div>
                 </div>
@@ -1667,6 +2749,7 @@ export default function App() {
                 {(currentUser.roleLabel && currentUser.roleLabel[lang]) || currentUser.role}
               </div>
             </div>
+            <PushToggle t={t} currentUser={currentUser} />
             <button
               type="button"
               onClick={logout}
@@ -1763,25 +2846,25 @@ export default function App() {
                 <div className="kpi-grid">
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#F5EDD6",color:"#8D742D"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
-                    <div className="kpi-body"><div className="kpi-val">{stats.total}</div><div className="kpi-lbl">Deals Total</div><div className="kpi-sub">+{stats.weekAdds} cette semaine</div></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.total}</div><div className="kpi-lbl">{t("dashboard_kpi_total")}</div><div className="kpi-sub">{t("dashboard_kpi_total_sub", stats.weekAdds)}</div></div>
                   </div>
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#EAF1FF",color:"#2563EB"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 12l3 3 5-5"/><path d="M3 12a9 9 0 1 1 18 0 9 9 0 0 1-18 0z"/></svg></div>
-                    <div className="kpi-body"><div className="kpi-val">{stats.closing}</div><div className="kpi-lbl">En Closing</div><div className="kpi-sub">Progression solide</div></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.closing}</div><div className="kpi-lbl">{t("dashboard_kpi_closing")}</div><div className="kpi-sub">{t("dashboard_kpi_closing_sub")}</div></div>
                   </div>
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#FCE9E6",color:"#C0392B"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg></div>
-                    <div className="kpi-body"><div className="kpi-val">{stats.overdue}</div><div className="kpi-lbl">Follow-ups Retard</div><div className="kpi-sub" style={{color:stats.overdue>0?"var(--red)":"var(--green)"}}>{stats.overdue>0?"Action requise":"Sous contrôle"}</div></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.overdue}</div><div className="kpi-lbl">{t("dashboard_kpi_overdue")}</div><div className="kpi-sub" style={{color:stats.overdue>0?"var(--red)":"var(--green)"}}>{stats.overdue>0?t("dashboard_kpi_overdue_action"):t("dashboard_kpi_overdue_ok")}</div></div>
                   </div>
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#EEF9F2",color:"#2D8C4E"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
-                    <div className="kpi-body"><div className="kpi-val">{stats.prospection}</div><div className="kpi-lbl">En Prospection</div><div className="kpi-sub">Flux actif</div></div>
+                    <div className="kpi-body"><div className="kpi-val">{stats.prospection}</div><div className="kpi-lbl">{t("dashboard_kpi_prospection")}</div><div className="kpi-sub">{t("dashboard_kpi_prospection_sub")}</div></div>
                   </div>
                 </div>
 
                 <div className="grid-60-40">
                   <div className="card sec">
-                    <div className="sec-head"><div className="sec-title">Pipeline des Acquisitions</div><button className="btn btn-sm" onClick={() => setView("pipeline")}>Vue complète</button></div>
+                    <div className="sec-head"><div className="sec-title">{t("dashboard_section_pipeline")}</div><button className="btn btn-sm" onClick={() => setView("pipeline")}>{t("dashboard_section_pipeline_full")}</button></div>
                     <div className="map-split">
                       <div>
                         {STAGES.filter(s=>s.id!=="perdu").map(s => {
@@ -1790,7 +2873,7 @@ export default function App() {
                           const value = (count * 1.35).toFixed(1);
                           return (
                             <div key={s.id} className="pipe-row">
-                              <div className="pipe-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
+                              <div className="pipe-name"><div className="dot" style={{background:s.color}}/>{t("stage_" + s.id)}</div>
                               <div className="pipe-bar-wrap"><div className="pipe-bar" style={{width:`${Math.max(pct,4)}%`}}/></div>
                               <div className="pipe-m">{count} | ${value}M</div>
                             </div>
@@ -1799,28 +2882,28 @@ export default function App() {
                       </div>
                       <div>
                         <div className="map-wrap">
-                          <ErrorBoundary label="la carte">
-                            <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>Chargement de la carte…</div>}>
+                          <ErrorBoundary label={t("map_err_label")}>
+                            <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>{t("dashboard_map_loading")}</div>}>
                               <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
                             </Suspense>
                           </ErrorBoundary>
                         </div>
                         <div className="map-mini-foot">
-                          <button className="btn btn-sm" onClick={() => setView("map")}>Voir la carte complète</button>
+                          <button className="btn btn-sm" onClick={() => setView("map")}>{t("dashboard_map_full")}</button>
                         </div>
                       </div>
                     </div>
                   </div>
 
                   <div className="card sec">
-                    <div className="sec-head"><div className="sec-title">Activité Récente</div></div>
+                    <div className="sec-head"><div className="sec-title">{t("dashboard_section_activity")}</div></div>
                     <div className="activity-list">
-                      {activityFeed.length===0 ? <div className="status-note">Aucune activité encore.</div> : activityFeed.map(a => (
+                      {activityFeed.length===0 ? <div className="status-note">{t("dashboard_activity_empty")}</div> : activityFeed.map(a => (
                         <div key={a.id} className="act-row">
                           <div className="act-av">AM</div>
                           <div className="act-main">
                             <div className="act-text"><strong>{a.dealTitle}</strong> · {a.text}</div>
-                            <div className="act-time">{new Date(a.time).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
+                            <div className="act-time">{new Date(a.time).toLocaleString(lang === "en" ? "en-CA" : "fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
                           </div>
                         </div>
                       ))}
@@ -1830,7 +2913,7 @@ export default function App() {
 
                 <div className="grid-50">
                   <div className="card sec">
-                    <div className="sec-head"><div className="sec-title">Tâches à Compléter</div><button className="btn btn-sm" onClick={() => setView("followups")}>Voir tout</button></div>
+                    <div className="sec-head"><div className="sec-title">{t("dashboard_section_tasks")}</div><button className="btn btn-sm" onClick={() => setView("followups")}>{t("dashboard_section_tasks_all")}</button></div>
                     <div className="task-list">
                       {followUps.slice(0,6).map(d => {
                         const isOD = d.diff < 0;
@@ -1839,20 +2922,20 @@ export default function App() {
                           <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
                             <div className="task-main">
                               <div className="task-title">{dealLabel(d)}</div>
-                              <div className="task-sub">{d.followUpNote || "Suivi à compléter"}</div>
+                              <div className="task-sub">{d.followUpNote || t("dashboard_task_default")}</div>
                             </div>
                             <span className="date-badge" style={{background:isOD?"#FCE9E6":isToday?"#F5EDD6":"#F4F1E8",color:isOD?"#C0392B":isToday?"#9B7A2A":"#6B6B6B"}}>
-                              {isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}
+                              {isOD?t("dashboard_followup_overdue", Math.abs(d.diff)):isToday?t("dashboard_followup_today"):t("dashboard_followup_in", d.diff)}
                             </span>
                           </div>
                         );
                       })}
-                      {followUps.length===0 && <div className="status-note">Aucun follow-up planifié.</div>}
+                      {followUps.length===0 && <div className="status-note">{t("dashboard_no_followups")}</div>}
                     </div>
                   </div>
 
                   <div className="card sec">
-                    <div className="sec-head"><div className="sec-title">Top Opportunités</div></div>
+                    <div className="sec-head"><div className="sec-title">{t("dashboard_section_top_opps")}</div></div>
                     <div className="opp-list">
                       {topOpps.map(d => {
                         const pr = PRIORITY[d.priority || "medium"];
@@ -1860,13 +2943,13 @@ export default function App() {
                           <div key={d.id} className="opp" onClick={() => openDeal(d.id)}>
                             <div className="opp-l">
                               <div className="opp-title">{dealLabel(d)}</div>
-                              <div className="opp-sub">{STAGES.find(s=>s.id===d.stage)?.label || "Prospection"}</div>
+                              <div className="opp-sub">{t("stage_" + (d.stage || "prospection"))}</div>
                             </div>
-                            <span className={pr.cls}>{pr.tag}</span>
+                            <span className={pr.cls}>{t("ws_priority_tag_" + (d.priority || "medium"))}</span>
                           </div>
                         );
                       })}
-                      {topOpps.length===0 && <div className="status-note">Ajoutez des deals pour voir les opportunités.</div>}
+                      {topOpps.length===0 && <div className="status-note">{t("dashboard_no_opps")}</div>}
                     </div>
                   </div>
                 </div>
@@ -1885,10 +2968,10 @@ export default function App() {
                       return (
                         <div key={s.id} className="k-col" style={{borderLeftColor:s.color}}>
                           <div className="k-hd">
-                            <div className="k-name"><div className="dot" style={{background:s.color}}/>{s.label}</div>
+                            <div className="k-name"><div className="dot" style={{background:s.color}}/>{t("stage_" + s.id)}</div>
                             <span className="k-count">{col.length}</span>
                           </div>
-                          {col.length===0 && <div className="k-empty">Aucun deal</div>}
+                          {col.length===0 && <div className="k-empty">{t("pipeline_empty_col")}</div>}
                           {col.map(d => {
                             const today = new Date(); today.setHours(0,0,0,0);
                             const diff = d.followUpDate ? Math.ceil((new Date(d.followUpDate)-today)/86400000) : null;
@@ -1899,14 +2982,14 @@ export default function App() {
                             return (
                               <div key={d.id} className="k-card" onClick={() => openDeal(d.id)}>
                                 <div className="k-title">{dealLabel(d)}</div>
-                                <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || "Contact à définir"}</span></div>
-                                <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("en-CA")} $` : "Prix: À valider"}</div>
-                                {d.followUpDate && <div className="k-row"><span className="k-mk">Suivi</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
-                                <div className="k-row"><span className="k-mk">Documents</span><span className="k-mv">{(d.files||[]).length}</span></div>
+                                <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || t("pipeline_no_contact")}</span></div>
+                                <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("en-CA")} $` : t("pipeline_price_tbd")}</div>
+                                {d.followUpDate && <div className="k-row"><span className="k-mk">{t("pipeline_followup_label")}</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
+                                <div className="k-row"><span className="k-mk">{t("pipeline_documents_label")}</span><span className="k-mv">{(d.files||[]).length}</span></div>
                                 <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
                                 <div className="k-foot">
-                                  <span className={pr.cls}>{pr.tag}</span>
-                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>Checklist {clPct}%</span>
+                                  <span className={pr.cls}>{t("ws_priority_tag_" + (d.priority || "medium"))}</span>
+                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>{t("pipeline_checklist_label", clPct)}</span>
                                   <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>📎 {(d.files||[]).length}</span>
                                 </div>
                               </div>
@@ -1927,26 +3010,26 @@ export default function App() {
               <div className="content">
                 <div className="map-layout">
                   <div className="map-wrap">
-                    <ErrorBoundary label="la carte">
-                      <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>Chargement de la carte…</div>}>
+                    <ErrorBoundary label={t("map_err_label")}>
+                      <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>{t("dashboard_map_loading")}</div>}>
                         <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
                       </Suspense>
                     </ErrorBoundary>
                     <div className="map-overlay legend">
-                      <h4>Étapes</h4>
+                      <h4>{t("map_stages_header")}</h4>
                       {STAGES.map((stage) => (
                         <div key={stage.id} className="legend-row">
                           <span className="dot" style={{background:stage.color}} />
-                          <span>{stage.label}</span>
+                          <span>{t("stage_" + stage.id)}</span>
                         </div>
                       ))}
                     </div>
                     <div className="map-overlay filters">
                       <div className="map-filter">
-                        <div style={{fontSize:10,letterSpacing:".7px",textTransform:"uppercase",color:"var(--text3)",fontWeight:700,marginBottom:5}}>Filtrer</div>
+                        <div style={{fontSize:10,letterSpacing:".7px",textTransform:"uppercase",color:"var(--text3)",fontWeight:700,marginBottom:5}}>{t("map_filter_label")}</div>
                         <select value={mapStageFilter} onChange={(e) => setMapStageFilter(e.target.value)}>
-                          <option value="all">Toutes les étapes</option>
-                          {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+                          <option value="all">{t("map_filter_all")}</option>
+                          {STAGES.map((stage) => <option key={stage.id} value={stage.id}>{t("stage_" + stage.id)}</option>)}
                         </select>
                       </div>
                     </div>
@@ -1954,8 +3037,8 @@ export default function App() {
                 </div>
                 <div className="status-note">
                   {filteredMapDeals.length > 0
-                    ? `${filteredMapDeals.length} deal(s) affiché(s) sur la carte.`
-                    : "Aucun deal géocodé pour ce filtre. Ajoutez une adresse dans CRM & Suivi pour afficher un pin."}
+                    ? t("map_status_shown", filteredMapDeals.length)
+                    : t("map_status_empty")}
                 </div>
               </div>
             </>
@@ -1968,8 +3051,8 @@ export default function App() {
                 {followUps.length===0 ? (
                   <div className="card empty">
                     <div className="empty-ico">📅</div>
-                    <div className="empty-title">Aucun Follow-up</div>
-                    <div className="empty-sub">Ajoutez une date de suivi dans l'onglet CRM d'un deal.</div>
+                    <div className="empty-title">{t("followups_empty_title")}</div>
+                    <div className="empty-sub">{t("followups_empty_sub")}</div>
                   </div>
                 ) : (
                   <div className="card sec">
@@ -1982,11 +3065,11 @@ export default function App() {
                           <div key={d.id} className="task" onClick={() => openDeal(d.id)}>
                             <div className="task-main">
                               <div className="task-title">{dealLabel(d)}</div>
-                              <div className="task-sub">{d.followUpNote || "Suivi requis"}{d.contact?.name ? ` · ${d.contact.name}` : ""}</div>
+                              <div className="task-sub">{d.followUpNote || t("dashboard_followup_label")}{d.contact?.name ? ` · ${d.contact.name}` : ""}</div>
                             </div>
-                            <span className="pill" style={{background:st.color+"22",color:st.color}}>{st.label}</span>
+                            <span className="pill" style={{background:st.color+"22",color:st.color}}>{t("stage_" + st.id)}</span>
                             <span className="date-badge" style={{background:isOD?"#FCE9E6":isToday?"#F5EDD6":"#F4F1E8",color:isOD?"#C0392B":isToday?"#9B7A2A":"#6B6B6B"}}>
-                              {isOD?`${Math.abs(d.diff)}j retard`:isToday?"Aujourd'hui":`Dans ${d.diff}j`}
+                              {isOD?t("dashboard_followup_overdue", Math.abs(d.diff)):isToday?t("dashboard_followup_today"):t("dashboard_followup_in", d.diff)}
                             </span>
                           </div>
                         );
@@ -2003,22 +3086,22 @@ export default function App() {
               <Topbar title={t("topbar_calendar")} subtitle={t("topbar_calendar_sub")} {...topbarCommon} />
               <div className="content">
                 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                  <button className="btn btn-gold" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?"Connexion...":gcalOk?"Actualiser Google Calendar":"Connecter Google Calendar"}</button>
-                  {gcalOk && !gcalLoading && <span className="status-note">Google Calendar connecté</span>}
-                  <button className="btn" onClick={() => setModal("event")}>＋ Événement</button>
+                  <button className="btn btn-gold" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?t("cal_btn_connecting"):gcalOk?t("cal_btn_refresh"):t("cal_btn_connect")}</button>
+                  {gcalOk && !gcalLoading && <span className="status-note">{t("cal_connected")}</span>}
+                  <button className="btn" onClick={() => setModal("event")}>{t("cal_new_event")}</button>
                 </div>
-                {gcalLoading && <div className="status-note">Chargement des événements Google Calendar…</div>}
+                {gcalLoading && <div className="status-note">{t("cal_loading_events")}</div>}
                 {gcalError && <div className="status-note error">{gcalError}</div>}
 
                 <div className="cal-layout">
                   <div className="card cal-main">
                     <div className="cal-hd">
                       <button className="btn btn-sm" onClick={() => setCalDate(new Date(y, mo-1, 1))}>‹</button>
-                      <div className="cal-month">{MONTHS[mo]} {y}</div>
+                      <div className="cal-month">{t("cal_month_" + mo)} {y}</div>
                       <button className="btn btn-sm" onClick={() => setCalDate(new Date(y, mo+1, 1))}>›</button>
                     </div>
                     <div className="cal-grid">
-                      {DAYS.map(d => <div key={d} className="cal-dlbl">{d}</div>)}
+                      {DAYS.map((d, idx) => <div key={d} className="cal-dlbl">{t("cal_day_" + idx)}</div>)}
                       {days.map((d,i) => {
                         const k = dayKey(d);
                         const evs = allEvents.filter(e => e.date === k);
@@ -2034,7 +3117,7 @@ export default function App() {
                   </div>
 
                   <div className="card cal-side">
-                    <div className="sec-head"><div className="sec-title">Prochains Événements</div></div>
+                    <div className="sec-head"><div className="sec-title">{t("cal_next_events")}</div></div>
                     <div className="task-list">
                       {allEvents.filter(e=>e.date>=todayStr).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,10).map(ev => {
                         const deal = deals.find(d => d.id === ev.dealId);
@@ -2043,13 +3126,13 @@ export default function App() {
                           <div key={ev.id} className="task" onClick={() => ev.dealId && openDeal(ev.dealId)}>
                             <div className="task-main">
                               <div className="task-title">{ev.title}</div>
-                              <div className="task-sub">{deal?.title || "Google Calendar"}{ev.time ? ` · ${ev.time}` : ""}</div>
+                              <div className="task-sub">{deal?.title || t("cal_source_google")}{ev.time ? ` · ${ev.time}` : ""}</div>
                             </div>
-                            <span className="date-badge" style={{background:diff===0?"#F5EDD6":"#F4F1E8",color:diff===0?"#9B7A2A":"#6B6B6B"}}>{diff===0?"Aujourd'hui":`Dans ${diff}j`}</span>
+                            <span className="date-badge" style={{background:diff===0?"#F5EDD6":"#F4F1E8",color:diff===0?"#9B7A2A":"#6B6B6B"}}>{diff===0?t("dashboard_followup_today"):t("dashboard_followup_in", diff)}</span>
                           </div>
                         );
                       })}
-                      {allEvents.filter(e=>e.date>=todayStr).length===0 && <div className="status-note">Aucun événement à venir.</div>}
+                      {allEvents.filter(e=>e.date>=todayStr).length===0 && <div className="status-note">{t("cal_no_upcoming")}</div>}
                     </div>
                   </div>
                 </div>
@@ -2074,11 +3157,13 @@ export default function App() {
           )}
 
           {view === "phonefinder" && (
-            <ErrorBoundary label="Recherche Tél">
-              <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement de Recherche Tél…</div>}>
+            <ErrorBoundary label={t("ws_phonefinder_err_label")}>
+              <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{t("ws_phonefinder_loading")}</div>}>
                 <PhoneFinder
                   onExportFoundToLeads={importPhoneFinderResultsToLeads}
                   onOpenLeads={() => setView("leads")}
+                  t={t}
+                  lang={lang}
                 />
               </Suspense>
             </ErrorBoundary>
@@ -2091,28 +3176,28 @@ export default function App() {
                 <div className="content">
                   <div className="card empty">
                     <div className="empty-ico">🏠</div>
-                    <div className="empty-title">Aucun Deal</div>
-                    <div className="empty-sub">Sélectionnez un deal dans la barre de gauche pour commencer.</div>
-                    <button className="btn btn-gold" onClick={() => setModal("new")}>＋ Nouveau deal</button>
+                    <div className="empty-title">{t("ws_empty_title")}</div>
+                    <div className="empty-sub">{t("ws_empty_sub")}</div>
+                    <button className="btn btn-gold" onClick={() => setModal("new")}>{t("ws_empty_cta")}</button>
                   </div>
                 </div>
               </>
             ) : (
               <>
-                <Topbar title={t("topbar_workspace")} subtitle={`${currentStageLabel} • ${current.address || "Adresse à compléter"}`} {...topbarCommon} />
+                <Topbar title={t("topbar_workspace")} subtitle={`${currentStageLabel} • ${current.address || t("ws_address_todo")}`} {...topbarCommon} />
                 <div className="content">
                   <div className="ws-head">
                     <div style={{minWidth:0,flex:1}}>
                       <input className="ws-title" value={current.title} onChange={e => upd(current.id, d => ({ ...d, title:e.target.value }))} />
                       <div className="ws-addr">
-                        {current.address || "Adresse / secteur à renseigner"}
-                        {current.units ? <span style={{marginLeft:10,color:"var(--text2)"}}>• {current.units} unités</span> : null}
+                        {current.address || t("ws_address_placeholder")}
+                        {current.units ? <span style={{marginLeft:10,color:"var(--text2)"}}>{t("ws_units_suffix", current.units)}</span> : null}
                         {current.askingPrice ? <span style={{marginLeft:10,fontWeight:700,color:"var(--gold)"}}>• {Number(current.askingPrice).toLocaleString("en-CA")} $</span> : null}
                       </div>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span className="stage-crumb">Mis à jour le {new Date(current.updatedAt).toLocaleDateString("fr-CA")}</span>
-                      <button className="btn btn-sm" onClick={() => setModal("event")}>＋ Événement</button>
+                      <span className="stage-crumb">{t("ws_updated_on", new Date(current.updatedAt).toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA"))}</span>
+                      <button className="btn btn-sm" onClick={() => setModal("event")}>{t("cal_new_event")}</button>
                       {isAdmin && (
                         <button className="btn btn-danger btn-sm" onClick={() => deleteDeal(current.id)}>{t("delete")}</button>
                       )}
@@ -2126,7 +3211,7 @@ export default function App() {
                         const pct = cl.length ? Math.round(cl.filter(i=>i.done).length/cl.length*100) : null;
                         return (
                           <button key={s.id} className={`stage-btn${current.stage===s.id?" active":""}`} onClick={() => setStage(s.id)}>
-                            {s.emoji} {s.label}{pct!==null && current.stage!==s.id ? ` ${pct}%` : ""}
+                            {s.emoji} {t("stage_" + s.id)}{pct!==null && current.stage!==s.id ? ` ${pct}%` : ""}
                           </button>
                         );
                       })}
@@ -2134,7 +3219,7 @@ export default function App() {
                   </div>
 
                   <div className="tabs">
-                    {[ ["crm","CRM & Suivi"], ["notes","Notes"], ["documents",`Documents${(current.files||[]).length>0?` (${current.files.length})`:""}`], ["checklist",`Checklist${stageCL.length>0?` ${stagePct}%`:""}`], ["activity","Activité"] ].map(([id,label]) => (
+                    {[ ["crm",t("ws_tab_crm")], ["notes",t("ws_tab_notes")], ["documents",`${t("ws_tab_documents")}${(current.files||[]).length>0?` (${current.files.length})`:""}`], ["checklist",`${t("ws_tab_checklist")}${stageCL.length>0?` ${stagePct}%`:""}`], ["activity",t("ws_tab_activity")] ].map(([id,label]) => (
                       <button key={id} className={`tab${tab===id?" active":""}`} onClick={() => setTab(id)}>{label}</button>
                     ))}
                   </div>
@@ -2151,24 +3236,24 @@ export default function App() {
                       )}
                       <div className="ws-grid">
                         <div className="card f-card">
-                          <div className="f-title">Contact (vendeur / courtier)</div>
+                          <div className="f-title">{t("ws_contact_title")}</div>
                           <div className="contact-top">
                             <div className="contact-avatar">{initials(current.contact?.name, "CT")}</div>
                             <div>
-                              <div style={{fontSize:14,fontWeight:700,color:"var(--text)"}}>{current.contact?.name || "Contact principal"}</div>
-                              <div style={{fontSize:11,color:"var(--text3)"}}>{current.contact?.role || "Rôle à définir"}</div>
+                              <div style={{fontSize:14,fontWeight:700,color:"var(--text)"}}>{current.contact?.name || t("ws_contact_main")}</div>
+                              <div style={{fontSize:11,color:"var(--text3)"}}>{current.contact?.role || t("ws_contact_role_todo")}</div>
                             </div>
                           </div>
-                          {[ ["name","Nom"], ["phone","Téléphone"], ["email","Email"], ["company","Compagnie"], ["role","Rôle"] ].map(([k,lbl]) => (
+                          {[ ["name",t("ws_contact_name")], ["phone",t("ws_contact_phone")], ["email",t("ws_contact_email")], ["company",t("ws_contact_company")], ["role",t("ws_contact_role")] ].map(([k,lbl]) => (
                             <div key={k} className="f-row"><div className="f-lbl">{lbl}</div><input value={current.contact?.[k] || ""} onChange={e => upd(current.id,d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} /></div>
                           ))}
 
                           <div className="call-actions">
                             <button className="btn btn-gold" disabled={calling} onClick={startDealCall}>
-                              {calling ? "Appel en cours..." : "📞 Appeler ce contact"}
+                              {calling ? t("ws_call_busy") : t("ws_call_start")}
                             </button>
                             <button className="btn btn-sm" disabled={callsLoading} onClick={() => loadCallsForDeal(current.id)}>
-                              {callsLoading ? "Chargement..." : "Actualiser appels"}
+                              {callsLoading ? t("ws_call_loading") : t("ws_call_refresh")}
                             </button>
                           </div>
 
@@ -2179,9 +3264,9 @@ export default function App() {
                           )}
 
                           <div className="call-log-wrap">
-                            <div className="f-title" style={{ marginBottom: 0 }}>Historique des appels</div>
+                            <div className="f-title" style={{ marginBottom: 0 }}>{t("ws_call_history_title")}</div>
                             {currentCalls.length === 0 ? (
-                              <div className="status-note" style={{ marginTop: 8 }}>Aucun appel enregistré pour ce deal.</div>
+                              <div className="status-note" style={{ marginTop: 8 }}>{t("ws_call_history_empty")}</div>
                             ) : (
                               <div className="call-log-list">
                                 {currentCalls.slice(0, 6).map((call) => {
@@ -2199,35 +3284,35 @@ export default function App() {
                                     <div key={call.id} className="call-log-item">
                                       <div className="call-log-top">
                                         <div>
-                                          <div className="call-log-title">{call.lead_name || call.to || "Contact"}</div>
+                                          <div className="call-log-title">{call.lead_name || call.to || t("ws_call_contact_fallback")}</div>
                                           <div className="call-log-sub">
                                             {fmtCallDateTime(call.created_at)} · {fmtDurationSeconds(call.duration_seconds)}
                                           </div>
                                         </div>
                                         <span className={`call-pill ${call.status === "completed" ? "success" : call.status === "failed" || call.status === "busy" || call.status === "no-answer" ? "failed" : "pending"}`}>
-                                          {call.status || "inconnu"}
+                                          {call.status || t("ws_call_unknown")}
                                         </span>
                                       </div>
 
                                       <div className="call-log-meta">
                                         <span className={`call-pill ${transcriptClass}`}>
-                                          Transcript: {transcriptState}
+                                          {t("ws_call_transcript_prefix")} {transcriptState}
                                         </span>
                                         {call.recording_url && (
                                           <a className="btn btn-sm" href={`/api/calls/${encodeURIComponent(call.id)}/recording`} target="_blank" rel="noreferrer">
-                                            Écouter
+                                            {t("ws_call_listen")}
                                           </a>
                                         )}
                                         {(transcriptState === "failed" || transcriptState === "not_started") && call.recording_url && (
                                           <button className="btn btn-sm" onClick={() => retryCallTranscription(call.id)}>
-                                            Relancer transcript
+                                            {t("ws_call_retry_transcript")}
                                           </button>
                                         )}
                                       </div>
 
                                       {call.transcript && (
                                         <details className="call-transcript">
-                                          <summary>Voir la transcription</summary>
+                                          <summary>{t("ws_call_show_transcript")}</summary>
                                           <div className="call-transcript-text">{call.transcript}</div>
                                         </details>
                                       )}
@@ -2243,22 +3328,22 @@ export default function App() {
                         </div>
 
                         <div className="card f-card">
-                          <div className="f-title">Suivi & Priorité</div>
+                          <div className="f-title">{t("ws_section_priority")}</div>
                           <div className="f-row">
-                            <div className="f-lbl">Priorité</div>
+                            <div className="f-lbl">{t("ws_priority_label")}</div>
                             <div className="pri-row">
-                              {Object.entries(PRIORITY).map(([k,{label,color}]) => (
-                                <button key={k} className="pri-btn" style={current.priority===k?{background:color+"18",borderColor:color,color}:undefined} onClick={() => upd(current.id,d => ({ ...d, priority:k }))}>{label}</button>
+                              {Object.entries(PRIORITY).map(([k,{color}]) => (
+                                <button key={k} className="pri-btn" style={current.priority===k?{background:color+"18",borderColor:color,color}:undefined} onClick={() => upd(current.id,d => ({ ...d, priority:k }))}>{t("ws_priority_" + k)}</button>
                               ))}
                             </div>
                           </div>
-                          <div className="f-row"><div className="f-lbl">Nombre d'unités</div><input type="number" min="1" step="1" value={current.units || ""} onChange={e => upd(current.id,d => ({ ...d, units: e.target.value }))} placeholder="Ex: 6" /></div>
-                          <div className="f-row"><div className="f-lbl">Prix demandé ($)</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder="Ex: 900000" /></div>
-                          <div className="f-row"><div className="f-lbl">Date de follow-up</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
-                          <div className="f-row"><div className="f-lbl">Note de suivi</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder="Ex: Rappeler pour contre-offre…" /></div>
-                          <div className="f-row"><div className="f-lbl">Prochaine action</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder="Ex: Déposer l'offre d'achat" /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_units")}</div><input type="number" min="1" step="1" value={current.units || ""} onChange={e => upd(current.id,d => ({ ...d, units: e.target.value }))} placeholder={t("ws_field_units_ph")} /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_price")}</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder={t("ws_field_price_ph")} /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_followup_date")}</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_followup_note")}</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder={t("ws_field_followup_note_ph")} /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_next_action")}</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder={t("ws_field_next_action_ph")} /></div>
                           <div className="f-row">
-                            <div className="f-lbl">Adresse</div>
+                            <div className="f-lbl">{t("ws_field_address")}</div>
                             <AddressAutocomplete
                               value={current.address || ""}
                               onChange={v => {
@@ -2269,14 +3354,14 @@ export default function App() {
                                 delete geocodeSkipRef.current[current.id];
                                 upd(current.id, d => ({ ...d, address: s.label, coords: { lat: s.lat, lng: s.lng } }));
                               }}
-                              placeholder="Ex: 320 rue Bouchard, Saint-Jean-sur-Richelieu"
+                              placeholder={t("ws_field_address_ph")}
                             />
                           </div>
                         </div>
                       </div>
 
                       <div className="card f-card">
-                        <div className="f-title">Enregistrer une activité</div>
+                        <div className="f-title">{t("ws_section_activity")}</div>
                         <ActivityLogger dealId={current.id} onLog={addAct} />
                       </div>
                     </>
@@ -2286,20 +3371,20 @@ export default function App() {
                     <div className="ws-grid">
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="f-title" style={{marginBottom:0}}>Notes deal</div>
-                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?"Formatage...":"✦ Formater"}</button>
+                          <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_deal")}</div>
+                          <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?t("ws_ai_btn_busy"):t("ws_ai_btn")}</button>
                         </div>
-                        <textarea value={current.notesDeal || ""} onChange={e => upd(current.id,d => ({ ...d, notesDeal:e.target.value }))} placeholder="Prix demandé, état général, potentiel, quartier, historique, stratégie…" />
-                        {current.aiDeal && <div className="ai-box"><div className="ai-box-lbl">✦ Notes CRM formatées</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiDeal:"" }))}>Effacer</button></div>}
+                        <textarea value={current.notesDeal || ""} onChange={e => upd(current.id,d => ({ ...d, notesDeal:e.target.value }))} placeholder={t("ws_notes_deal_ph")} />
+                        {current.aiDeal && <div className="ai-box"><div className="ai-box-lbl">{t("ws_ai_box_label")}</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiDeal}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiDeal:"" }))}>{t("ws_ai_clear")}</button></div>}
                       </div>
 
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="f-title" style={{marginBottom:0}}>Notes vendeur</div>
-                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?"Formatage...":"✦ Formater"}</button>
+                          <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_vendor")}</div>
+                          <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?t("ws_ai_btn_busy"):t("ws_ai_btn")}</button>
                         </div>
-                        <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id,d => ({ ...d, notesVendeur:e.target.value }))} placeholder="Motivation du vendeur, délai, flexibilité prix, points sensibles, style de négociation…" />
-                        {current.aiVendeur && <div className="ai-box"><div className="ai-box-lbl">✦ Notes CRM formatées</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiVendeur:"" }))}>Effacer</button></div>}
+                        <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id,d => ({ ...d, notesVendeur:e.target.value }))} placeholder={t("ws_notes_vendor_ph")} />
+                        {current.aiVendeur && <div className="ai-box"><div className="ai-box-lbl">{t("ws_ai_box_label")}</div><div style={{whiteSpace:"pre-wrap"}}>{current.aiVendeur}</div><button className="btn btn-sm" style={{marginTop:10}} onClick={() => upd(current.id,d => ({ ...d, aiVendeur:"" }))}>{t("ws_ai_clear")}</button></div>}
                       </div>
                     </div>
                   )}
@@ -2311,8 +3396,8 @@ export default function App() {
                           <div className="doc-modal-top">
                             <div className="doc-modal-name">📄 {viewing.name}</div>
                             <div style={{display:"flex",gap:8,flexShrink:0}}>
-                              <a href={viewing.dataUrl} download={viewing.name}><button className="btn btn-sm">Télécharger</button></a>
-                              <button className="btn btn-sm" onClick={() => setViewing(null)}>Fermer</button>
+                              <a href={viewing.dataUrl} download={viewing.name}><button className="btn btn-sm">{t("ws_doc_download")}</button></a>
+                              <button className="btn btn-sm" onClick={() => setViewing(null)}>{t("ws_doc_close")}</button>
                             </div>
                           </div>
                           <div className="doc-modal-body">
@@ -2321,12 +3406,12 @@ export default function App() {
                               : viewing.type?.includes("image")
                               ? <img src={viewing.dataUrl} alt={viewing.name} style={{maxWidth:"100%",maxHeight:"100%",display:"block",margin:"auto",objectFit:"contain",padding:16}} />
                               : (viewing.type?.includes("spreadsheet") || viewing.name?.match(/\.xlsx?$/i))
-                              ? <ErrorBoundary label="le tableur">
-                                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement du tableur…</div>}>
+                              ? <ErrorBoundary label={t("ws_doc_viewer_err")}>
+                                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{t("ws_doc_viewer_loading")}</div>}>
                                     <XlsxViewer dataUrl={viewing.dataUrl} />
                                   </Suspense>
                                 </ErrorBoundary>
-                              : <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Prévisualisation non disponible. <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>Télécharger</a></div>
+                              : <div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{t("ws_doc_preview_unavailable")} <a href={viewing.dataUrl} download={viewing.name} style={{color:"var(--gold)"}}>{t("ws_doc_download")}</a></div>
                             }
                           </div>
                         </div>
@@ -2338,8 +3423,8 @@ export default function App() {
                         onDrop={e => {e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}
                         onClick={() => fileRef.current?.click()}>
                         <div style={{fontSize:30,marginBottom:8}}>📁</div>
-                        <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>Glissez vos fichiers ici ou cliquez pour sélectionner</div>
-                        <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>PDF, images, Word, Excel — tous formats acceptés</div>
+                        <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{t("ws_doc_drop_title")}</div>
+                        <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>{t("ws_doc_drop_sub")}</div>
                         <input ref={fileRef} type="file" multiple style={{display:"none"}} onChange={e => handleFiles(e.target.files)} />
                       </div>
 
@@ -2349,20 +3434,20 @@ export default function App() {
                             <div key={f.id} className="doc" onClick={() => setViewing(f)}>
                               <div className="doc-icon">{fileIco(f.type)}</div>
                               <div className="doc-name" title={f.name}>{f.name}</div>
-                              <div className="doc-meta">{fmtSz(f.size)} · {new Date(f.uploadedAt).toLocaleDateString("fr-CA")}</div>
+                              <div className="doc-meta">{fmtSz(f.size)} · {new Date(f.uploadedAt).toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA")}</div>
                               <button className="doc-del" onClick={e => {e.stopPropagation();delFile(f.id);}}>✕</button>
                             </div>
                           ))}
                         </div>
                       )}
 
-                      {(current.files||[]).length===0 && !viewing && <div className="status-note">Aucun document pour ce deal.</div>}
+                      {(current.files||[]).length===0 && !viewing && <div className="status-note">{t("ws_doc_empty")}</div>}
                     </>
                   )}
 
                   {tab === "checklist" && (
                     <div className="card f-card">
-                      <div className="f-title">Checklist par étape</div>
+                      <div className="f-title">{t("ws_checklist_title")}</div>
                       <div className="cl-pills">
                         {STAGES.map(s => {
                           const cl = current.checklists?.[s.id] || [];
@@ -2371,7 +3456,7 @@ export default function App() {
                             <button key={s.id} className={`cl-pill${clStage===s.id?" active":""}`} onClick={() => {
                               setClStage(s.id);
                               if (!current.checklists?.[s.id]) upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [s.id]:buildCL(s.id) } }));
-                            }}>{s.label}{pct!==null ? ` ${pct}%` : ""}</button>
+                            }}>{t("stage_" + s.id)}{pct!==null ? ` ${pct}%` : ""}</button>
                           );
                         })}
                       </div>
@@ -2393,7 +3478,7 @@ export default function App() {
                       ))}
 
                       <div style={{display:"flex",gap:8,marginTop:10}}>
-                        <input value={clNew} onChange={e => setClNew(e.target.value)} placeholder="Ajouter un item…"
+                        <input value={clNew} onChange={e => setClNew(e.target.value)} placeholder={t("ws_checklist_add_ph")}
                           onKeyDown={e => {
                             if (e.key==="Enter" && clNew.trim()) {
                               upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage]||[]), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
@@ -2405,7 +3490,7 @@ export default function App() {
                             upd(current.id,d => ({ ...d, checklists:{ ...d.checklists, [clStage]:[...(d.checklists?.[clStage]||[]), { id:`c_${Date.now()}`, label:clNew.trim(), done:false }] } }));
                             setClNew("");
                           }
-                        }}>Ajouter</button>
+                        }}>{t("ws_checklist_add_btn")}</button>
                       </div>
                     </div>
                   )}
@@ -2413,18 +3498,18 @@ export default function App() {
                   {tab === "activity" && (
                     <>
                       <div className="card f-card">
-                        <div className="f-title">Enregistrer une activité</div>
+                        <div className="f-title">{t("ws_section_activity")}</div>
                         <ActivityLogger dealId={current.id} onLog={addAct} />
                       </div>
                       <div className="card f-card">
-                        <div className="f-title">Historique</div>
+                        <div className="f-title">{t("ws_activity_history")}</div>
                         {(!current.activities || current.activities.length===0)
-                          ? <div className="status-note">Aucune activité encore.</div>
+                          ? <div className="status-note">{t("dashboard_activity_empty")}</div>
                           : <div className="timeline">{current.activities.map(a => (
                               <div key={a.id} className="t-item">
                                 <div className="t-dot"/>
                                 <div className="t-text">{a.text}</div>
-                                <div className="t-time">{new Date(a.time).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
+                                <div className="t-time">{new Date(a.time).toLocaleString(lang === "en" ? "en-CA" : "fr-CA",{dateStyle:"short",timeStyle:"short"})}</div>
                               </div>
                             ))}</div>
                         }
@@ -2441,30 +3526,30 @@ export default function App() {
       {modal === "new" && (
         <div className="mo" onClick={() => setModal(null)}>
           <div className="mo-box" onClick={e => e.stopPropagation()}>
-            <div className="mo-title">Nouveau deal</div>
+            <div className="mo-title">{t("modal_new_deal_title")}</div>
             <div className="f-row">
-              <div className="f-lbl">Adresse de la propriété</div>
+              <div className="f-lbl">{t("modal_new_field_address")}</div>
               <AddressAutocomplete
                 autoFocus
                 value={newTitle}
                 onChange={v => { setNewTitle(v); setNewAddress(v); setNewAddrCoords(null); }}
                 onSelect={s => { setNewTitle(s.label); setNewAddress(s.label); setNewAddrCoords({ lat: s.lat, lng: s.lng }); }}
-                placeholder="Ex: 11 rue Molleur, Saint-Jean-sur-Richelieu"
+                placeholder={t("modal_new_address_ph")}
               />
             </div>
             <div className="f-row" style={{display:"flex",gap:10}}>
               <div style={{flex:1}}>
-                <div className="f-lbl">Nombre d'unités</div>
-                <input type="number" min="1" step="1" value={newUnits} onChange={e => setNewUnits(e.target.value)} placeholder="Ex: 6" />
+                <div className="f-lbl">{t("ws_field_units")}</div>
+                <input type="number" min="1" step="1" value={newUnits} onChange={e => setNewUnits(e.target.value)} placeholder={t("ws_field_units_ph")} />
               </div>
               <div style={{flex:2}}>
-                <div className="f-lbl">Prix demandé ($)</div>
-                <input type="number" min="0" step="1000" value={newAskingPrice} onChange={e => setNewAskingPrice(e.target.value)} placeholder="Ex: 900000" onKeyDown={e => e.key === "Enter" && createDealFn()} />
+                <div className="f-lbl">{t("ws_field_price")}</div>
+                <input type="number" min="0" step="1000" value={newAskingPrice} onChange={e => setNewAskingPrice(e.target.value)} placeholder={t("ws_field_price_ph")} onKeyDown={e => e.key === "Enter" && createDealFn()} />
               </div>
             </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => { setModal(null); setNewTitle(""); setNewAddress(""); setNewAddrCoords(null); setNewUnits(""); setNewAskingPrice(""); }}>Annuler</button>
-              <button className="btn btn-gold" onClick={createDealFn}>Créer le deal</button>
+              <button className="btn" onClick={() => { setModal(null); setNewTitle(""); setNewAddress(""); setNewAddrCoords(null); setNewUnits(""); setNewAskingPrice(""); }}>{t("modal_cancel")}</button>
+              <button className="btn btn-gold" onClick={createDealFn}>{t("modal_new_submit")}</button>
             </div>
           </div>
         </div>
@@ -2473,20 +3558,20 @@ export default function App() {
       {modal === "event" && (
         <div className="mo" onClick={() => setModal(null)}>
           <div className="mo-box" onClick={e => e.stopPropagation()}>
-            <div className="mo-title">Nouvel événement</div>
-            <div className="f-row"><div className="f-lbl">Titre</div><input autoFocus value={newEv.title} onChange={e => setNewEv(n => ({ ...n, title:e.target.value }))} placeholder="Ex: Inspection 320 rue Bouchard"/></div>
-            <div className="f-row"><div className="f-lbl">Date</div><input type="date" value={newEv.date} onChange={e => setNewEv(n => ({ ...n, date:e.target.value }))}/></div>
-            <div className="f-row"><div className="f-lbl">Heure (optionnel)</div><input type="time" value={newEv.time} onChange={e => setNewEv(n => ({ ...n, time:e.target.value }))}/></div>
+            <div className="mo-title">{t("modal_event_title")}</div>
+            <div className="f-row"><div className="f-lbl">{t("modal_event_field_title")}</div><input autoFocus value={newEv.title} onChange={e => setNewEv(n => ({ ...n, title:e.target.value }))} placeholder={t("modal_event_title_ph")}/></div>
+            <div className="f-row"><div className="f-lbl">{t("modal_event_field_date")}</div><input type="date" value={newEv.date} onChange={e => setNewEv(n => ({ ...n, date:e.target.value }))}/></div>
+            <div className="f-row"><div className="f-lbl">{t("modal_event_field_time")}</div><input type="time" value={newEv.time} onChange={e => setNewEv(n => ({ ...n, time:e.target.value }))}/></div>
             <div className="f-row">
-              <div className="f-lbl">Associer à un deal</div>
+              <div className="f-lbl">{t("modal_event_field_deal")}</div>
               <select value={newEv.dealId || currentId || ""} onChange={e => setNewEv(n => ({ ...n, dealId:e.target.value }))}>
-                <option value="">— Sélectionner —</option>
+                <option value="">{t("modal_event_select_placeholder")}</option>
                 {deals.map(d => <option key={d.id} value={d.id}>{dealLabel(d)}</option>)}
               </select>
             </div>
             <div className="mo-foot">
-              <button className="btn" onClick={() => setModal(null)}>Annuler</button>
-              <button className="btn btn-gold" onClick={addEvent}>Créer</button>
+              <button className="btn" onClick={() => setModal(null)}>{t("modal_cancel")}</button>
+              <button className="btn btn-gold" onClick={addEvent}>{t("modal_event_submit")}</button>
             </div>
           </div>
         </div>
@@ -2613,7 +3698,7 @@ function ChatWidget({ open, setOpen, messages, input, setInput, busy, onSend, t 
         <button
           type="button"
           onClick={() => setOpen(false)}
-          aria-label="close"
+          aria-label={t("chat_close_label")}
           style={{
             background: "rgba(255,255,255,0.2)",
             border: "none",

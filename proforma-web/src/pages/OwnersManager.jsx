@@ -564,14 +564,14 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                 <strong>{rolePreview.fileName}</strong>
               </div>
               <div className="mo-stats">
-                <div><strong>{stats.properties.toLocaleString(locale)}</strong> {lang === "en" ? "properties" : "propriétés"}</div>
-                <div><strong>{stats.uniquePostal.toLocaleString(locale)}</strong> {lang === "en" ? "unique owners" : "propriétaires uniques"}</div>
-                <div>{stats.withPhone.toLocaleString(locale)} {lang === "en" ? "already with a phone" : "avec numéro dans le rôle"}</div>
+                <div><strong>{stats.properties.toLocaleString(locale)}</strong> {tr("om_import_stats_properties")}</div>
+                <div><strong>{stats.uniquePostal.toLocaleString(locale)}</strong> {tr("om_import_stats_unique")}</div>
+                <div>{stats.withPhone.toLocaleString(locale)} {tr("om_import_stats_with_phone")}</div>
                 <div style={{color:"#8D742D",fontWeight:700}}>
-                  {needLookup.toLocaleString(locale)} {lang === "en" ? "to look up via Places" : "à rechercher via Places"}
+                  {needLookup.toLocaleString(locale)} {tr("om_import_stats_to_lookup")}
                 </div>
                 <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>
-                  {lang === "en" ? "Estimated enrichment cost:" : "Coût estimé de l'enrichissement:"}{" "}
+                  {tr("om_import_est_cost")}{" "}
                   <strong>{formatCost(est.mid)}</strong> ({formatCost(est.lo)}–{formatCost(est.hi)})
                 </div>
               </div>
@@ -581,7 +581,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                 {firstFive.map((o, i) => (
                   <li key={i}>
                     <strong>{o.name}</strong>
-                    <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || (lang === "en" ? "(missing mailing address)" : "(adresse postale manquante)")}</div>
+                    <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || tr("om_missing_mailing")}</div>
                     {o.phones.length > 0 && <div style={{fontSize:11,color:"var(--gold)"}}>📞 {o.phones.join(" · ")}</div>}
                   </li>
                 ))}
@@ -590,19 +590,19 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
               <div className="mo-sec-title">{tr("import_filters_title")}</div>
               <div className="mo-filters">
                 <label>
-                  <span>{lang === "en" ? "Property value ≥" : "Valeur de l'immeuble ≥"}</span>
+                  <span>{tr("om_filter_min_value")}</span>
                   <input type="number" placeholder="$" value={rfMinValue} onChange={e => setRfMinValue(e.target.value)} />
                 </label>
                 <label>
-                  <span>{lang === "en" ? "Year built ≤" : "Année de construction ≤"}</span>
+                  <span>{tr("om_filter_max_year")}</span>
                   <input type="number" placeholder="1970" value={rfMaxYear} onChange={e => setRfMaxYear(e.target.value)} />
                 </label>
                 <label>
-                  <span>{lang === "en" ? "Registered before" : "Inscrit au rôle avant"}</span>
+                  <span>{tr("om_filter_inscription")}</span>
                   <input type="number" placeholder="2005" value={rfInscriptionBefore} onChange={e => setRfInscriptionBefore(e.target.value)} />
                 </label>
                 <label>
-                  <span>{lang === "en" ? "Units between" : "Unités entre"}</span>
+                  <span>{tr("om_filter_units_between")}</span>
                   <span style={{display:"flex",gap:6}}>
                     <input type="number" placeholder="min" value={rfUnitsMin} onChange={e => setRfUnitsMin(e.target.value)} style={{width:"50%"}} />
                     <input type="number" placeholder="max" value={rfUnitsMax} onChange={e => setRfUnitsMax(e.target.value)} style={{width:"50%"}} />

@@ -12,6 +12,7 @@ import rateLimit from "express-rate-limit";
 import OpenAI, { toFile } from "openai";
 import { Resend } from "resend";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import webpush from "web-push";
 import { createChatRouter } from "./routes/chat.js";
 import { createListingsRouter } from "./routes/listings.js";
 import { createOpenAIService } from "./services/openaiService.js";
@@ -4122,6 +4123,149 @@ app.put("/api/crm/state", express.json({ limit: "20mb" }), async (req, res) => {
     console.error("[api/crm/state:put]", err?.message);
     res.status(500).json({ ok: false, error: err?.message || "Unknown error" });
   }
+});
+
+// ─── Web Push notifications ─────────────────────────────────────────────────
+// VAPID key pair — generated once, lives in Railway env vars. Never expose
+// the private key to the client; the client only needs the public key.
+//
+// Required Supabase SQL migration (run once, then endpoints light up):
+//   create table if not exists push_subscriptions (
+//     id bigserial primary key,
+//     endpoint text not null unique,
+//     p256dh text not null,
+//     auth text not null,
+//     user_id text,
+//     user_name text,
+//     created_at timestamptz not null default now()
+//   );
+//   create index if not exists push_subscriptions_user_id_idx
+//     on push_subscriptions (user_id);
+const VAPID_PUBLIC_KEY  = String(process.env.VAPID_PUBLIC_KEY  || "").trim();
+const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || "").trim();
+const VAPID_SUBJECT     = String(process.env.VAPID_SUBJECT     || "mailto:anthonymakeen@gmail.com").trim();
+const pushConfigured    = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushConfigured) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  } catch (err) {
+    console.warn("[push] setVapidDetails failed:", err?.message);
+  }
+} else {
+  console.warn("[push] VAPID keys not set — push endpoints will no-op.");
+}
+
+// Expose the public key to the client so it can subscribe. Safe to share.
+app.get("/api/push/vapid-public-key", (_req, res) => {
+  if (!pushConfigured) {
+    return res.json({ ok: false, publicKey: null, note: "push-not-configured" });
+  }
+  res.json({ ok: true, publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Persist a subscription. Unique by endpoint — if the same device reloads
+// we upsert rather than duplicate.
+app.post("/api/push/subscribe", express.json({ limit: "50kb" }), async (req, res) => {
+  if (!pushConfigured) {
+    return res.status(503).json({ ok: false, error: "push-not-configured" });
+  }
+  if (!supabaseServerClient) {
+    return res.status(503).json({ ok: false, error: "supabase-not-configured" });
+  }
+  const sub = req.body?.subscription;
+  if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
+    return res.status(400).json({ ok: false, error: "Invalid subscription payload." });
+  }
+  try {
+    const { error } = await supabaseServerClient
+      .from("push_subscriptions")
+      .upsert({
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        auth: sub.keys.auth,
+        user_id: req.body?.userId || null,
+        user_name: req.body?.userName || null,
+      }, { onConflict: "endpoint" });
+    if (error) {
+      console.warn("[push/subscribe] supabase error:", error.message);
+      return res.status(502).json({ ok: false, error: error.message });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[push/subscribe]", err?.message);
+    res.status(500).json({ ok: false, error: err?.message || "Unknown error" });
+  }
+});
+
+// Remove a subscription (client calls this before Notification.unsubscribe()).
+app.delete("/api/push/subscribe", express.json({ limit: "10kb" }), async (req, res) => {
+  if (!supabaseServerClient) return res.json({ ok: true });
+  const endpoint = req.body?.endpoint;
+  if (!endpoint) return res.status(400).json({ ok: false, error: "endpoint required" });
+  try {
+    await supabaseServerClient.from("push_subscriptions").delete().eq("endpoint", endpoint);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || "Unknown error" });
+  }
+});
+
+// Helper: fan out a push payload to the subscriptions that match a filter.
+// `filter` is either { all: true } or { userId: "..." }. Returns a summary
+// of successes/failures. Subscriptions that 404 or 410 are removed from
+// Supabase — those endpoints are dead.
+async function dispatchPush(filter, payload) {
+  if (!pushConfigured || !supabaseServerClient) {
+    return { ok: false, sent: 0, error: "not-configured" };
+  }
+  let query = supabaseServerClient.from("push_subscriptions").select("endpoint, p256dh, auth");
+  if (filter?.userId) query = query.eq("user_id", filter.userId);
+  const { data, error } = await query;
+  if (error) {
+    console.warn("[push/dispatch] select error:", error.message);
+    return { ok: false, sent: 0, error: error.message };
+  }
+  const body = JSON.stringify(payload || {});
+  let sent = 0;
+  const dead = [];
+  await Promise.all((data || []).map(async (row) => {
+    const sub = { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } };
+    try {
+      await webpush.sendNotification(sub, body, { TTL: 60 * 60 * 24 });
+      sent++;
+    } catch (err) {
+      // 404/410 = endpoint is gone; unsubscribed or expired. Prune.
+      if (err?.statusCode === 404 || err?.statusCode === 410) {
+        dead.push(row.endpoint);
+      } else {
+        console.warn("[push/dispatch] send error:", err?.statusCode, err?.body || err?.message);
+      }
+    }
+  }));
+  if (dead.length) {
+    try {
+      await supabaseServerClient.from("push_subscriptions").delete().in("endpoint", dead);
+    } catch (err) {
+      console.warn("[push/dispatch] prune error:", err?.message);
+    }
+  }
+  return { ok: true, sent, pruned: dead.length };
+}
+
+// Manual send endpoint — useful for testing from the UI ("Send test") and
+// for future triggers (flagged-lead notifications, reminders, etc).
+// Body: { userId?, title, body, url?, tag? }  — userId omitted = broadcast.
+app.post("/api/push/notify", express.json({ limit: "10kb" }), async (req, res) => {
+  const { userId, title, body, url, tag, requireInteraction } = req.body || {};
+  if (!title && !body) {
+    return res.status(400).json({ ok: false, error: "title or body required" });
+  }
+  const result = await dispatchPush(
+    userId ? { userId } : { all: true },
+    { title, body, url, tag, requireInteraction }
+  );
+  if (!result.ok) return res.status(503).json(result);
+  res.json(result);
 });
 
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
