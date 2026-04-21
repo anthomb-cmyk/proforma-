@@ -3326,7 +3326,7 @@ export default function App() {
             </>
           )}
 
-          {view === "map" && (
+          {view === "map" && !isPhone && (
             <>
               <Topbar title={t("topbar_map")} subtitle={t("topbar_map_sub")} {...topbarCommon} />
               <div className="content">
