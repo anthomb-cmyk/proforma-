@@ -2417,10 +2417,173 @@ export default function App() {
     const sourceTitle = String(meta?.title || "").trim();
     const sourceFile = sourceTitle ? t("pf_source_title", sourceTitle) : t("pf_source_default");
     const now = Date.now();
+    const nowIso = new Date().toISOString();
     const current = (Array.isArray(leads) ? leads : []).map(lead => {
       const phones = getLeadPhones(lead);
       return { ...lead, phones, phone: phones[0] || "", updatedAt: lead.updatedAt || now };
     });
+
+    // ── Owner-grouped mode ────────────────────────────────────────────────
+    // Triggered by PhoneFinder's auto-export when the GPT planner was used.
+    // Instead of one Lead per building, we roll all buildings that share an
+    // ownerKey into a single Lead, naming it after the owner and stuffing
+    // the buildings list into the notes (+ a structured `buildings` array).
+    // On re-import, we dedupe by ownerKey and merge buildings + phones.
+    if (meta?.ownerGrouped) {
+      const grouped = new Map(); // ownerKey → aggregate
+      for (const row of Array.isArray(rows) ? rows : []) {
+        // Fall back to a synthetic key when the planner didn't attach one
+        // (e.g. non-GPT rows that slipped in). These degenerate to per-row
+        // leads — same as legacy behavior — which is fine.
+        const rawOwnerKey = String(row?.ownerKey || "").trim();
+        const synthKey = rawOwnerKey || `row_${row?.id || Math.random().toString(36).slice(2)}`;
+        let g = grouped.get(synthKey);
+        if (!g) {
+          const planOwner = row?.planOwner || {};
+          const ownerDisplayName = String(planOwner.displayName || row?.companyName || row?.leadContact || row?.inputName || "").trim();
+          const postalAddress = String(planOwner.postalRaw || "").trim();
+          g = {
+            ownerKey: rawOwnerKey,
+            syntheticKey: synthKey,
+            ownerName: ownerDisplayName,
+            postalAddress,
+            postalCity: String(planOwner.postalCity || ""),
+            postalCode: String(planOwner.postalCode || ""),
+            buildings: [],
+            buildingsSeen: new Set(),
+            phones: [],
+            phoneSources: {}, // key → array of source labels
+            sources: new Set(),
+            matchedNames: new Set(),
+            website: "",
+            confidence: 0,
+            statuses: new Set(),
+          };
+          grouped.set(synthKey, g);
+        }
+        // Collect the building this row represents.
+        const addr = String(row?.buildingAddress || row?.inputAddress || "").trim();
+        const addrKey = addr.toLowerCase().replace(/\s+/g, " ");
+        if (addr && !g.buildingsSeen.has(addrKey)) {
+          g.buildingsSeen.add(addrKey);
+          g.buildings.push({
+            address: addr,
+            utilisation: row?.utilisation || "",
+            matchedName: row?.matchedName || "",
+            phone: row?.phone || (row?.inputPhones || [])[0] || "",
+            status: row?.status || "",
+          });
+        }
+        // Union phones, tagging each with the source label.
+        const rowPhones = mergePhoneLists(row?.phone, row?.inputPhones, extractPhonesFromRow(row?.rawRow));
+        const rowSource = String(row?.source || "file");
+        for (const ph of rowPhones) {
+          if (!g.phones.includes(ph)) g.phones.push(ph);
+          g.phoneSources[ph] = Array.from(new Set([...(g.phoneSources[ph] || []), rowSource]));
+        }
+        if (rowSource) g.sources.add(rowSource);
+        if (row?.matchedName) g.matchedNames.add(row.matchedName);
+        if (row?.website && !g.website) g.website = String(row.website);
+        if (Number(row?.confidence || 0) > g.confidence) g.confidence = Number(row.confidence);
+        if (row?.status) g.statuses.add(row.status);
+      }
+
+      // Index existing leads by ownerKey for merge detection. Leads created
+      // by rôle-import already carry ownerIds (linked via ownerKey →
+      // ownerId); we also store the direct ownerKey we use here so dedup
+      // across re-runs is O(1).
+      const byOwnerKey = new Map();
+      for (const lead of current) {
+        if (lead?.ownerKey) byOwnerKey.set(String(lead.ownerKey), lead);
+      }
+
+      const additions = [];
+      for (const [, g] of grouped) {
+        if (!g.phones.length && !g.buildings.length) { skipped++; continue; }
+        const buildingsSummary = g.buildings
+          .map(b => `• ${b.address}${b.utilisation ? ` — ${b.utilisation}` : ""}${b.phone ? ` — 📞 ${b.phone}` : ""}`)
+          .join("\n");
+        const phoneSourceLines = g.phones
+          .map(p => `${p} (${(g.phoneSources[p] || ["?"]).join(", ")})`)
+          .join(" · ");
+        const sharedNotes = [
+          sourceTitle ? t("pf_imported_from_with", sourceTitle) : t("pf_imported_from"),
+          g.postalAddress ? `\nAdresse postale: ${g.postalAddress}` : "",
+          g.buildings.length ? `\nImmeubles (${g.buildings.length}):\n${buildingsSummary}` : "",
+          phoneSourceLines ? `\nTéléphones: ${phoneSourceLines}` : "",
+        ].filter(Boolean).join("");
+
+        const existing = g.ownerKey ? byOwnerKey.get(g.ownerKey) : null;
+        if (existing) {
+          const mergedPhones = mergePhoneLists(existing.phones, g.phones);
+          const existingBuildings = Array.isArray(existing.buildings) ? existing.buildings : [];
+          const seenAddrs = new Set(existingBuildings.map(b => String(b?.address || "").toLowerCase().replace(/\s+/g, " ")));
+          const newBuildings = g.buildings.filter(b => !seenAddrs.has(String(b.address || "").toLowerCase().replace(/\s+/g, " ")));
+          const phonesChanged = mergedPhones.length !== (existing.phones || []).length;
+          const buildingsChanged = newBuildings.length > 0;
+          if (!phonesChanged && !buildingsChanged) { skipped++; continue; }
+          existing.phones = mergedPhones;
+          existing.phone = mergedPhones[0] || existing.phone || "";
+          existing.buildings = [...existingBuildings, ...newBuildings];
+          existing.updatedAt = now;
+          if (!existing.companyName && g.ownerName) existing.companyName = g.ownerName;
+          if (!existing.contactName && g.ownerName && !existing.companyName) existing.contactName = g.ownerName;
+          if (!existing.postalAddress && g.postalAddress) existing.postalAddress = g.postalAddress;
+          existing.notes = [existing.notes || "", "\n— Re-import —\n" + sharedNotes].filter(Boolean).join("");
+          if (!existing.sourceFile) existing.sourceFile = sourceFile;
+          updated++;
+          continue;
+        }
+
+        const primaryBuildingAddress = g.buildings[0]?.address || "";
+        const nextLead = {
+          id: `lead_pf_owner_${now}_${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: nowIso,
+          updatedAt: now,
+          stage: g.phones.length ? "to_call" : "new",
+          // The *lead name* is the owner name (as requested).
+          companyName: g.ownerName,
+          contactName: "",
+          // Personal (postal) address of the owner.
+          postalAddress: g.postalAddress,
+          postalCity: g.postalCity,
+          postalCode: g.postalCode,
+          // Keep the legacy buildingAddress populated with the first
+          // building so any UI that still reads it has a value.
+          buildingAddress: primaryBuildingAddress,
+          buildings: g.buildings,
+          city: g.postalCity || "",
+          province: "QC",
+          country: "Canada",
+          email: "",
+          phone: g.phones[0] || "",
+          phones: g.phones,
+          phoneSources: g.phoneSources,
+          originalPhone: "",
+          units: 0,
+          utilisation: g.buildings[0]?.utilisation || "",
+          notes: sharedNotes,
+          sourceFile,
+          matchedName: Array.from(g.matchedNames).join(" · "),
+          matchedAddress: "",
+          confidence: g.confidence,
+          lookupStatus: g.statuses.has("found") ? "found" : (g.statuses.has("needs_manual_review") ? "needs_manual_review" : "not_found"),
+          website: g.website,
+          ownerKey: g.ownerKey || "",
+          linkedDealId: "",
+        };
+        additions.push(nextLead);
+        if (g.ownerKey) byOwnerKey.set(g.ownerKey, nextLead);
+        added++;
+      }
+
+      if (additions.length || updated > 0) {
+        setLeads([...additions, ...current].slice(0, 6000));
+      }
+      return { added, updated, skipped };
+    }
+    // ── end owner-grouped mode ────────────────────────────────────────────
+
     const byKey = new Map();
     current.forEach(lead => {
       const key = buildLeadIdentityKey(lead);

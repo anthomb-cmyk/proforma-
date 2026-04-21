@@ -11,14 +11,15 @@
 // row `r`, its display index `i`, and the handlers it needs. Parent owns all
 // state (review modal, run mutations, loading flags).
 
-import { memo } from "react";
+import { memo, useState } from "react";
 import { mergePhoneLists, normalizePhoneKey } from "../lib/phoneUtils.js";
 
 const STATUS_CFG = {
-  found:            { label: "Trouvé",         cls: "found" },
-  needs_review:     { label: "À vérifier",     cls: "needs_review" },
-  multiple_matches: { label: "Choix multiple", cls: "multiple_matches" },
-  not_found:        { label: "Non trouvé",     cls: "not_found" },
+  found:                { label: "Trouvé",         cls: "found" },
+  needs_review:         { label: "À vérifier",     cls: "needs_review" },
+  needs_manual_review:  { label: "À revoir",       cls: "needs_review" },
+  multiple_matches:     { label: "Choix multiple", cls: "multiple_matches" },
+  not_found:            { label: "Non trouvé",     cls: "not_found" },
 };
 
 function confClass(n) {
@@ -46,6 +47,13 @@ function PhoneResultRow({
   const hasAlts =
     (r.status === "needs_review" || r.status === "multiple_matches") &&
     r.candidates?.length > 0;
+  // Secondary expansion: ANY row with extra candidates (including "found"
+  // rows with multiple Places hits) can be opened to show the full list.
+  // Previously the UI only surfaced candidates via the Choisir modal on
+  // needs_review rows; the GPT-planner flow now regularly returns 3–10
+  // accepted candidates per query so the user wants to see them inline.
+  const candidateCount = Array.isArray(r.candidates) ? r.candidates.length : 0;
+  const [expanded, setExpanded] = useState(false);
 
   const filePhoneKeys = new Set(
     mergePhoneLists(r.fileInputPhones).map(normalizePhoneKey).filter(Boolean)
@@ -89,8 +97,31 @@ function PhoneResultRow({
   const primaryPhoneSource = primaryPhone ? sourceLabelForPhone(primaryPhone) : "";
 
   return (
+    <>
     <tr>
-      <td style={{ color: "var(--text3)", fontSize: 11, width: 36 }}>{i + 1}</td>
+      <td style={{ color: "var(--text3)", fontSize: 11, width: 36 }}>
+        {i + 1}
+        {candidateCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "Masquer" : `Voir ${candidateCount} autre(s) candidat(s)`}
+            style={{
+              display: "block",
+              marginTop: 4,
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              fontSize: 10,
+              color: "var(--text2)",
+              cursor: "pointer",
+              padding: "1px 6px",
+            }}
+          >
+            {expanded ? "▾" : "▸"} {candidateCount}
+          </button>
+        )}
+      </td>
       <td className="pf-input-col">
         {(r.companyName || r.inputName) && (
           <div className="pf-cell-name">{r.companyName || r.inputName}</div>
@@ -226,6 +257,57 @@ function PhoneResultRow({
         </div>
       </td>
     </tr>
+    {expanded && candidateCount > 0 && (
+      <tr>
+        <td></td>
+        <td colSpan={6} style={{ background: "#FAF8F4", padding: "6px 8px" }}>
+          <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>
+            {candidateCount} {candidateCount === 1 ? "autre candidat" : "autres candidats"} passant le filtre civique
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {r.candidates.map((c, idx) => (
+              <div
+                key={c.placeId || `cand_${idx}`}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1.5fr 2fr 1fr 40px",
+                  gap: 8,
+                  padding: "4px 6px",
+                  background: "#FFFFFF",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  fontSize: 11,
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.name || "—"}
+                </div>
+                <div style={{ color: "var(--text2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.address || ""}
+                </div>
+                <div style={{ color: "var(--text2)" }}>
+                  {c.phone ? (
+                    <span
+                      className="pf-phone"
+                      onClick={() => navigator.clipboard?.writeText(c.phone)}
+                      title="Copier"
+                      style={{ cursor: "pointer" }}
+                    >
+                      📞 {c.phone}
+                    </span>
+                  ) : <span style={{ color: "var(--text3)" }}>—</span>}
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <span className={`pf-conf ${confClass(c.confidence)}`}>{c.confidence}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 

@@ -156,6 +156,24 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // the batch. Single-row manual searches (too cheap to be worth
   // confirming) bypass this and call doLookupBatched directly.
   const [pendingLookup, setPendingLookup] = useState(null);
+  // GPT planner toggle (stored locally so the preference sticks across
+  // sessions — most users will land on one mode and never switch). When
+  // enabled, confirmPendingLookup first POSTs to /api/phone-lookup/plan
+  // to get deterministic + GPT-optimized strategies per row, then passes
+  // those plans through to /api/phone-lookup.
+  const [useGptPlanner, setUseGptPlanner] = useState(() => {
+    try { return localStorage.getItem("pf_use_gpt_planner") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("pf_use_gpt_planner", useGptPlanner ? "1" : "0"); } catch {}
+  }, [useGptPlanner]);
+  // Planner state. `planningBusy` is true while /plan is in flight;
+  // `planResult` holds { plans, stats } after the call succeeds. The
+  // cost modal flips from "configure" mode to "preview" mode once
+  // planResult is populated so the user sees the 3-bucket breakdown
+  // before authorising the Places spend.
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const [planResult, setPlanResult] = useState(null);
   // Running tally of today's phone-lookup spend, persisted in
   // localStorage and shown in the page header. Resets at midnight
   // local time (see dailySpendTracker). Updated after each batch
@@ -167,7 +185,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // Escape when nothing's on screen.
   useEscapeKey(() => setReviewRow(null), Boolean(reviewRow));
   useEscapeKey(() => setShowColMap(false), showColMap);
-  useEscapeKey(() => setPendingLookup(null), Boolean(pendingLookup));
+  useEscapeKey(() => { setPendingLookup(null); setPlanResult(null); }, Boolean(pendingLookup));
 
   const activeRun = useMemo(() => resultRuns.find(run => run.id === activeRunId) || null, [resultRuns, activeRunId]);
   const results = activeRun?.rows || [];
@@ -598,6 +616,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // Send rows in small batches so each request completes in < 5s (no proxy timeout)
   async function doLookupBatched(allRows, source = "csv", opts = {}) {
     const skippedWithPhone = Array.isArray(opts.skippedWithPhone) ? opts.skippedWithPhone : [];
+    // GPT-planner extensions (optional). `plans[i]` matches allRows[i] 1:1
+    // when present — absent entries just fall through to the server's
+    // deterministic path. `manualReviewRows` are plan.strategy === "skip_no_lead"
+    // rows that never hit Places; we materialise them as needs_manual_review
+    // result rows so they still appear in the run.
+    const planArray = Array.isArray(opts.plans) ? opts.plans : null;
+    const manualReviewRows = Array.isArray(opts.manualReviewRows) ? opts.manualReviewRows : [];
+    const manualReviewPlans = Array.isArray(opts.manualReviewPlans) ? opts.manualReviewPlans : [];
     stopRef.current = false;
     setLoading(true);
     setApiError("");
@@ -655,26 +681,37 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
       });
     });
 
+    // Materialise manual-review rows (plan.strategy === "skip_no_lead").
+    // These stay in the run so the user can inspect / export them, but
+    // they never hit the Places API.
+    const manualOnlyRows = manualReviewRows.length
+      ? buildManualReviewRows(manualReviewRows, manualReviewPlans, createdAt)
+      : [];
+
     let done = 0;
     let added = fileOnlyRows.length;
-    let runRows = [...fileOnlyRows];
+    let runRows = [...fileOnlyRows, ...manualOnlyRows];
 
-    // Commit the file-only rows to the run immediately so the results table
-    // populates before the API batch even starts.
-    if (fileOnlyRows.length) {
+    // Commit the file-only + manual-review rows to the run immediately so
+    // the results table populates before the API batch even starts.
+    if (runRows.length) {
       setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
     }
 
     for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
       if (stopRef.current) break;
       const batch = allRows.slice(i, i + BATCH_SIZE);
+      // Slice the matching plans for this batch. If no plans were provided
+      // (non-GPT mode), pass undefined so server falls back to its
+      // deterministic regex-based query builder.
+      const batchPlans = planArray ? planArray.slice(i, i + BATCH_SIZE) : undefined;
       const controller = new AbortController();
       lookupAbortRef.current = controller;
       try {
         const resp = await fetch("/api/phone-lookup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows: batch }),
+          body: JSON.stringify({ rows: batch, ...(batchPlans ? { plans: batchPlans } : {}) }),
           signal: controller.signal,
         });
         const data = await resp.json();
@@ -751,10 +788,42 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
     //  - There were file-only rows skipped from the batch (cost-free hits)
     // Otherwise (nothing was scanned and nothing was pre-filled), drop
     // the empty run and go back to search.
-    if (done > 0 || fileOnlyRows.length > 0) {
+    if (done > 0 || fileOnlyRows.length > 0 || manualOnlyRows.length > 0) {
       const finalFound = cappedRows.filter(rowHasAnyPhone).length;
       showToast(t("pf_batch_ok", done + fileOnlyRows.length, finalFound), 6000);
       setPfPage("results");
+
+      // Auto-export to Leads when we ran in GPT-planner mode. The planner
+      // carries ownerKey on every result so we can group by owner. Non-GPT
+      // mode keeps the existing manual "Export" button workflow — auto-
+      // export only triggers when the user opted into the planner.
+      if (planArray && typeof onExportFoundToLeads === "function") {
+        try {
+          // Export every row from the run (including file-only + manual-
+          // review), not just the phone-bearing ones — the owner-grouped
+          // target lead should list ALL buildings the owner appeared on
+          // even if a subset had no matched phone.
+          const result = await Promise.resolve(onExportFoundToLeads(cappedRows, {
+            id: runId,
+            title: makeRunTitle(source, createdAt),
+            createdAt,
+            ownerGrouped: true,
+            auto: true,
+          }));
+          const added = Number(result?.added || 0);
+          const updated = Number(result?.updated || 0);
+          if (added > 0 || updated > 0) {
+            showToast(
+              lang === "en"
+                ? `Auto-exported to Leads: ${added} new · ${updated} updated`
+                : `Exporté automatiquement vers Leads : ${added} nouveau(x) · ${updated} mis à jour`,
+              5000,
+            );
+          }
+        } catch (err) {
+          console.error("[PhoneFinder] auto-export failed:", err);
+        }
+      }
     } else {
       setResultRuns(prev => prev.filter(r => r.id !== runId));
       setPfPage("search");
@@ -829,13 +898,138 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
     });
   }
 
+  // Run the GPT planner over the pending rows. Called when the user has
+  // ticked "GPT-optimized lookup" in the confirm modal and clicks the
+  // primary button for the first time. Sends ALL rows (enrich + file-phone)
+  // to /plan so the planner's pre-filter is the single source of truth for
+  // bucket classification. On success, stores { plans, stats } in
+  // planResult — the modal re-renders into preview mode and the primary
+  // button changes to "Launch". On failure, shows an inline error but
+  // leaves the modal open so the user can uncheck GPT and try again.
+  async function runPlannerForPending() {
+    const pending = pendingLookup;
+    if (!pending) return;
+    setPlanningBusy(true);
+    setApiError("");
+    try {
+      // Planner receives the raw source row (including file-phone rows)
+      // because its pre-filter re-evaluates the phone-present test itself.
+      const allRows = [
+        ...(pending.rows || []),
+        ...(pending.skippedWithPhone || []),
+      ];
+      const resp = await fetch("/api/phone-lookup/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: allRows.map((r) => r.rawRow || r) }),
+      });
+      const data = await resp.json();
+      if (!data.ok) {
+        setApiError(data.error || t("pf_err_server"));
+        return;
+      }
+      setPlanResult({
+        plans: Array.isArray(data.plans) ? data.plans : [],
+        stats: data.stats || {},
+        allRows,
+        gptAvailable: Boolean(data.gptAvailable),
+      });
+    } catch (err) {
+      setApiError(String(err?.message || err));
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
+  // Build "needs_manual_review" result rows for plan.strategy === "skip_no_lead".
+  // These never hit Places but still belong in the run so the user can see
+  // them and decide manually.
+  function buildManualReviewRows(rows, plans, createdAt) {
+    return rows.map((src, idx) => {
+      const plan = plans[idx] || null;
+      const buildingAddress = src.buildingAddress || [src.address, src.city, src.province, src.postalCode].filter(Boolean).join(", ");
+      const companyName = src.company || "";
+      const fallbackName = src.rawName || src.name || "";
+      return normalizeResultRowPhones({
+        inputName: companyName || fallbackName,
+        inputAddress: buildingAddress,
+        buildingAddress,
+        companyName,
+        leadContact: src.leadContact || "",
+        matchedName: "",
+        matchedAddress: "",
+        phone: "",
+        inputPhones: [],
+        onlinePhones: [],
+        directoryPhones: [],
+        source: "skipped",
+        status: "needs_manual_review",
+        statusLabel: lang === "en" ? "Needs review" : "À revoir",
+        confidence: 0,
+        website: "",
+        candidates: [],
+        searchedAt: createdAt,
+        planStrategy: plan?.strategy || "skip_no_lead",
+        planReason: plan?.reason || "",
+        ownerKey: plan?.owner?.ownerKey || "",
+        trace: [`plan:${plan?.strategy || "skip_no_lead"}:${plan?.reason || ""}`],
+        _src: src,
+      });
+    });
+  }
+
   // Kick off the lookup the user just confirmed and clear the pending
   // state. Separate function so the modal's Confirm button and any
   // future keyboard shortcut can share one entry point.
+  //
+  // Two-stage flow when GPT is enabled:
+  //   1st click  → runPlannerForPending() populates planResult; modal
+  //                re-renders into preview mode with 3-bucket counts.
+  //   2nd click  → actually dispatches the batches, passing plans along.
+  // When GPT is disabled, both clicks collapse into the current single-
+  // stage behaviour (direct to doLookupBatched).
   async function confirmPendingLookup() {
     const pending = pendingLookup;
     if (!pending) return;
+
+    // GPT mode, first click — run the planner, then stay in the modal.
+    if (useGptPlanner && !planResult) {
+      await runPlannerForPending();
+      return;
+    }
+
+    // GPT mode, preview confirmed — split rows by plan strategy and
+    // dispatch. The planner's own pre-filter is the source of truth, so
+    // ignore the caller's original rows/skippedWithPhone partition.
+    if (useGptPlanner && planResult) {
+      const { plans, allRows } = planResult;
+      const enrichRows = [];
+      const enrichPlans = [];
+      const fileRows = [];
+      const skipRows = [];
+      const skipPlans = [];
+      for (let i = 0; i < allRows.length; i++) {
+        const plan = plans[i] || null;
+        const src = allRows[i];
+        if (!plan) { enrichRows.push(src); enrichPlans.push(null); continue; }
+        if (plan.strategy === "use_file_phone") fileRows.push(src);
+        else if (plan.strategy === "skip_no_lead") { skipRows.push(src); skipPlans.push(plan); }
+        else { enrichRows.push(src); enrichPlans.push(plan); }
+      }
+      setPendingLookup(null);
+      setPlanResult(null);
+      await doLookupBatched(enrichRows, pending.source, {
+        skippedWithPhone: fileRows,
+        manualReviewRows: skipRows,
+        manualReviewPlans: skipPlans,
+        plans: enrichPlans,
+      });
+      return;
+    }
+
+    // Non-GPT path — unchanged.
     setPendingLookup(null);
+    setPlanResult(null);
     await doLookupBatched(pending.rows, pending.source, {
       skippedWithPhone: pending.skippedWithPhone || [],
     });
@@ -1052,48 +1246,154 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
           Added after a $100 Places bill burn; cheaper to show a
           dialog than to hope the user never imports too big. */}
       {pendingLookup && (() => {
-        const est = estimateLookupCost(pendingLookup.rows.length);
-        const skippedCount = (pendingLookup.skippedWithPhone || []).length;
+        // Effective counts: when planResult is populated, we show the
+        // planner's 3-bucket split; otherwise we fall back to the row-has-
+        // a-phone heuristic built at searchCSV time.
+        const stats = planResult?.stats || null;
+        const enrichCount = stats ? stats.enrichOwnerPostal : pendingLookup.rows.length;
+        const fileCount = stats ? stats.useFilePhone : (pendingLookup.skippedWithPhone || []).length;
+        const skipCount = stats ? stats.skipNoLead : 0;
+        const est = estimateLookupCost(enrichCount);
+        // Flat GPT surcharge: the planner uses gpt-4o-mini and batches
+        // 20 rows per call. Rough midpoint: ~$0.35 per 2k rows.
+        const gptSurcharge = useGptPlanner ? (pendingLookup.rows.length + (pendingLookup.skippedWithPhone?.length || 0)) * 0.00018 : 0;
+        const hasPlan = Boolean(planResult);
+        const cancel = () => { setPendingLookup(null); setPlanResult(null); };
+        // Primary button label depends on stage:
+        //  - GPT on, no plan yet   → "Prévisualiser" / "Preview"
+        //  - GPT on, plan computed → "Launch"
+        //  - GPT off               → "Launch" (current behavior)
+        const primaryLabel = useGptPlanner
+          ? (hasPlan ? t("pf_confirm_launch") : (lang === "en" ? "Preview plan" : "Prévisualiser le plan"))
+          : t("pf_confirm_launch");
         return (
-          <div className="mo" onClick={() => setPendingLookup(null)}>
-            <div className="mo-box" style={{maxWidth:480}} onClick={e => e.stopPropagation()}>
+          <div className="mo" onClick={cancel}>
+            <div className="mo-box" style={{maxWidth:520}} onClick={e => e.stopPropagation()}>
               <div className="mo-title">{t("pf_confirm_title")}</div>
+
+              {/* GPT planner checkbox. Kept compact — one line with a tooltip
+                  rationale. Disabled while the modal is mid-planning so the
+                  user can't flip it halfway through. */}
+              <label style={{
+                display:"flex",alignItems:"flex-start",gap:8,
+                background:"#F3F6FB",border:"1px solid #D6E2F1",borderRadius:8,
+                padding:"10px 12px",marginBottom:12,cursor: planningBusy ? "wait" : "pointer",
+              }}>
+                <input
+                  type="checkbox"
+                  checked={useGptPlanner}
+                  disabled={planningBusy}
+                  onChange={(e) => { setUseGptPlanner(e.target.checked); setPlanResult(null); }}
+                  style={{marginTop:2}}
+                />
+                <div style={{fontSize:12,lineHeight:1.5,color:"var(--text)"}}>
+                  <div style={{fontWeight:600,marginBottom:2}}>
+                    {lang === "en" ? "GPT-optimized lookup" : "Recherche optimisée par GPT"}
+                    <span style={{color:"var(--text3)",fontWeight:500,marginLeft:6,fontSize:11}}>
+                      {lang === "en" ? "(+$0.35 per 2k rows)" : "(+0,35 $ par 2k lignes)"}
+                    </span>
+                  </div>
+                  <div style={{fontSize:11,color:"var(--text2)"}}>
+                    {lang === "en"
+                      ? "Uses the owner's postal address + name to find their business before calling Places. Auto-skips rows without enough data to find a lead."
+                      : "Utilise l'adresse postale du propriétaire + son nom pour trouver son entreprise avant d'appeler Places. Ignore automatiquement les lignes sans données suffisantes."}
+                  </div>
+                </div>
+              </label>
+
               <div style={{fontSize:13,lineHeight:1.6,color:"var(--text2)",marginBottom:14}}>
-                {/* Rich inline rendering: key strings the count in <strong> */}
                 {lang === "en" ? (
-                  <>You are about to enrich <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong> {pendingLookup.rows.length === 1 ? "row" : "rows"} via Google Places.</>
+                  <>You are about to enrich <strong style={{color:"var(--text)"}}>{enrichCount}</strong> {enrichCount === 1 ? "row" : "rows"} via Google Places.</>
                 ) : (
-                  <>Vous êtes sur le point d'enrichir <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong> {pendingLookup.rows.length === 1 ? "ligne" : "lignes"} via Google Places.</>
+                  <>Vous êtes sur le point d'enrichir <strong style={{color:"var(--text)"}}>{enrichCount}</strong> {enrichCount === 1 ? "ligne" : "lignes"} via Google Places.</>
                 )}
               </div>
-              {skippedCount > 0 && (
+
+              {/* 3-bucket preview appears once the planner has run. Always
+                  show the "on file" bucket — it's useful in both modes. */}
+              {hasPlan ? (
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,marginBottom:14}}>
+                  <div style={{background:"#E9F7EF",border:"1px solid #BFE3CC",borderRadius:8,padding:"10px 10px"}}>
+                    <div style={{fontSize:11,color:"#1A7A3F",textTransform:"uppercase",letterSpacing:0.5,marginBottom:2}}>
+                      {lang === "en" ? "On file" : "Au fichier"}
+                    </div>
+                    <div style={{fontSize:20,fontWeight:700,color:"#1A7A3F"}}>{fileCount}</div>
+                    <div style={{fontSize:10,color:"#1A7A3F",marginTop:2}}>
+                      {lang === "en" ? "Zero API cost" : "Aucun coût API"}
+                    </div>
+                  </div>
+                  <div style={{background:"#FFF6E5",border:"1px solid #F5E5B0",borderRadius:8,padding:"10px 10px"}}>
+                    <div style={{fontSize:11,color:"#8A6A00",textTransform:"uppercase",letterSpacing:0.5,marginBottom:2}}>
+                      {lang === "en" ? "To enrich" : "À enrichir"}
+                    </div>
+                    <div style={{fontSize:20,fontWeight:700,color:"#8A6A00"}}>{enrichCount}</div>
+                    <div style={{fontSize:10,color:"#8A6A00",marginTop:2}}>
+                      {lang === "en" ? "GPT + Places" : "GPT + Places"}
+                    </div>
+                  </div>
+                  <div style={{background:"#F2F2F2",border:"1px solid #D6D6D6",borderRadius:8,padding:"10px 10px"}}>
+                    <div style={{fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:0.5,marginBottom:2}}>
+                      {lang === "en" ? "Manual review" : "À revoir"}
+                    </div>
+                    <div style={{fontSize:20,fontWeight:700,color:"#333"}}>{skipCount}</div>
+                    <div style={{fontSize:10,color:"#555",marginTop:2}}>
+                      {lang === "en" ? "Insufficient data" : "Données insuffisantes"}
+                    </div>
+                  </div>
+                </div>
+              ) : fileCount > 0 && (
                 <div style={{
                   background:"#E9F7EF",border:"1px solid #BFE3CC",borderRadius:8,
                   padding:"10px 12px",marginBottom:14,
                   fontSize:12,lineHeight:1.5,color:"#1A7A3F"
                 }}>
                   {lang === "en" ? (
-                    <><strong>{skippedCount}</strong> {skippedCount === 1 ? "row" : "rows"} already have a valid phone number on file — skipped automatically (no API cost). They will be added to the results as-is.</>
+                    <><strong>{fileCount}</strong> {fileCount === 1 ? "row" : "rows"} already have a valid phone number on file — skipped automatically (no API cost). They will be added to the results as-is.</>
                   ) : (
-                    <><strong>{skippedCount}</strong> {skippedCount === 1 ? "ligne a" : "lignes ont"} déjà un numéro de téléphone valide au fichier — ignorées automatiquement (aucun coût API). Elles seront ajoutées aux résultats telles quelles.</>
+                    <><strong>{fileCount}</strong> {fileCount === 1 ? "ligne a" : "lignes ont"} déjà un numéro de téléphone valide au fichier — ignorées automatiquement (aucun coût API). Elles seront ajoutées aux résultats telles quelles.</>
                   )}
                 </div>
               )}
+
               <div style={{background:"#FAF8F4",border:"1px solid var(--border)",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
                   <div style={{fontSize:12,color:"var(--text2)"}}>{t("pf_confirm_est_label")}</div>
-                  <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>{formatCost(est.mid)}</div>
+                  <div style={{fontSize:22,fontWeight:700,color:"var(--text)"}}>
+                    {formatCost(est.mid + gptSurcharge)}
+                  </div>
                 </div>
                 <div style={{fontSize:11,color:"var(--text3)",lineHeight:1.5}}>
-                  {t("pf_confirm_range", formatCost(est.lo), formatCost(est.hi))}<br/>
+                  {t("pf_confirm_range", formatCost(est.lo + gptSurcharge), formatCost(est.hi + gptSurcharge))}<br/>
                   {t("pf_confirm_calls", Math.round(est.callsLoTextSearch), Math.round(est.callsHiTextSearch), Math.round(est.callsLoDetails), Math.round(est.callsHiDetails))}<br/>
+                  {useGptPlanner && (
+                    <>
+                      {lang === "en"
+                        ? `+ GPT planner: ~${formatCost(gptSurcharge)}`
+                        : `+ Planificateur GPT : ~${formatCost(gptSurcharge)}`}<br/>
+                    </>
+                  )}
                   {t("pf_confirm_note")}
                 </div>
               </div>
+
+              {apiError && (
+                <div style={{background:"#FCE9E6",border:"1px solid #F5C9C2",color:"var(--red)",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12}}>
+                  {apiError}
+                </div>
+              )}
+
               <div className="mo-foot">
-                <button className="btn" onClick={() => setPendingLookup(null)}>{t("pf_confirm_cancel")}</button>
-                <button className="btn btn-gold" onClick={confirmPendingLookup}>
-                  {t("pf_confirm_launch")}
+                <button className="btn" onClick={cancel} disabled={planningBusy}>
+                  {t("pf_confirm_cancel")}
+                </button>
+                <button
+                  className="btn btn-gold"
+                  onClick={confirmPendingLookup}
+                  disabled={planningBusy}
+                >
+                  {planningBusy
+                    ? (lang === "en" ? "Planning…" : "Planification…")
+                    : primaryLabel}
                 </button>
               </div>
             </div>

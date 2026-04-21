@@ -19,6 +19,7 @@ import { createOpenAIService } from "./services/openaiService.js";
 import { createListingsService } from "./services/listingsService.js";
 import { createQualificationService } from "./services/qualificationService.js";
 import { runPhoneLookupBatch } from "./services/phoneEnrichment.js";
+import { planPhoneLookups } from "./services/phoneLookupPlanner.js";
 
 dotenv.config();
 
@@ -4559,6 +4560,11 @@ app.post("/api/phone-lookup", async (req, res) => {
   if (!Array.isArray(rows) || !rows.length) {
     return res.status(400).json({ ok: false, error: "rows[] requis." });
   }
+  // Optional pre-planned queries from /api/phone-lookup/plan. When present,
+  // the enrichment service will skip regex-based query building and use the
+  // planner's explicit strategy per row (use_file_phone / skip_no_lead /
+  // enrich_owner_postal). Non-array or missing → standard deterministic path.
+  const plans = Array.isArray(req.body?.plans) ? req.body.plans : null;
   // Budget gate: refuse BEFORE processing if today is already over cap.
   // Returns 402 (Payment Required) so the frontend can distinguish this
   // from generic 500 errors and show a clearer message.
@@ -4584,6 +4590,7 @@ app.post("/api/phone-lookup", async (req, res) => {
         detailsCache: placesDetailsCache,
         // Wrap fetch so every Places call increments the daily counter.
         fetchImpl: placesAccountingFetch,
+        plans,
       }
     });
     return res.json({
@@ -4599,6 +4606,59 @@ app.post("/api/phone-lookup", async (req, res) => {
   } catch (err) {
     console.error("[phone-lookup] batch failed:", err);
     return res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GPT planner endpoint — pre-flight pass over rows BEFORE calling Places.
+//
+// Input:  { rows: [...] } where each row is a rôle-d'évaluation-style record
+//         that carries owner name(s), owner postal address, building address,
+//         and any file-phone columns.
+//
+// Output: { ok: true, plans: [...], stats: {...} }
+//   - plans[i]   matches rows[i] and carries { strategy, filePhones?, plannedQuery?, owner, building, reason }
+//   - stats      aggregates: { total, useFilePhone, enrichOwnerPostal, skipNoLead, gptCallCount, gptTokensIn, gptTokensOut }
+//
+// Frontend calls this FIRST, shows a 3-bucket preview (on-file / to-enrich /
+// will-skip), then lets the user confirm before POSTing rows+plans back to
+// /api/phone-lookup. Rows with existing NANP phones cost zero API spend —
+// they bypass GPT AND Places. The planner batches 20 rows per GPT call at
+// concurrency 3, so a 100-row import ≈ 5 chat completions.
+//
+// Graceful fallback: if OPENAI_API_KEY is missing or GPT throws, planner
+// returns deterministic plans built from the row data alone (building address
+// instead of postal; no LLM-composed queries). Callers can proceed anyway.
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/api/phone-lookup/plan", async (req, res) => {
+  const rows = req.body?.rows;
+  if (!Array.isArray(rows) || !rows.length) {
+    return res.status(400).json({ ok: false, error: "rows[] requis." });
+  }
+  try {
+    const { plans, stats } = await planPhoneLookups({
+      rows,
+      // Pass the process-wide client. When null (no OPENAI_API_KEY), the
+      // planner falls back to deterministic plans per row — still useful for
+      // routing use_file_phone / skip_no_lead decisions.
+      openaiClient: openai,
+    });
+    return res.json({
+      ok: true,
+      plans,
+      stats,
+      gptAvailable: Boolean(openai),
+    });
+  } catch (err) {
+    // Planner should handle GPT failures internally and return deterministic
+    // plans; an actual throw here means a programmer bug. Return 500 but keep
+    // the response shape compatible so frontend can still show an error.
+    console.error("[phone-lookup/plan] failed:", err);
+    return res.status(500).json({
+      ok: false,
+      error: String(err?.message || err),
+      gptAvailable: Boolean(openai),
+    });
   }
 });
 

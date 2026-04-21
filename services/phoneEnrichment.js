@@ -935,7 +935,7 @@ export function applyGlobalPhoneCap(results, cap) {
   });
 }
 
-async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new Map(), detailsCache = new Map() }) {
+async function lookupOneRow({ rawRow, plan = null, client, opts, idFactory, queryCache = new Map(), detailsCache = new Map() }) {
   const id = idFactory();
   const norm = normalizeRow(rawRow);
   const trace = [];
@@ -956,17 +956,112 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
     trace.push("warn_no_civic_parsed");
   }
 
+  // ── GPT plan fast paths ────────────────────────────────────────────────────
+  // The planner service (services/phoneLookupPlanner.js) can pre-decide a row:
+  //   - "use_file_phone": already has phones, skip Places (zero API cost).
+  //   - "skip_no_lead":   GPT classified as not-a-business; flag for manual review.
+  //   - "enrich_owner_postal": one GPT-crafted Text Search query replaces the
+  //                            whole buildQueries() output. No nearby, no address
+  //                            fallback, no directory scrape — we trust the plan.
+  // Returns are shaped identically to the non-planned path so downstream consumers
+  // (UI, lead exporter) treat them uniformly.
+  if (plan && plan.strategy === "use_file_phone") {
+    trace.push("plan:use_file_phone");
+    const phones = Array.isArray(plan.filePhones) && plan.filePhones.length
+      ? mergePhoneLists(plan.filePhones, fileInputPhones)
+      : fileInputPhones;
+    const status = phones.length ? "found" : "not_found";
+    return {
+      id,
+      inputName: plan.owner?.displayName || norm.businessNames[0] || "",
+      inputAddress: norm.buildingAddress,
+      utilisation: norm.utilisation || "",
+      matchedName: "",
+      matchedAddress: "",
+      phone: phones[0] || "",
+      inputPhones: phones,
+      onlinePhones: [],
+      directoryPhones: [],
+      pjDirectoryPhones: [],
+      c411DirectoryPhones: [],
+      fileInputPhones: phones,
+      filePhoneColumns,
+      website: "",
+      source: phones.length ? "file" : "",
+      confidence: phones.length ? 100 : 0,
+      status,
+      statusLabel: status === "found" ? "Trouvé" : "Non trouvé",
+      candidates: [],
+      rejectedCandidates: [],
+      trace,
+      searchedAt: new Date().toISOString(),
+      ownerKey: plan.owner?.ownerKey || "",
+      planStrategy: plan.strategy,
+      planReason: plan.reason || "",
+      planOwner: plan.owner || null,
+      planBuilding: plan.building || null,
+    };
+  }
+  if (plan && plan.strategy === "skip_no_lead") {
+    trace.push(`plan:skip_no_lead:${plan.reason || "classified_not_business"}`);
+    return {
+      id,
+      inputName: plan.owner?.displayName || norm.businessNames[0] || "",
+      inputAddress: norm.buildingAddress,
+      utilisation: norm.utilisation || "",
+      matchedName: "",
+      matchedAddress: "",
+      phone: "",
+      inputPhones: [],
+      onlinePhones: [],
+      directoryPhones: [],
+      pjDirectoryPhones: [],
+      c411DirectoryPhones: [],
+      fileInputPhones: [],
+      filePhoneColumns,
+      website: "",
+      source: "",
+      confidence: 0,
+      status: "needs_manual_review",
+      statusLabel: "À revoir",
+      candidates: [],
+      rejectedCandidates: [],
+      trace,
+      searchedAt: new Date().toISOString(),
+      ownerKey: plan.owner?.ownerKey || "",
+      planStrategy: plan.strategy,
+      planReason: plan.reason || "",
+    };
+  }
+
   // Residential-only rows (Logement + all-Physique owners) have no registered
   // business at this address. Skip every online API call — just return file phones.
-  if (norm.isResidential) {
+  if (norm.isResidential && !plan) {
     trace.push("skip:residential_all_physique");
   }
 
-  const queries = norm.isResidential ? [] : buildQueries(norm);
-  if (!queries.length && !norm.isResidential) {
-    trace.push("no_queries_built");
+  // Build the query list. When the planner provided a plannedQuery, use ONLY
+  // that one (shaped like a "business" query since the expectedName is set and
+  // the expectedAddress is the owner's mailing address). Otherwise fall back
+  // to the regex-driven buildQueries() path.
+  let queries;
+  if (plan && plan.strategy === "enrich_owner_postal" && plan.plannedQuery?.query) {
+    const pq = plan.plannedQuery;
+    queries = [{
+      type: "business",
+      query: pq.query,
+      expectedAddress: pq.expectedAddress || "",
+      expectedCivic: pq.expectedCivic || "",
+      expectedName: pq.expectedName || "",
+    }];
+    trace.push(`plan:enrich_owner_postal:${pq.query.slice(0, 80)}`);
   } else {
-    for (const q of queries) trace.push(`query[${q.type}]:${q.query}`);
+    queries = norm.isResidential ? [] : buildQueries(norm);
+    if (!queries.length && !norm.isResidential) {
+      trace.push("no_queries_built");
+    } else {
+      for (const q of queries) trace.push(`query[${q.type}]:${q.query}`);
+    }
   }
 
   const accepted = [];
@@ -1169,15 +1264,22 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
     confidence: online.length ? Number(best?.confidence || 0) : 0,
     status,
     statusLabel: status === "found" ? "Trouvé" : "Non trouvé",
+    // Include ALL civic-matched (accepted) candidates, not just the top-1 "best".
+    // Downstream Leads export walks every candidate so one owner's lookup can
+    // attach multiple matched businesses/phones. We still filter out `best`
+    // (already surfaced at the top level) and cap at 25 to avoid pathological
+    // blowup on extremely noisy queries — but 4 was too aggressive.
     candidates: ranked
       .filter((c) => c !== best)
-      .slice(0, 4)
+      .slice(0, 25)
       .map((c) => ({
         name: c.name,
         address: c.address,
         phone: c.phone,
         website: c.website,
         confidence: c.confidence,
+        placeId: c.placeId,
+        queryType: c.queryType,
       })),
     rejectedCandidates: rejected.slice(0, 8).map((c) => ({
       name: c.name,
@@ -1187,6 +1289,14 @@ async function lookupOneRow({ rawRow, client, opts, idFactory, queryCache = new 
     })),
     trace,
     searchedAt: new Date().toISOString(),
+    // Plan metadata (only present when enrichment ran behind the GPT planner).
+    // Frontend uses `ownerKey` + `planOwner` to group leads by owner during
+    // auto-export. Null when the deterministic path was used.
+    ownerKey: plan?.owner?.ownerKey || "",
+    planStrategy: plan?.strategy || "",
+    planReason: plan?.reason || "",
+    planOwner: plan?.owner || null,
+    planBuilding: plan?.building || null,
   };
 }
 
@@ -1222,6 +1332,17 @@ export async function runPhoneLookupBatch({
   }
   const capped = rows.slice(0, opts.maxRows);
 
+  // Optional pre-planned queries from services/phoneLookupPlanner.js. When
+  // provided, each plan at `plans[i]` matches `rows[i]` and tells lookupOneRow:
+  //   - strategy: "use_file_phone" → skip Places entirely, reuse file phones
+  //   - strategy: "skip_no_lead"   → mark row as needs_manual_review
+  //   - strategy: "enrich_owner_postal" → use plan.plannedQuery as the single
+  //     Places text-search query (civic-match gate still applies)
+  // Rows without a matching plan fall back to the existing deterministic
+  // buildQueries() path. Callers may pass a shorter array (only plan the
+  // interesting rows) or omit `plans` entirely for full backward compat.
+  const plans = Array.isArray(options.plans) ? options.plans : null;
+
   const client = opts.offline
     ? null
     : createPlacesClient({ apiKey, fetchImpl: opts.fetchImpl });
@@ -1241,8 +1362,25 @@ export async function runPhoneLookupBatch({
   // rows share a place_id (common when the same LLC owns multiple properties).
   const detailsCache = opts.detailsCache || new Map();
   const results = [];
-  for (const rawRow of capped) {
-    const r = await lookupOneRow({ rawRow, client, opts, idFactory, queryCache, detailsCache });
+  for (let i = 0; i < capped.length; i++) {
+    const rawRow = capped[i];
+    // Match plan to row by index. If planner returned a plan with an explicit
+    // `rowIdx` that disagrees with the caller's row order, we trust `rowIdx`
+    // and search for it. Otherwise we fall back to positional matching.
+    let plan = null;
+    if (plans) {
+      const byIdx = plans.find((p) => p && typeof p.rowIdx === "number" && p.rowIdx === i);
+      plan = byIdx || plans[i] || null;
+    }
+    const r = await lookupOneRow({
+      rawRow,
+      plan,
+      client,
+      opts,
+      idFactory,
+      queryCache,
+      detailsCache,
+    });
     results.push(r);
     if (opts.perRowDelayMs > 0 && client) {
       await new Promise((resolve) => setTimeout(resolve, opts.perRowDelayMs));
