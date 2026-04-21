@@ -35,12 +35,17 @@ function clusterDeals(items, zoom) {
   return groups;
 }
 
-export default function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh - 140px)" }) {
+export default function DealMap({ deals, onOpenDeal, interactive = true, height = "calc(100vh - 140px)", lang, t }) {
   const mapElRef = useRef(null);
   const mapRef = useRef(null);
   const markerLayerRef = useRef(null);
   const fittedRef = useRef(false);
   const [zoom, setZoom] = useState(7);
+
+  // Labels for popup buttons. Fall back to FR if no t() prop — existing
+  // non-interactive dashboard previews don't thread lang through.
+  const labelOpen = (t ? t("map_popup_open") : null) || (lang === "en" ? "Open deal" : "Ouvrir le deal");
+  const labelOpenShort = (lang === "en" ? "Open" : "Ouvrir");
 
   useEffect(() => {
     const L = window.L;
@@ -55,6 +60,7 @@ export default function DealMap({ deals, onOpenDeal, interactive = true, height 
       keyboard: interactive,
       touchZoom: interactive,
       attributionControl: true,
+      closePopupOnClick: true,
     });
     map.setView([46.8139, -71.2080], 7);
 
@@ -67,9 +73,19 @@ export default function DealMap({ deals, onOpenDeal, interactive = true, height 
     mapRef.current = map;
     setZoom(map.getZoom());
 
-    setTimeout(() => map.invalidateSize(), 0);
+    // Several size-dependent events need invalidateSize() to redraw tiles:
+    //  - Initial mount (container may still be growing to fit flex parent)
+    //  - Window resize (rotate phone, resize desktop, DevTools toggle)
+    //  - Mobile drawer close (container width changes when sidebar slides out)
+    const kick = () => map.invalidateSize();
+    setTimeout(kick, 0);
+    setTimeout(kick, 200);
+    window.addEventListener("resize", kick);
+    window.addEventListener("orientationchange", kick);
 
     return () => {
+      window.removeEventListener("resize", kick);
+      window.removeEventListener("orientationchange", kick);
       map.remove();
       mapRef.current = null;
       markerLayerRef.current = null;
@@ -114,7 +130,7 @@ export default function DealMap({ deals, onOpenDeal, interactive = true, height 
             <div class="map-popup-row">Contact: ${esc(deal.contact?.name || "N/A")}</div>
             <div class="map-popup-row">Priorité: <span class="map-pill" style="background:${priority.color}22;color:${priority.color}">${esc(priority.label)}</span></div>
             <div class="map-popup-row">Follow-up: ${esc(deal.followUpDate || "Non défini")}</div>
-            <button class="map-open-btn" data-open-deal="${esc(deal.id)}">Ouvrir le deal</button>
+            <button class="map-open-btn" data-open-deal="${esc(deal.id)}">${esc(labelOpen)}</button>
           </div>
         `);
       } else {
@@ -129,12 +145,15 @@ export default function DealMap({ deals, onOpenDeal, interactive = true, height 
           `<div class="map-popup-row">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${stageColor(deal.stage)};margin-right:6px;"></span>
             ${esc(dealLabel(deal))}
-            <button class="map-open-btn" data-open-deal="${esc(deal.id)}" style="padding:3px 7px;font-size:10px;margin-top:4px;margin-left:8px;">Ouvrir</button>
+            <button class="map-open-btn" data-open-deal="${esc(deal.id)}" style="padding:3px 7px;font-size:10px;margin-top:4px;margin-left:8px;">${esc(labelOpenShort)}</button>
           </div>`
         )).join("");
+        const clusterTitle = lang === "en"
+          ? `${group.items.length} nearby deals`
+          : `${group.items.length} deals proches`;
         marker.bindPopup(`
           <div class="map-popup">
-            <div class="map-popup-title">${group.items.length} deals proches</div>
+            <div class="map-popup-title">${esc(clusterTitle)}</div>
             ${rows}
           </div>
         `);
@@ -160,13 +179,20 @@ export default function DealMap({ deals, onOpenDeal, interactive = true, height 
     const dealId = target.getAttribute("data-open-deal");
     if (!dealId) return;
     event.preventDefault();
+    // Close the popup so when the user comes back from the deal view they
+    // land on a clean map (not on a stale popup over old coordinates).
+    if (mapRef.current) mapRef.current.closePopup();
     onOpenDeal(dealId);
   }, [onOpenDeal]);
 
   const mapHeight = typeof height === "number" ? `${height}px` : height;
 
   if (!window.L) {
-    return <div className="status-note">Leaflet n&apos;est pas chargé.</div>;
+    return (
+      <div className="status-note">
+        {lang === "en" ? "Map library isn't loaded yet." : "Leaflet n\u2019est pas chargé."}
+      </div>
+    );
   }
 
   return (

@@ -244,6 +244,9 @@ const I18N = {
     map_status_shown: (n) => `${n} deal(s) affiché(s) sur la carte.`,
     map_status_empty: "Aucun deal géocodé pour ce filtre. Ajoutez une adresse dans CRM & Suivi pour afficher un pin.",
     map_err_label: "la carte",
+    map_popup_open: "Ouvrir le deal",
+    map_close: "Fermer la carte",
+    map_back: "← Tableau de bord",
 
     // --- Follow-ups view ---
     followups_empty_title: "Aucun Follow-up",
@@ -835,6 +838,9 @@ const I18N = {
     map_status_shown: (n) => `${n} deal${n === 1 ? "" : "s"} shown on the map.`,
     map_status_empty: "No geocoded deals for this filter. Add an address in CRM & Follow-up to drop a pin.",
     map_err_label: "the map",
+    map_popup_open: "Open deal",
+    map_close: "Close map",
+    map_back: "← Dashboard",
 
     // --- Follow-ups view ---
     followups_empty_title: "No Follow-ups",
@@ -1625,6 +1631,12 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .map-overlay{position:absolute;z-index:500;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
 .map-overlay.legend{left:12px;top:12px;padding:10px}
 .map-overlay.filters{right:12px;top:12px;padding:8px}
+.map-close-btn{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:600;
+  background:var(--text);color:#fff;border:none;border-radius:999px;
+  padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;
+  box-shadow:0 4px 14px rgba(0,0,0,0.22);transition:background .15s}
+.map-close-btn:hover{background:#000}
+.map-close-btn:active{transform:translateX(-50%) scale(.97)}
 .map-overlay h4{font-size:10px;letter-spacing:.8px;color:var(--text3);text-transform:uppercase;margin-bottom:6px}
 .legend-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-bottom:4px;white-space:nowrap}
 .legend-row:last-child{margin-bottom:0}
@@ -1792,6 +1804,15 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .kb-card{padding:10px;font-size:13px}
   /* Filter bar selects single-column when wrapped */
   .om-toolbar select{flex:1 1 48%}
+  /* Map: close button sits at top, overlays stack below */
+  .map-close-btn{top:8px;padding:8px 14px;font-size:12px}
+  .map-overlay.legend{left:8px;top:52px;padding:8px;max-width:45vw}
+  .map-overlay.filters{right:8px;top:52px;padding:6px}
+  .map-overlay.legend h4{font-size:9px;margin-bottom:4px}
+  .legend-row{font-size:10px;margin-bottom:2px}
+  .map-filter{min-width:130px}
+  .map-filter select{max-width:140px}
+  .map-viewport{height:calc(100vh - 180px)}
 }
 
 /* iPhone notch safe area */
@@ -3012,9 +3033,18 @@ export default function App() {
                   <div className="map-wrap">
                     <ErrorBoundary label={t("map_err_label")}>
                       <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>{t("dashboard_map_loading")}</div>}>
-                        <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
+                        <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} lang={lang} t={t} />
                       </Suspense>
                     </ErrorBoundary>
+                    <button
+                      type="button"
+                      className="map-close-btn"
+                      onClick={() => setView("dashboard")}
+                      title={t("map_close")}
+                      aria-label={t("map_close")}
+                    >
+                      {t("map_back")}
+                    </button>
                     <div className="map-overlay legend">
                       <h4>{t("map_stages_header")}</h4>
                       {STAGES.map((stage) => (
