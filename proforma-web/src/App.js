@@ -210,15 +210,6 @@ const I18N = {
     dashboard_kpi_overdue: "Follow-ups Retard",
     dashboard_kpi_overdue_action: "Action requise",
     dashboard_kpi_overdue_ok: "Sous contrôle",
-    dashboard_today_title: "À faire aujourd'hui",
-    dashboard_today_empty: "Rien de prévu — bonne journée.",
-    dashboard_today_overdue: (n) => `${n} en retard`,
-    dashboard_today_due: (n) => `${n} aujourd'hui`,
-    dashboard_today_events: (n) => `${n} événement${n > 1 ? "s" : ""}`,
-    dashboard_today_followup_label: "Follow-up",
-    dashboard_today_event_label: "Événement",
-    dashboard_today_overdue_by: (n) => `en retard de ${n} jour${n > 1 ? "s" : ""}`,
-    dashboard_today_due_today: "à faire aujourd'hui",
     dashboard_kpi_prospection: "En Prospection",
     dashboard_kpi_prospection_sub: "Flux actif",
     dashboard_section_pipeline: "Pipeline des Acquisitions",
@@ -253,9 +244,6 @@ const I18N = {
     map_status_shown: (n) => `${n} deal(s) affiché(s) sur la carte.`,
     map_status_empty: "Aucun deal géocodé pour ce filtre. Ajoutez une adresse dans CRM & Suivi pour afficher un pin.",
     map_err_label: "la carte",
-    map_popup_open: "Ouvrir le deal",
-    map_close: "Fermer la carte",
-    map_back: "← Tableau de bord",
 
     // --- Follow-ups view ---
     followups_empty_title: "Aucun Follow-up",
@@ -813,15 +801,6 @@ const I18N = {
     dashboard_kpi_overdue: "Overdue Follow-ups",
     dashboard_kpi_overdue_action: "Action needed",
     dashboard_kpi_overdue_ok: "On track",
-    dashboard_today_title: "To do today",
-    dashboard_today_empty: "Nothing scheduled — enjoy your day.",
-    dashboard_today_overdue: (n) => `${n} overdue`,
-    dashboard_today_due: (n) => `${n} today`,
-    dashboard_today_events: (n) => `${n} event${n > 1 ? "s" : ""}`,
-    dashboard_today_followup_label: "Follow-up",
-    dashboard_today_event_label: "Event",
-    dashboard_today_overdue_by: (n) => `${n} day${n > 1 ? "s" : ""} overdue`,
-    dashboard_today_due_today: "due today",
     dashboard_kpi_prospection: "Prospecting",
     dashboard_kpi_prospection_sub: "Active flow",
     dashboard_section_pipeline: "Acquisitions Pipeline",
@@ -856,9 +835,6 @@ const I18N = {
     map_status_shown: (n) => `${n} deal${n === 1 ? "" : "s"} shown on the map.`,
     map_status_empty: "No geocoded deals for this filter. Add an address in CRM & Follow-up to drop a pin.",
     map_err_label: "the map",
-    map_popup_open: "Open deal",
-    map_close: "Close map",
-    map_back: "← Dashboard",
 
     // --- Follow-ups view ---
     followups_empty_title: "No Follow-ups",
@@ -1644,18 +1620,11 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
 .map-layout{position:relative}
 .map-wrap{position:relative;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
-.map-viewport{width:100%;height:calc(100vh - 140px);height:calc(100dvh - 140px)}
+.map-viewport{width:100%;height:calc(100vh - 140px)}
 .map-viewport.mini{height:280px}
 .map-overlay{position:absolute;z-index:500;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
 .map-overlay.legend{left:12px;top:12px;padding:10px}
 .map-overlay.filters{right:12px;top:12px;padding:8px}
-.map-close-btn{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;
-  background:var(--text);color:#fff;border:none;border-radius:999px;
-  padding:11px 22px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.2px;
-  min-height:44px;box-shadow:0 6px 20px rgba(0,0,0,0.28);transition:background .15s;
-  -webkit-tap-highlight-color:transparent}
-.map-close-btn:hover{background:#000}
-.map-close-btn:active{transform:translateX(-50%) scale(.97);background:#000}
 .map-overlay h4{font-size:10px;letter-spacing:.8px;color:var(--text3);text-transform:uppercase;margin-bottom:6px}
 .legend-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-bottom:4px;white-space:nowrap}
 .legend-row:last-child{margin-bottom:0}
@@ -1823,31 +1792,6 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .kb-card{padding:10px;font-size:13px}
   /* Filter bar selects single-column when wrapped */
   .om-toolbar select{flex:1 1 48%}
-  /* Map: close button sits at top, overlays stack below */
-  .map-close-btn{top:10px;padding:10px 18px;font-size:13px;min-height:44px}
-  .map-overlay.legend{left:8px;top:64px;padding:8px;max-width:45vw}
-  .map-overlay.filters{right:8px;top:64px;padding:6px}
-  .map-overlay.legend h4{font-size:9px;margin-bottom:4px}
-  .legend-row{font-size:10px;margin-bottom:2px}
-  .map-filter{min-width:130px}
-  .map-filter select{max-width:140px}
-  .map-viewport{height:calc(100vh - 200px);height:calc(100dvh - 200px)}
-  /* iOS: bump common tap targets from 40px to 44px (Apple HIG minimum) */
-  button,.btn,.nav-item{min-height:44px}
-  /* Remove the gray flash on tap — we manage our own :active states */
-  button,.btn,.nav-item,a{-webkit-tap-highlight-color:transparent}
-}
-
-/* Kill iOS 300ms click delay + gray flash globally on interactive surfaces */
-button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
-  touch-action:manipulation;
-  -webkit-tap-highlight-color:transparent;
-}
-
-/* iOS Safari: use dynamic viewport height so 100vh doesn't hide behind the
-   URL bar. The 100vh fallback stays for non-supporting browsers. */
-@supports (height:100dvh){
-  .app-shell{min-height:100dvh}
 }
 
 /* iPhone notch safe area */
@@ -1855,7 +1799,6 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
   .topbar{padding-top:calc(14px + env(safe-area-inset-top))}
   .sidebar{padding-top:env(safe-area-inset-top)}
   .content{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
-  .chat-window{padding-bottom:env(safe-area-inset-bottom)}
 }
 `;
 
@@ -1942,92 +1885,6 @@ export default function App() {
   // toggle button on wider viewports so desktop stays unchanged.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
-
-  // ─── Mobile detection ────────────────────────────────────────────────────
-  // Tracks ≤760px viewports (phone-size). Used to hide the map entirely on
-  // phones — Leaflet has been unreliable on Gaylord's device and the value
-  // on a small screen is low. Desktop/tablet keep the full map experience.
-  // Re-evaluates on resize + orientation change so rotating the phone works.
-  const [isPhone, setIsPhone] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia("(max-width: 760px)").matches;
-  });
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(max-width: 760px)");
-    const onChange = (e) => setIsPhone(e.matches);
-    // Safari pre-14 uses addListener instead of addEventListener.
-    if (mq.addEventListener) mq.addEventListener("change", onChange);
-    else mq.addListener(onChange);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
-      else mq.removeListener(onChange);
-    };
-  }, []);
-
-  // If we're on phone and somehow landed on the map view (e.g. stale tab,
-  // deep link, cached state), bounce to dashboard. Belt-and-suspenders —
-  // the nav item is also hidden on phones below.
-  useEffect(() => {
-    if (isPhone && view === "map") setView("dashboard");
-  }, [isPhone, view]);
-
-  // Global ESC handler: closes the mobile drawer if open, then falls back
-  // to popping us out of any full-viewport "stuck" view (map, calendar)
-  // back to Dashboard. Gives keyboard users and iPad-with-keyboard users a
-  // reliable escape hatch.
-  useEffect(() => {
-    const onKey = (event) => {
-      if (event.key !== "Escape") return;
-      if (mobileNavOpen) {
-        setMobileNavOpen(false);
-      } else if (view === "map" || view === "calendar") {
-        setView("dashboard");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line
-  }, [mobileNavOpen, view]);
-
-  // ─── Daily reminder scan (follow-ups + calendar events) ────────────────────
-  // Pings /api/push/scan-reminders on each mount and then hourly while the tab
-  // is open. The backend is idempotent (ledger entry per tag+day in
-  // socle_crm_state.__reminderLog), so running it "too often" is a no-op —
-  // the user only gets each reminder once per day. This replaces the need
-  // for a dedicated cron job as long as someone opens the app daily.
-  useEffect(() => {
-    if (!currentUser) return;
-    let cancelled = false;
-    const kick = () => {
-      if (cancelled) return;
-      // Fire-and-forget: a failure here just means no push today; the next
-      // tab load will retry and the ledger keeps everything idempotent.
-      fetch("/api/push/scan-reminders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }).catch(() => {});
-    };
-    // Delay the first kick by 8 s so server hydration + push subscription
-    // have time to land before we try to notify. Then poll every 15 minutes
-    // — the backend ledger (state.__reminderLog[tag]=todayISO) makes the
-    // endpoint idempotent, so running it "often" is safe. This gets a newly
-    // added same-day follow-up on the user's phone within 15 minutes
-    // instead of up to an hour.
-    const first = setTimeout(kick, 8000);
-    const interval = setInterval(kick, 15 * 60 * 1000); // every 15 min
-    // Also kick when the tab regains focus after being backgrounded — catches
-    // the case where the phone was asleep and the user comes back to the app.
-    const onVisibility = () => { if (!document.hidden) kick(); };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      cancelled = true;
-      clearTimeout(first);
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [currentUser]);
   const persistTimerRef = useRef(null);
   // Guard so the debounced persist effect doesn't fire a server write during
   // the initial mount/hydration — otherwise we'd immediately overwrite the
@@ -2744,67 +2601,6 @@ export default function App() {
     };
   }, [deals]);
 
-  // ─── Today's alerts (dashboard banner) ─────────────────────────────────────
-  // Drives the in-app "À faire aujourd'hui" widget. Includes:
-  //   - overdue follow-ups (followUpDate < today, deal not lost)
-  //   - follow-ups due today
-  //   - deal events scheduled for today
-  // Each item has { kind, dealId, title, sub, sortKey, urgency }. Sorted so
-  // overdue items float to the top. React recomputes on every state change
-  // of `deals`, so adding a follow-up updates the banner instantly — no
-  // polling or push round-trip needed for local changes.
-  const todaysAlerts = useMemo(() => {
-    const todayISO = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "America/Toronto",
-      year: "numeric", month: "2-digit", day: "2-digit",
-    }).format(new Date());
-    const items = [];
-    deals.forEach((d) => {
-      if (!d || d.stage === "perdu") return;
-      const label = d.title || dealLabel(d) || d.id;
-      // Follow-up due today or overdue
-      if (typeof d.followUpDate === "string" && d.followUpDate && d.followUpDate <= todayISO) {
-        const daysOverdue = Math.round(
-          (Date.parse(todayISO + "T12:00:00Z") - Date.parse(d.followUpDate + "T12:00:00Z")) / 86400000
-        );
-        items.push({
-          kind: "followup",
-          dealId: d.id,
-          title: label,
-          daysOverdue,
-          isOverdue: daysOverdue > 0,
-          sortKey: -daysOverdue, // most overdue first
-        });
-      }
-      // Events scheduled for today
-      (Array.isArray(d.events) ? d.events : []).forEach((ev) => {
-        if (!ev || ev.date !== todayISO) return;
-        items.push({
-          kind: "event",
-          dealId: d.id,
-          eventId: ev.id,
-          title: ev.title || label,
-          sub: label,
-          time: ev.time || "",
-          sortKey: ev.time ? Number(String(ev.time).replace(":", "")) : 9999,
-        });
-      });
-    });
-    items.sort((a, b) => {
-      // Overdue follow-ups first, then today's follow-ups, then events by time
-      const rank = (x) =>
-        x.kind === "followup" && x.isOverdue ? 0 :
-        x.kind === "followup" ? 1 : 2;
-      const rankDiff = rank(a) - rank(b);
-      if (rankDiff !== 0) return rankDiff;
-      return a.sortKey - b.sortKey;
-    });
-    const overdueCount  = items.filter(i => i.kind === "followup" && i.isOverdue).length;
-    const dueTodayCount = items.filter(i => i.kind === "followup" && !i.isOverdue).length;
-    const eventsCount   = items.filter(i => i.kind === "event").length;
-    return { items, overdueCount, dueTodayCount, eventsCount };
-  }, [deals]);
-
   const followUps = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     return deals.filter(d => d.followUpDate)
@@ -2898,10 +2694,7 @@ export default function App() {
             {[
               { id:"dashboard", label:t("nav_dashboard") },
               { id:"pipeline", label:t("nav_pipeline") },
-              // Map is desktop-only — Leaflet has been flaky on phones and
-              // the value on a ≤760px screen is low. Hidden from the phone
-              // nav; desktop/tablet keep it.
-              ...(isPhone ? [] : [{ id:"map", label:t("nav_map") }]),
+              { id:"map", label:t("nav_map") },
               { id:"followups", label:t("nav_followups") },
               { id:"calendar", label:t("nav_calendar") },
               // Leads is now the merged owner-grouped page — "Investors"
@@ -2915,19 +2708,7 @@ export default function App() {
               <button
                 key={item.id}
                 className={`nav-item${view===item.id?" active":""}`}
-                onClick={() => {
-                  // Tapping the active nav item again is a common "take me
-                  // back" instinct on mobile. Toggle heavy views (map,
-                  // calendar) back to Dashboard instead of silently doing
-                  // nothing — gives users a second escape hatch if the
-                  // close button isn't obvious.
-                  if (view === item.id && (item.id === "map" || item.id === "calendar")) {
-                    setView("dashboard");
-                  } else {
-                    setView(item.id);
-                  }
-                  closeMobileNav();
-                }}
+                onClick={() => { setView(item.id); closeMobileNav(); }}
                 onMouseEnter={NAV_PRELOAD[item.id]}
                 onFocus={NAV_PRELOAD[item.id]}
               >
@@ -3062,107 +2843,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {/* "À faire aujourd'hui" — in-app notification banner. Mirrors
-                    what the push-scan endpoint fires, but lives on the page
-                    so users get a visible cue every visit regardless of
-                    whether push is enabled. */}
-                <div
-                  className="card sec"
-                  style={{
-                    marginBottom: 16,
-                    borderLeft: todaysAlerts.overdueCount > 0
-                      ? "4px solid var(--red, #C0392B)"
-                      : todaysAlerts.items.length > 0
-                      ? "4px solid #D4A017"
-                      : "4px solid var(--green, #2D8C4E)",
-                  }}
-                >
-                  <div className="sec-head" style={{flexWrap: "wrap", gap: 8}}>
-                    <div className="sec-title">
-                      🔔 {t("dashboard_today_title")}
-                    </div>
-                    <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
-                      {todaysAlerts.overdueCount > 0 && (
-                        <span className="k-count" style={{background: "#FCE9E6", color: "#C0392B", fontWeight: 700}}>
-                          {t("dashboard_today_overdue", todaysAlerts.overdueCount)}
-                        </span>
-                      )}
-                      {todaysAlerts.dueTodayCount > 0 && (
-                        <span className="k-count" style={{background: "#FFF4D6", color: "#8D6A15", fontWeight: 700}}>
-                          {t("dashboard_today_due", todaysAlerts.dueTodayCount)}
-                        </span>
-                      )}
-                      {todaysAlerts.eventsCount > 0 && (
-                        <span className="k-count" style={{background: "#EAF1FF", color: "#2563EB", fontWeight: 700}}>
-                          {t("dashboard_today_events", todaysAlerts.eventsCount)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {todaysAlerts.items.length === 0 ? (
-                    <div className="status-note" style={{padding: "6px 2px"}}>
-                      ✓ {t("dashboard_today_empty")}
-                    </div>
-                  ) : (
-                    <div style={{display: "flex", flexDirection: "column", gap: 6}}>
-                      {todaysAlerts.items.slice(0, 8).map((item, idx) => {
-                        const tone =
-                          item.kind === "event" ? {bg: "#EAF1FF", fg: "#2563EB", icon: "📅"} :
-                          item.isOverdue       ? {bg: "#FCE9E6", fg: "#C0392B", icon: "⚠️"} :
-                                                 {bg: "#FFF4D6", fg: "#8D6A15", icon: "🔔"};
-                        const sub =
-                          item.kind === "event"
-                            ? (item.time ? `${item.time} · ${item.sub}` : item.sub)
-                            : item.isOverdue
-                            ? t("dashboard_today_overdue_by", item.daysOverdue)
-                            : t("dashboard_today_due_today");
-                        return (
-                          <button
-                            key={`${item.kind}-${item.dealId}-${item.eventId || idx}`}
-                            type="button"
-                            onClick={() => openDeal(item.dealId)}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              padding: "8px 10px",
-                              border: "1px solid var(--border)",
-                              borderRadius: 10,
-                              background: "#fff",
-                              cursor: "pointer",
-                              textAlign: "left",
-                              width: "100%",
-                              minHeight: 44,
-                            }}
-                          >
-                            <span style={{
-                              flex: "0 0 auto",
-                              fontSize: 14,
-                              width: 28, height: 28,
-                              display: "grid", placeItems: "center",
-                              borderRadius: 999,
-                              background: tone.bg, color: tone.fg,
-                            }}>{tone.icon}</span>
-                            <span style={{flex: 1, minWidth: 0}}>
-                              <span style={{
-                                display: "block", fontWeight: 700, fontSize: 13,
-                                color: "var(--text)",
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                              }}>{item.title}</span>
-                              <span style={{
-                                display: "block", fontSize: 11, marginTop: 2,
-                                color: tone.fg, fontWeight: 600,
-                              }}>
-                                {item.kind === "event" ? t("dashboard_today_event_label") : t("dashboard_today_followup_label")} · {sub}
-                              </span>
-                            </span>
-                            <span style={{flex: "0 0 auto", color: "var(--text3)", fontSize: 18}}>›</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
                 <div className="kpi-grid">
                   <div className="card kpi">
                     <div className="kpi-ico" style={{background:"#F5EDD6",color:"#8D742D"}}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
@@ -3200,20 +2880,18 @@ export default function App() {
                           );
                         })}
                       </div>
-                      {!isPhone && (
-                        <div>
-                          <div className="map-wrap">
-                            <ErrorBoundary label={t("map_err_label")}>
-                              <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>{t("dashboard_map_loading")}</div>}>
-                                <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
-                              </Suspense>
-                            </ErrorBoundary>
-                          </div>
-                          <div className="map-mini-foot">
-                            <button className="btn btn-sm" onClick={() => setView("map")}>{t("dashboard_map_full")}</button>
-                          </div>
+                      <div>
+                        <div className="map-wrap">
+                          <ErrorBoundary label={t("map_err_label")}>
+                            <Suspense fallback={<div style={{height:280,display:"grid",placeItems:"center",color:"var(--text2)",fontSize:12}}>{t("dashboard_map_loading")}</div>}>
+                              <DealMap deals={geocodedDeals} onOpenDeal={openDeal} interactive={false} height={280} />
+                            </Suspense>
+                          </ErrorBoundary>
                         </div>
-                      )}
+                        <div className="map-mini-foot">
+                          <button className="btn btn-sm" onClick={() => setView("map")}>{t("dashboard_map_full")}</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -3326,7 +3004,7 @@ export default function App() {
             </>
           )}
 
-          {view === "map" && !isPhone && (
+          {view === "map" && (
             <>
               <Topbar title={t("topbar_map")} subtitle={t("topbar_map_sub")} {...topbarCommon} />
               <div className="content">
@@ -3334,18 +3012,9 @@ export default function App() {
                   <div className="map-wrap">
                     <ErrorBoundary label={t("map_err_label")}>
                       <Suspense fallback={<div style={{height:"calc(100vh - 140px)",display:"grid",placeItems:"center",color:"var(--text2)",fontSize:13}}>{t("dashboard_map_loading")}</div>}>
-                        <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} lang={lang} t={t} />
+                        <DealMap deals={filteredMapDeals} onOpenDeal={openDeal} interactive height={"calc(100vh - 140px)"} />
                       </Suspense>
                     </ErrorBoundary>
-                    <button
-                      type="button"
-                      className="map-close-btn"
-                      onClick={() => setView("dashboard")}
-                      title={t("map_close")}
-                      aria-label={t("map_close")}
-                    >
-                      {t("map_back")}
-                    </button>
                     <div className="map-overlay legend">
                       <h4>{t("map_stages_header")}</h4>
                       {STAGES.map((stage) => (

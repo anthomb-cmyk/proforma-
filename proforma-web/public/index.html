@@ -18,31 +18,8 @@
     <meta name="apple-mobile-web-app-title" content="SOCLE" />
 
     <title>SOCLE Acquisitions</title>
-    <!--
-      Leaflet is only loaded on non-phone devices (viewport > 760px OR
-      coarse-pointer-free). On phones it's skipped entirely — saves ~150 KB
-      on every page load and stops the tile layer from eating CPU/battery on
-      devices that never show the map. The React app detects missing
-      window.L and hides every map UI on phones anyway.
-    -->
-    <script>
-      (function () {
-        try {
-          var w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-          var isPhone = w <= 760;
-          if (!isPhone) {
-            var css = document.createElement("link");
-            css.rel = "stylesheet";
-            css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-            document.head.appendChild(css);
-            var js = document.createElement("script");
-            js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-            js.async = false;
-            document.head.appendChild(js);
-          }
-        } catch (e) { /* non-fatal — app falls back to "map lib not loaded" */ }
-      })();
-    </script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   </head>
   <body>
