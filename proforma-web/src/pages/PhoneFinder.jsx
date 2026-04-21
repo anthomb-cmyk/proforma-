@@ -596,7 +596,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   }
 
   // Send rows in small batches so each request completes in < 5s (no proxy timeout)
-  async function doLookupBatched(allRows, source = "csv") {
+  async function doLookupBatched(allRows, source = "csv", opts = {}) {
+    const skippedWithPhone = Array.isArray(opts.skippedWithPhone) ? opts.skippedWithPhone : [];
     stopRef.current = false;
     setLoading(true);
     setApiError("");
@@ -619,9 +620,50 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
     setActiveRunId(runId);
     setPfPage("results");
 
+    // Synthesize "found" rows for entries that already had a phone in the
+    // file. These never hit Google Places so they cost nothing, but they
+    // still belong in the run so the user sees a complete dataset and can
+    // export every lead in one click. Status is "found" with source "file"
+    // so the UI can visually distinguish them from Places hits.
+    const fileOnlyRows = skippedWithPhone.map((src) => {
+      const buildingAddress = src.buildingAddress || [src.address, src.city, src.province, src.postalCode].filter(Boolean).join(", ");
+      const companyName = src.company || "";
+      const fallbackName = src.rawName || src.name || "";
+      const inputPhones = src.inputPhones || [];
+      return normalizeResultRowPhones({
+        inputName: companyName || fallbackName,
+        inputAddress: buildingAddress,
+        buildingAddress,
+        companyName,
+        leadContact: src.leadContact || "",
+        matchedName: "",
+        matchedAddress: "",
+        phone: inputPhones[0] || "",
+        inputPhones,
+        fileInputPhones: inputPhones,
+        onlinePhones: [],
+        directoryPhones: [],
+        source: "file",
+        status: "found",
+        statusLabel: lang === "en" ? "On file" : "Au fichier",
+        confidence: 100,
+        website: "",
+        candidates: [],
+        searchedAt: createdAt,
+        trace: ["skip:file_phone"],
+        _src: src,
+      });
+    });
+
     let done = 0;
-    let added = 0;
-    let runRows = [];
+    let added = fileOnlyRows.length;
+    let runRows = [...fileOnlyRows];
+
+    // Commit the file-only rows to the run immediately so the results table
+    // populates before the API batch even starts.
+    if (fileOnlyRows.length) {
+      setResultRuns(prev => prev.map(r => r.id === runId ? { ...r, ...buildRunPatch(runRows) } : r));
+    }
 
     for (let i = 0; i < allRows.length; i += BATCH_SIZE) {
       if (stopRef.current) break;
@@ -704,9 +746,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
       setDailySpend(recordBatch(done, est.mid));
     }
 
-    if (done > 0) {
+    // The run survives if either:
+    //  - The API batch produced at least one result (done > 0), OR
+    //  - There were file-only rows skipped from the batch (cost-free hits)
+    // Otherwise (nothing was scanned and nothing was pre-filled), drop
+    // the empty run and go back to search.
+    if (done > 0 || fileOnlyRows.length > 0) {
       const finalFound = cappedRows.filter(rowHasAnyPhone).length;
-      showToast(t("pf_batch_ok", done, finalFound), 6000);
+      showToast(t("pf_batch_ok", done + fileOnlyRows.length, finalFound), 6000);
       setPfPage("results");
     } else {
       setResultRuns(prev => prev.filter(r => r.id !== runId));
@@ -755,10 +802,31 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
       };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
     if (!rows.length) { setApiError(t("pf_err_no_rows")); return; }
+
+    // Split rows by whether they already hold a NANP-valid phone anywhere
+    // in the file (explicit phone column OR any freeform cell). mergePhoneLists
+    // only returns entries that pass isValidNanpPhone, so formatting noise like
+    // "555-0100 ext 3" or "(555)" doesn't falsely mark a row as "has phone".
+    // Rows that already have a phone skip the Google Places batch entirely —
+    // no API cost — and are injected as file-only "found" results instead.
+    const rowsWithPhone = rows.filter(r => (r.inputPhones || []).length > 0);
+    const rowsToEnrich = rows.filter(r => (r.inputPhones || []).length === 0);
+
+    // Edge case: every single row already has a phone. Nothing to enrich —
+    // just stage the file-only rows as a run without showing the cost modal.
+    if (!rowsToEnrich.length) {
+      await doLookupBatched([], "csv", { skippedWithPhone: rowsWithPhone });
+      return;
+    }
+
     // Rather than firing the batch immediately, stage it behind the
     // cost-confirmation modal so the user gets an explicit "about to
     // spend ~$X" moment. Cheap to cancel, expensive to un-spend.
-    setPendingLookup({ rows, source: "csv" });
+    setPendingLookup({
+      rows: rowsToEnrich,
+      skippedWithPhone: rowsWithPhone,
+      source: "csv",
+    });
   }
 
   // Kick off the lookup the user just confirmed and clear the pending
@@ -768,7 +836,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
     const pending = pendingLookup;
     if (!pending) return;
     setPendingLookup(null);
-    await doLookupBatched(pending.rows, pending.source);
+    await doLookupBatched(pending.rows, pending.source, {
+      skippedWithPhone: pending.skippedWithPhone || [],
+    });
   }
 
   async function handleCSVDrop(file) {
@@ -983,6 +1053,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
           dialog than to hope the user never imports too big. */}
       {pendingLookup && (() => {
         const est = estimateLookupCost(pendingLookup.rows.length);
+        const skippedCount = (pendingLookup.skippedWithPhone || []).length;
         return (
           <div className="mo" onClick={() => setPendingLookup(null)}>
             <div className="mo-box" style={{maxWidth:480}} onClick={e => e.stopPropagation()}>
@@ -995,6 +1066,19 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                   <>Vous êtes sur le point d'enrichir <strong style={{color:"var(--text)"}}>{pendingLookup.rows.length}</strong> {pendingLookup.rows.length === 1 ? "ligne" : "lignes"} via Google Places.</>
                 )}
               </div>
+              {skippedCount > 0 && (
+                <div style={{
+                  background:"#E9F7EF",border:"1px solid #BFE3CC",borderRadius:8,
+                  padding:"10px 12px",marginBottom:14,
+                  fontSize:12,lineHeight:1.5,color:"#1A7A3F"
+                }}>
+                  {lang === "en" ? (
+                    <><strong>{skippedCount}</strong> {skippedCount === 1 ? "row" : "rows"} already have a valid phone number on file — skipped automatically (no API cost). They will be added to the results as-is.</>
+                  ) : (
+                    <><strong>{skippedCount}</strong> {skippedCount === 1 ? "ligne a" : "lignes ont"} déjà un numéro de téléphone valide au fichier — ignorées automatiquement (aucun coût API). Elles seront ajoutées aux résultats telles quelles.</>
+                  )}
+                </div>
+              )}
               <div style={{background:"#FAF8F4",border:"1px solid var(--border)",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
                   <div style={{fontSize:12,color:"var(--text2)"}}>{t("pf_confirm_est_label")}</div>
