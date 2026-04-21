@@ -132,6 +132,33 @@ test("pickRowFields extracts building + owner slots; prefers Personne morale", (
   assert.equal(fields.primaryOwner.postalCode, "H2Y 1M6");
 });
 
+test("pickRowFields accepts wide-format rôle headers (Propriétaire1_Nom etc.)", () => {
+  // This is the real-world column layout from the cleaned Victoriaville
+  // rôle export. Before the fix, pickRowFields only looked at the
+  // narrow-form headers (Propriétaire, Adresse postale …) and returned
+  // zero owners for this shape, which sent every row to skip_no_lead.
+  const row = {
+    "Ville": "VILLE DE VICTORIAVILLE",
+    "Adresse Immeuble": "9, PLACE DE BIGARRE",
+    "Utilisation Prédominante": "Logement",
+    "Code Postal Immeuble": "G6T 1L6",
+    "Propriétaire1_Nom": "2736-6467 QUEBEC INC.",
+    "Propriétaire1_StatutImpositionScolaire": "Morale",
+    "Propriétaire1_Adresse": "27 rue Saint-Augustin Victoriaville, Qc, G6P3K8 Canada",
+    "Propriétaire2_Nom": "Stéphane Tardif",
+    "Propriétaire2_StatutImpositionScolaire": "Physique",
+    "Propriétaire2_Adresse": "27 rue Saint-Augustin Victoriaville (Québec) G6P3K8 Canada",
+  };
+  const fields = pickRowFields(row);
+  assert.equal(fields.owners.length, 2);
+  // Primary owner = morale (even though it's slot 1 here, the rule is
+  // "prefer morale regardless of slot order").
+  assert.equal(fields.primaryOwner.name, "2736-6467 QUEBEC INC.");
+  assert.equal(fields.primaryOwner.status, "Morale");
+  assert.equal(fields.primaryOwner.postalCode, "G6P3K8");
+  assert.equal(fields.primaryOwner.postalStreet, "27 rue Saint-Augustin Victoriaville");
+});
+
 test("pickRowFields returns empty primaryOwner when no owners on row", () => {
   const fields = pickRowFields({ "Adresse Immeuble": "1 Test St" });
   assert.equal(fields.owners.length, 0);

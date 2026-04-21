@@ -166,8 +166,12 @@ export function buildOwnerKey(rawStreet, rawPostal) {
  * ========================================================================== */
 
 export function parsePostalAddress(raw) {
-  const s = String(raw || "").trim();
+  let s = String(raw || "").trim();
   if (!s) return { street: "", city: "", province: "", postalCode: "" };
+
+  // Strip trailing ", Canada" / " Canada" / " Canada." — rôle exports
+  // frequently append it and it throws off the postal-code anchor.
+  s = s.replace(/[,\s]+canada\.?\s*$/i, "").trim();
 
   // Postal code anchored at the end (allow optional space).
   const postalMatch = s.match(/([A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d)\s*$/);
@@ -237,6 +241,24 @@ function readCell(row, headerLabel) {
   return String(v).trim();
 }
 
+// Try multiple possible header labels and return the first non-empty hit.
+// We need this because real-world Quebec rôle exports ship in two different
+// column-naming conventions:
+//   (A) "narrow" / short:  Propriétaire, Propriétaire 2, Adresse postale,
+//                          Adresse postale 2, Téléphone, Téléphone 2
+//   (B) "wide" / suffixed: Propriétaire1_Nom, Propriétaire2_Nom,
+//                          Propriétaire1_Adresse, Propriétaire1_Téléphone,
+//                          Propriétaire1_StatutImpositionScolaire
+// Both refer to the SAME logical owner slot; we don't know which one a given
+// upload will use.
+function readCellAny(row, ...headerLabels) {
+  for (const label of headerLabels) {
+    const v = readCell(row, label);
+    if (v) return v;
+  }
+  return "";
+}
+
 function readNumberCell(row, headerLabel) {
   const raw = readCell(row, headerLabel);
   if (!raw) return null;
@@ -265,19 +287,53 @@ export function pickRowFields(row) {
     lon: readNumberCell(safeRow, "Lon"),
   };
 
-  // Collect up-to-8 owner slots. Slot 0 is unsuffixed ("Propriétaire",
-  // "Adresse postale", …), slot N (N>0) is suffixed " N+1".
+  // Collect up-to-8 owner slots. We support two header conventions:
+  //
+  //   Narrow (one row per building, owner fields repeat):
+  //     Propriétaire           / Propriétaire 2
+  //     Adresse postale        / Adresse postale 2
+  //     Téléphone              / Téléphone 2
+  //     Statut aux fins d'imposition scolaire / ... 2
+  //
+  //   Wide (cleaned rôle export, 8 owner slots per row):
+  //     Propriétaire1_Nom      / Propriétaire2_Nom
+  //     Propriétaire1_Adresse  / Propriétaire2_Adresse
+  //                             (or Propriétaire1_Adresse_clean)
+  //     Propriétaire1_Téléphone / Propriétaire2_Téléphone
+  //     Propriétaire1_StatutImpositionScolaire
+  //
+  // Slot N in both conventions maps to the same logical owner. We probe the
+  // wide form first (it's more specific and usually present when both are),
+  // then fall back to the narrow form.
   const owners = [];
   for (let i = 0; i < 8; i++) {
-    const suffix = i === 0 ? "" : ` ${i + 1}`;
-    const name = readCell(safeRow, `Propriétaire${suffix}`);
+    const n = i + 1;
+    const narrowSuffix = i === 0 ? "" : ` ${n}`;
+    const name = readCellAny(
+      safeRow,
+      `Propriétaire${n}_Nom`,        // wide
+      `Propriétaire${narrowSuffix}`, // narrow
+    );
     if (!name) continue;
-    const status = readCell(safeRow, `Statut aux fins d'imposition scolaire${suffix}`);
-    const postalRaw = readCell(safeRow, `Adresse postale${suffix}`);
-    const phoneRaw = readCell(safeRow, i === 0 ? "Téléphone" : `Téléphone ${i + 1}`);
+    const status = readCellAny(
+      safeRow,
+      `Propriétaire${n}_StatutImpositionScolaire`,      // wide (no spaces)
+      `Statut aux fins d'imposition scolaire${narrowSuffix}`, // narrow
+    );
+    const postalRaw = readCellAny(
+      safeRow,
+      `Propriétaire${n}_Adresse`,       // wide
+      `Propriétaire${n}_Adresse_clean`, // wide (cleaned variant)
+      `Adresse postale${narrowSuffix}`, // narrow
+    );
+    const phoneRaw = readCellAny(
+      safeRow,
+      `Propriétaire${n}_Téléphone`,                 // wide
+      i === 0 ? "Téléphone" : `Téléphone ${n}`,      // narrow
+    );
     const postal = parsePostalAddress(postalRaw);
     owners.push({
-      slot: i + 1,
+      slot: n,
       name,
       status,
       postalRaw,
@@ -291,6 +347,8 @@ export function pickRowFields(row) {
 
   // Primary owner selection: prefer "Personne morale" (a legal entity → a
   // callable business) over "Personne physique" (a private individual).
+  // Wide-format exports sometimes abbreviate to "Morale" / "Physique" with
+  // no "Personne" prefix, so match on the meaningful suffix only.
   // Ties broken by slot order (slot 1 wins).
   const moral = owners.find(o => /morale/i.test(o.status));
   const primaryOwner = moral || owners[0] || null;
@@ -463,8 +521,10 @@ function deterministicFallbackPlan(rowIdx, fields) {
   }
 
   // Residential + personne physique → likely retail homeowner, skip.
+  // Wide-format rôle exports abbreviate the status to just "Physique" /
+  // "Morale", so match on the core word not the full phrase.
   const utilIsLogement = /^logement$/i.test(building.utilisation || "");
-  const isPhysique = /personne physique/i.test(primary.status || "");
+  const isPhysique = /\bphysique\b/i.test(primary.status || "");
   if (utilIsLogement && isPhysique) {
     return {
       rowIdx,
