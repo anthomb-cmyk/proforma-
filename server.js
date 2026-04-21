@@ -4061,6 +4061,69 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// ─── Shared CRM state (owners / deals / leads / flags) ───────────────────────
+// Tiny single-row JSON store so Anthony and Gaylord share the same workspace.
+// No auth: ungated behind the same trust model as the PIN UI (internal-only,
+// two-person team, tunnel-of-love assumptions). Last-write-wins.
+//
+// SQL migration (run once in Supabase SQL editor):
+//   create table if not exists socle_crm_state (
+//     id int primary key,
+//     state jsonb not null default '{}'::jsonb,
+//     updated_at timestamptz not null default now()
+//   );
+//   insert into socle_crm_state (id, state) values (1, '{}'::jsonb)
+//     on conflict (id) do nothing;
+//
+// The endpoints degrade gracefully if the table is missing — the client
+// treats "no server state" as "use local" and can still function offline.
+const SOCLE_STATE_ROW_ID = 1;
+
+app.get("/api/crm/state", async (_req, res) => {
+  if (!supabaseServerClient) {
+    return res.json({ ok: true, state: null, updated_at: null, note: "supabase-not-configured" });
+  }
+  try {
+    const { data, error } = await supabaseServerClient
+      .from("socle_crm_state")
+      .select("state, updated_at")
+      .eq("id", SOCLE_STATE_ROW_ID)
+      .maybeSingle();
+    if (error) {
+      console.warn("[api/crm/state:get] supabase error:", error.message);
+      return res.json({ ok: true, state: null, updated_at: null, note: "supabase-error" });
+    }
+    res.json({ ok: true, state: data?.state || null, updated_at: data?.updated_at || null });
+  } catch (err) {
+    console.error("[api/crm/state:get]", err?.message);
+    res.status(500).json({ ok: false, error: err?.message || "Unknown error" });
+  }
+});
+
+app.put("/api/crm/state", express.json({ limit: "20mb" }), async (req, res) => {
+  if (!supabaseServerClient) {
+    return res.status(503).json({ ok: false, error: "Supabase non configurée." });
+  }
+  const state = req.body?.state;
+  if (!state || typeof state !== "object") {
+    return res.status(400).json({ ok: false, error: "Payload invalide — 'state' object required." });
+  }
+  try {
+    const updated_at = new Date().toISOString();
+    const { error } = await supabaseServerClient
+      .from("socle_crm_state")
+      .upsert({ id: SOCLE_STATE_ROW_ID, state, updated_at }, { onConflict: "id" });
+    if (error) {
+      console.warn("[api/crm/state:put] supabase error:", error.message);
+      return res.status(502).json({ ok: false, error: error.message });
+    }
+    res.json({ ok: true, updated_at });
+  } catch (err) {
+    console.error("[api/crm/state:put]", err?.message);
+    res.status(500).json({ ok: false, error: err?.message || "Unknown error" });
+  }
+});
+
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
 // All enrichment logic lives in services/phoneEnrichment.js. This endpoint is
 // now a thin HTTP adapter: validate the payload, delegate to the service, map

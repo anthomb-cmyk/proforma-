@@ -10,6 +10,7 @@ import {
   fmtCallDateTime, fmtDurationSeconds, MONTHS, DAYS,
 } from "./lib/format.js";
 import { load, isQuotaError, persist } from "./lib/storage.js";
+import { fetchServerState, pushServerState } from "./lib/syncState.js";
 import {
   buildCL, createDeal, dealLabel, normalizeDeal,
   buildLeadIdentityKey, getLeadPhones,
@@ -833,20 +834,87 @@ export default function App() {
   // App-level toast for persist/quota errors (rare but user-visible when it happens).
   const [appToast, setAppToast] = useState("");
   const persistTimerRef = useRef(null);
+  // Guard so the debounced persist effect doesn't fire a server write during
+  // the initial mount/hydration — otherwise we'd immediately overwrite the
+  // freshly-fetched server state with whatever was in localStorage.
+  const hydratedRef = useRef(false);
+
+  // ─── Shared backend state sync ─────────────────────────────────────────────
+  // Hydrate from the Supabase-backed server state on mount so teammates see
+  // the same CRM. Local state (localStorage via storage.js) stays as an
+  // offline cache and an instant-first-paint source. Conflict policy:
+  // last-write-wins.
+  //
+  // Flow on mount:
+  //   1. Fetch server state.
+  //   2. If server returned non-empty state → hydrate local React state from it.
+  //   3. If server is empty but local has data → seed the server with local.
+  //   4. Flip hydratedRef so the debounced persist effect can start pushing.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetchServerState();
+      if (cancelled) return;
+      const srv = res?.ok ? res.state : null;
+      const serverHasData =
+        srv && typeof srv === "object" && (
+          (Array.isArray(srv.owners)       && srv.owners.length       > 0) ||
+          (Array.isArray(srv.deals)        && srv.deals.length        > 0) ||
+          (Array.isArray(srv.leads)        && srv.leads.length        > 0) ||
+          (Array.isArray(srv.flaggedLeads) && srv.flaggedLeads.length > 0)
+        );
+
+      if (serverHasData) {
+        if (Array.isArray(srv.deals))        setDeals(srv.deals.map(normalizeDeal));
+        if (Array.isArray(srv.leads))        setLeads(srv.leads);
+        if (Array.isArray(srv.owners))       setOwners(srv.owners);
+        if (Array.isArray(srv.flaggedLeads)) setFlaggedLeads(srv.flaggedLeads);
+        if (typeof srv.currentId !== "undefined") setCurrentId(srv.currentId || null);
+        if (typeof srv.gcalOk === "boolean")      setGcalOk(srv.gcalOk);
+      } else {
+        // Server is empty (first boot after deploy or brand-new workspace).
+        // If this browser has data, seed the server so the other user sees it.
+        const localHasData =
+          (Array.isArray(owners) && owners.length > 0) ||
+          (Array.isArray(deals)  && deals.length  > 0) ||
+          (Array.isArray(leads)  && leads.length  > 0);
+        if (localHasData) {
+          await pushServerState({ deals, leads, owners, flaggedLeads, currentId, gcalOk });
+        }
+      }
+      if (!cancelled) hydratedRef.current = true;
+    })();
+    return () => { cancelled = true; };
+    // Runs once on mount. Subsequent syncs happen via the debounced persist
+    // effect below. The stale-closure capture of deals/leads/owners for the
+    // "seed empty server" branch is intentional — we want the snapshot as of
+    // mount, not whatever the latest state is.
+    // eslint-disable-next-line
+  }, []);
 
   // Debounce writes to localStorage: state changes during typing/drag were
   // triggering a full JSON.stringify of the whole CRM on every keystroke.
   // 500ms is a comfortable tradeoff — short enough that refreshes rarely
   // lose the latest edit, long enough to coalesce bursts of updates.
+  //
+  // Same debounce also pushes to the shared Supabase-backed server so
+  // teammates pick up changes on their next hydrate. Server writes fail
+  // soft — localStorage still gets the authoritative local copy.
   useEffect(() => {
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      persist({ deals, leads, owners, flaggedLeads, currentId, gcalOk }, (err) => {
+      const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
+      persist(payload, (err) => {
         if (isQuotaError(err)) {
           setAppToast("⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.");
           setTimeout(() => setAppToast(""), 8000);
         }
       });
+      // Don't push to server until after the initial hydrate has landed —
+      // otherwise we'd clobber the shared state with stale local data.
+      if (hydratedRef.current) {
+        pushServerState(payload);
+      }
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
   }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
@@ -857,7 +925,13 @@ export default function App() {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
-        persist({ deals, leads, owners, flaggedLeads, currentId, gcalOk });
+        const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
+        persist(payload);
+        // Best-effort: fire the PUT but don't await. beforeunload handlers
+        // can't block — the browser may or may not finish the request.
+        if (hydratedRef.current) {
+          try { pushServerState(payload); } catch {}
+        }
       }
     };
     window.addEventListener("beforeunload", flush);
