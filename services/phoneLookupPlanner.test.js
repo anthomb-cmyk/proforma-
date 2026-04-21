@@ -324,6 +324,60 @@ test("planPhoneLookups uses GPT plans when openaiClient is provided (mocked)", a
   assert.equal(stats.enrichOwnerPostal, 1);
 });
 
+test("planPhoneLookups does NOT short-circuit on a building phone alone", async () => {
+  // Regression — "Téléphone Immeuble" usually dials a superintendent or tenant,
+  // not the owner we want to pitch an acquisition to. A row that has a building
+  // phone but NO owner phone must still route through enrichment; the building
+  // phone travels along on `buildingPhones` as a weak fallback.
+  const rows = [
+    {
+      "Adresse Immeuble": "5000 Rue Principale",
+      "Ville": "Longueuil",
+      "Code Postal Immeuble": "J4K 1A1",
+      "Utilisation prédominante": "Immeuble commercial",
+      "Propriétaire": "Gestion Immobilier ABC Inc",
+      "Statut aux fins d'imposition scolaire": "Personne morale",
+      "Adresse postale": "217 Saint-Jacques, Montréal (Québec) H2Y 1M6",
+      "Téléphone Immeuble": "(450) 555-0111",
+    },
+  ];
+  const { plans, stats } = await planPhoneLookups({ rows, openaiClient: null });
+  assert.equal(plans[0].strategy, "enrich_owner_postal");
+  assert.equal(plans[0].reason, "fallback_deterministic_plan");
+  // Owner phone list stays empty — we did NOT treat the building phone as solved.
+  assert.deepEqual(plans[0].filePhones, []);
+  // Building phone is preserved on the plan as a fallback contact.
+  assert.ok(Array.isArray(plans[0].buildingPhones));
+  assert.ok(plans[0].buildingPhones.includes("(450) 555-0111"));
+  assert.equal(stats.useFilePhone, 0);
+  assert.equal(stats.enrichOwnerPostal, 1);
+});
+
+test("planPhoneLookups still uses an owner phone when both phones are present", async () => {
+  // A row with BOTH an owner phone and a building phone short-circuits on the
+  // owner phone (that's the one we actually want to call), and still carries
+  // the building phone along for reference.
+  const rows = [
+    {
+      "Adresse Immeuble": "5000 Rue Principale",
+      "Ville": "Longueuil",
+      "Code Postal Immeuble": "J4K 1A1",
+      "Utilisation prédominante": "Immeuble commercial",
+      "Propriétaire": "Gestion Immobilier ABC Inc",
+      "Statut aux fins d'imposition scolaire": "Personne morale",
+      "Adresse postale": "217 Saint-Jacques, Montréal (Québec) H2Y 1M6",
+      "Téléphone": "(514) 555-0199",
+      "Téléphone Immeuble": "(450) 555-0111",
+    },
+  ];
+  const { plans, stats } = await planPhoneLookups({ rows, openaiClient: null });
+  assert.equal(plans[0].strategy, "use_file_phone");
+  assert.ok(plans[0].filePhones.includes("(514) 555-0199"));
+  assert.ok(!plans[0].filePhones.includes("(450) 555-0111"));
+  assert.ok(plans[0].buildingPhones.includes("(450) 555-0111"));
+  assert.equal(stats.useFilePhone, 1);
+});
+
 test("planPhoneLookups handles empty input gracefully", async () => {
   const { plans, stats } = await planPhoneLookups({ rows: [], openaiClient: null });
   assert.deepEqual(plans, []);

@@ -181,6 +181,91 @@ export function extractRowPhones(row) {
   return out;
 }
 
+// Headers we consider BUILDING phones (superintendent / front desk / tenant
+// line) as opposed to OWNER phones. Matched against the normalized header key
+// (lowercased, accent-stripped, non-alnum → spaces, collapsed).
+//
+// Examples that match:
+//   "Téléphone Immeuble"             → "telephone immeuble"
+//   "Téléphone immeuble 1"           → "telephone immeuble 1"
+//   "Bldg Phone" / "Building Phone"  → "bldg phone" / "building phone"
+//
+// Examples that DO NOT match (still owner phones):
+//   "Téléphone"                      → "telephone"
+//   "Téléphone 2"                    → "telephone 2"
+//   "Propriétaire1_Téléphone"        → "proprietaire1 telephone"
+//
+// Why this matters for the phone-finder pre-filter: a row where the only
+// phone lives in a building-phone column is NOT a solved row — we still want
+// to enrich it via Google Places to get the owner's direct line. The old
+// extractRowPhones blindly picked up every phone anywhere, which caused
+// ~569 rows on the Longueuil run to shortcut to use_file_phone and bypass
+// enrichment entirely.
+const BUILDING_PHONE_HEADER_RE =
+  /\b(immeuble|building|bldg|batiment|edifice|front\s*desk|super(?:intendant)?)\b/i;
+
+export function isBuildingPhoneHeader(headerName) {
+  if (!headerName) return false;
+  const k = String(headerName)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return BUILDING_PHONE_HEADER_RE.test(k);
+}
+
+// Like extractRowPhones, but SKIPS phones that only appear in columns we
+// classify as building phones. Returns just the owner-attributable phones,
+// in the order their columns appear on the row.
+//
+// Used by the phoneLookupPlanner pre-filter to decide whether a row needs
+// enrichment. If this returns [] but the row does have a building phone, the
+// planner should route to enrich_owner_postal (not use_file_phone).
+export function extractOwnerPhones(row) {
+  if (!row || typeof row !== "object") return [];
+  const found = new Set();
+  const out = [];
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || value === undefined) continue;
+    if (isBuildingPhoneHeader(key)) continue;
+    const s = String(value);
+    PHONE_RE.lastIndex = 0;
+    let m;
+    while ((m = PHONE_RE.exec(s))) {
+      const k = normalizePhoneKey(m[0]);
+      if (!k || found.has(k)) continue;
+      found.add(k);
+      out.push(formatPhone(m[0]));
+    }
+  }
+  return out;
+}
+
+// Like extractOwnerPhones but returns ONLY the phones from building-phone
+// columns. Used by the planner to surface them separately in plans so the
+// UI can still display them (as a weak fallback) even while routing the row
+// to enrichment.
+export function extractBuildingPhones(row) {
+  if (!row || typeof row !== "object") return [];
+  const found = new Set();
+  const out = [];
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || value === undefined) continue;
+    if (!isBuildingPhoneHeader(key)) continue;
+    const s = String(value);
+    PHONE_RE.lastIndex = 0;
+    let m;
+    while ((m = PHONE_RE.exec(s))) {
+      const k = normalizePhoneKey(m[0]);
+      if (!k || found.has(k)) continue;
+      found.add(k);
+      out.push(formatPhone(m[0]));
+    }
+  }
+  return out;
+}
+
 export function mergePhoneLists(...sources) {
   const seen = new Set();
   const out = [];
@@ -985,6 +1070,7 @@ async function lookupOneRow({ rawRow, plan = null, client, opts, idFactory, quer
       pjDirectoryPhones: [],
       c411DirectoryPhones: [],
       fileInputPhones: phones,
+      buildingPhones: Array.isArray(plan.buildingPhones) ? plan.buildingPhones : [],
       filePhoneColumns,
       website: "",
       source: phones.length ? "file" : "",
@@ -1018,6 +1104,7 @@ async function lookupOneRow({ rawRow, plan = null, client, opts, idFactory, quer
       pjDirectoryPhones: [],
       c411DirectoryPhones: [],
       fileInputPhones: [],
+      buildingPhones: Array.isArray(plan.buildingPhones) ? plan.buildingPhones : [],
       filePhoneColumns,
       website: "",
       source: "",
@@ -1258,6 +1345,9 @@ async function lookupOneRow({ rawRow, plan = null, client, opts, idFactory, quer
     pjDirectoryPhones,    // phones found specifically via Pages Jaunes
     c411DirectoryPhones,  // phones found specifically via 411.ca
     fileInputPhones,
+    // Téléphone Immeuble — weak fallback contact (super/tenant line); carried
+    // through from the planner so the UI can surface it as a last resort.
+    buildingPhones: Array.isArray(plan?.buildingPhones) ? plan.buildingPhones : [],
     filePhoneColumns,   // { normalizedKey → columnName } for UI source labels
     website: online.length ? best?.website || "" : "",
     source,

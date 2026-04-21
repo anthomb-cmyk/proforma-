@@ -52,7 +52,8 @@
 //     error we chose to swallow.
 
 import {
-  extractRowPhones,
+  extractOwnerPhones,
+  extractBuildingPhones,
   normalizePhoneKey,
 } from "./phoneEnrichment.js";
 
@@ -504,7 +505,7 @@ async function runPool(tasks, concurrency) {
  *  personne-physique residential.
  * ========================================================================== */
 
-function deterministicFallbackPlan(rowIdx, fields) {
+function deterministicFallbackPlan(rowIdx, fields, buildingPhones = []) {
   const primary = fields.primaryOwner;
   const building = fields.building;
 
@@ -513,6 +514,7 @@ function deterministicFallbackPlan(rowIdx, fields) {
       rowIdx,
       strategy: "skip_no_lead",
       filePhones: [],
+      buildingPhones,
       plannedQuery: null,
       owner: emptyOwner(),
       building: buildingShape(building),
@@ -530,6 +532,7 @@ function deterministicFallbackPlan(rowIdx, fields) {
       rowIdx,
       strategy: "skip_no_lead",
       filePhones: [],
+      buildingPhones,
       plannedQuery: null,
       owner: ownerShape(primary),
       building: buildingShape(building),
@@ -550,6 +553,7 @@ function deterministicFallbackPlan(rowIdx, fields) {
     rowIdx,
     strategy: "enrich_owner_postal",
     filePhones: [],
+    buildingPhones,
     plannedQuery,
     owner: ownerShape(primary),
     building: buildingShape(building),
@@ -604,16 +608,26 @@ function buildingShape(b) {
 
 function preFilter(row, rowIdx) {
   const { fields } = buildRowDigest(row, rowIdx);
-  // extractRowPhones walks the entire raw row; anything in a phone-ish column
-  // (or even a notes cell) gets caught.
-  const filePhones = extractRowPhones(row || {});
-  if (filePhones.length) {
+
+  // Split the row's phones into OWNER phones (Téléphone, Propriétaire1_Téléphone,
+  // etc.) and BUILDING phones (Téléphone Immeuble, etc.).
+  //
+  // Only OWNER phones short-circuit the pipeline to use_file_phone. A row that
+  // has only a building phone still needs enrichment — the building number
+  // usually reaches a superintendent or tenant, not the owner we want to pitch
+  // an acquisition to. We keep the building phone on the plan as a weak
+  // fallback the UI can surface, but we do NOT let it count as "solved".
+  const ownerPhones = extractOwnerPhones(row || {});
+  const buildingPhones = extractBuildingPhones(row || {});
+
+  if (ownerPhones.length) {
     return {
       kind: "use_file_phone",
       plan: {
         rowIdx,
         strategy: "use_file_phone",
-        filePhones,
+        filePhones: ownerPhones,
+        buildingPhones,
         plannedQuery: null,
         owner: ownerShape(fields.primaryOwner),
         building: buildingShape(fields.building),
@@ -621,7 +635,11 @@ function preFilter(row, rowIdx) {
       },
     };
   }
-  return { kind: "needs_gpt", fields };
+
+  // No owner phone — hand off to GPT / deterministic fallback. The
+  // building-phone list travels with the plan so downstream result rows can
+  // still show it as a last-resort contact number.
+  return { kind: "needs_gpt", fields, buildingPhones };
 }
 
 /* ========================================================================== *
@@ -674,7 +692,7 @@ async function callGptBatch({ openaiClient, model, digests, signal }) {
 }
 
 // Merge one GPT plan with the deterministic `fields` for the same row.
-function mergeGptPlan(gptPlan, fields, rowIdx) {
+function mergeGptPlan(gptPlan, fields, rowIdx, buildingPhones = []) {
   const primary = fields.primaryOwner;
   const building = fields.building;
   const strategy = String(gptPlan?.strategy || "").toLowerCase();
@@ -685,6 +703,7 @@ function mergeGptPlan(gptPlan, fields, rowIdx) {
       rowIdx,
       strategy: "skip_no_lead",
       filePhones: [],
+      buildingPhones,
       plannedQuery: null,
       owner: ownerShape(primary),
       building: buildingShape(building),
@@ -724,6 +743,7 @@ function mergeGptPlan(gptPlan, fields, rowIdx) {
     rowIdx,
     strategy: "enrich_owner_postal",
     filePhones: [],
+    buildingPhones,
     plannedQuery,
     owner,
     building: buildingShape(building),
@@ -757,7 +777,7 @@ export async function planPhoneLookups({
 
   // Step 1 — pre-filter. Any row whose raw values already contain a valid
   // NANP phone is resolved right here; only the remainder goes to GPT.
-  const needsGpt = []; // { rowIdx, fields, digest }
+  const needsGpt = []; // { rowIdx, fields, digest, buildingPhones }
   for (let i = 0; i < safeRows.length; i++) {
     const row = safeRows[i];
     try {
@@ -766,7 +786,12 @@ export async function planPhoneLookups({
         plans[i] = pf.plan;
       } else {
         const { digest } = buildRowDigest(row, i);
-        needsGpt.push({ rowIdx: i, fields: pf.fields, digest });
+        needsGpt.push({
+          rowIdx: i,
+          fields: pf.fields,
+          digest,
+          buildingPhones: pf.buildingPhones || [],
+        });
       }
     } catch (err) {
       console.error("[phoneLookupPlanner] pre-filter failed for row", i, err);
@@ -776,6 +801,7 @@ export async function planPhoneLookups({
         rowIdx: i,
         strategy: "skip_no_lead",
         filePhones: [],
+        buildingPhones: [],
         plannedQuery: null,
         owner: emptyOwner(),
         building: buildingShape(null),
@@ -815,7 +841,7 @@ export async function planPhoneLookups({
     if (!result) {
       // Whole batch failed → deterministic plans for all rows.
       for (const b of batch) {
-        plans[b.rowIdx] = deterministicFallbackPlan(b.rowIdx, b.fields);
+        plans[b.rowIdx] = deterministicFallbackPlan(b.rowIdx, b.fields, b.buildingPhones);
       }
       continue;
     }
@@ -834,9 +860,9 @@ export async function planPhoneLookups({
       const gptPlan = byIdx.get(b.rowIdx);
       if (!gptPlan) {
         // GPT omitted this row → deterministic fallback.
-        plans[b.rowIdx] = deterministicFallbackPlan(b.rowIdx, b.fields);
+        plans[b.rowIdx] = deterministicFallbackPlan(b.rowIdx, b.fields, b.buildingPhones);
       } else {
-        plans[b.rowIdx] = mergeGptPlan(gptPlan, b.fields, b.rowIdx);
+        plans[b.rowIdx] = mergeGptPlan(gptPlan, b.fields, b.rowIdx, b.buildingPhones);
       }
     }
   }
@@ -846,7 +872,7 @@ export async function planPhoneLookups({
   // array has no gaps.
   for (const n of needsGpt) {
     if (!plans[n.rowIdx]) {
-      plans[n.rowIdx] = deterministicFallbackPlan(n.rowIdx, n.fields);
+      plans[n.rowIdx] = deterministicFallbackPlan(n.rowIdx, n.fields, n.buildingPhones);
     }
   }
 
