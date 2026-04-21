@@ -3926,35 +3926,71 @@ app.post("/api/ai/summarize", async (req, res) => {
   const text = String(req.body?.text || "").trim();
   if (!text) return res.status(400).json({ ok: false, error: "Texte manquant." });
   if (!openai) return res.status(503).json({ ok: false, error: "OPENAI_API_KEY non configurée." });
-  const contextLabel = type === "vendeur" ? "Notes vendeur" : "Notes deal acquisition";
-  const systemPrompt = [
-    "Tu es un assistant administratif CRM pour une équipe d'acquisition immobilière.",
-    "Tu NE FAIS PAS d'analyse stratégique et tu NE DONNES PAS de recommandations.",
-    "Objectif unique: reformater les notes brutes en notes CRM internes claires.",
-    "Règles strictes:",
-    "- Sortie uniquement en bullet points commençant par '- '",
-    "- Une idée par bullet, jamais de paragraphe",
-    "- Conserver les nuances/incertitudes présentes (ex: semble, je pense, possiblement)",
-    "- Préserver au maximum les mots et le sens d'origine",
-    "- Enlever fillers, hésitations et répétitions inutiles",
-    "- Interdiction de créer sections 'opportunités/risques/stratégie'",
-    "- Interdiction d'ajouter des interprétations non explicites dans les notes",
-    "- Interdiction d'analyse psychologique",
-  ].join("\n");
+
+  // `lead` is a distinct type: the notes organizer on the owner fiche in
+  // the merged Leads page. Narrower scope than the deal summarizer — we
+  // only want call-status + what the owner said + financial snippets +
+  // one next step, no strategy/analysis.
+  let contextLabel;
+  let systemPrompt;
+  let modelMaxTokens = 1024;
+  let temperature = 0.1;
+
+  if (type === "lead") {
+    contextLabel = "Notes propriétaire (lead d'acquisition)";
+    systemPrompt = [
+      "Tu es un assistant administratif qui organise les notes d'appel prises sur un propriétaire immobilier que l'équipe d'acquisition cherche à contacter.",
+      "Tu NE FAIS PAS d'analyse stratégique et tu NE DONNES PAS de recommandations.",
+      "Objectif unique: structurer les notes brutes en bullet points CRM internes, sans y ajouter d'interprétation.",
+      "Structure la sortie en sections courtes, dans cet ordre, en ne gardant que celles pour lesquelles il y a de l'information:",
+      "- Statut de contact (appelé / VM / rejoint / refuse de parler, date si mentionnée)",
+      "- Ce que le propriétaire a dit (objections, intérêt, disponibilité, ton général)",
+      "- Info financière mentionnée (prix évoqué, revenus, dépenses, hypothèque, rénovations)",
+      "- Prochaine étape (une seule phrase d'action concrète — rappel, email, rencontre)",
+      "Règles strictes:",
+      "- Chaque section commence par son titre en gras court suivi d'un retour à la ligne, puis des bullets '- '",
+      "- Une idée par bullet, jamais de paragraphe long",
+      "- Conserver les nuances (semble, peut-être, à confirmer) — ne pas trancher à la place de l'acquéreur",
+      "- Enlever fillers, hésitations, répétitions",
+      "- Interdiction d'ajouter des recommandations stratégiques, analyses psychologiques ou conseils de négociation",
+      "- Interdiction d'inventer de l'information non présente dans les notes brutes",
+    ].join("\n");
+    modelMaxTokens = 400;
+    temperature = 0.2;
+  } else {
+    contextLabel = type === "vendeur" ? "Notes vendeur" : "Notes deal acquisition";
+    systemPrompt = [
+      "Tu es un assistant administratif CRM pour une équipe d'acquisition immobilière.",
+      "Tu NE FAIS PAS d'analyse stratégique et tu NE DONNES PAS de recommandations.",
+      "Objectif unique: reformater les notes brutes en notes CRM internes claires.",
+      "Règles strictes:",
+      "- Sortie uniquement en bullet points commençant par '- '",
+      "- Une idée par bullet, jamais de paragraphe",
+      "- Conserver les nuances/incertitudes présentes (ex: semble, je pense, possiblement)",
+      "- Préserver au maximum les mots et le sens d'origine",
+      "- Enlever fillers, hésitations et répétitions inutiles",
+      "- Interdiction de créer sections 'opportunités/risques/stratégie'",
+      "- Interdiction d'ajouter des interprétations non explicites dans les notes",
+      "- Interdiction d'analyse psychologique",
+    ].join("\n");
+  }
   const userPrompt = `${contextLabel}\n\nTransforme ces notes en format CRM interne:\n${text}`;
 
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
-      temperature: 0.1,
-      max_tokens: 1024,
+      temperature,
+      max_tokens: modelMaxTokens,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ]
     });
     const rawSummary = completion.choices?.[0]?.message?.content?.trim() || "";
-    const summary = formatAsCrmBulletNotes(rawSummary, text);
+    // `lead` output has its own mini-sections + bullets; the generic bullet
+    // formatter would flatten them. Return the raw model output for `lead`
+    // and keep the CRM-bullet normalization for `deal` / `vendeur`.
+    const summary = type === "lead" ? rawSummary : formatAsCrmBulletNotes(rawSummary, text);
     res.json({ ok: true, summary });
   } catch (err) {
     res.status(502).json({ ok: false, error: err?.message || "Erreur API OpenAI." });

@@ -233,6 +233,72 @@ function ownerIdFromKey(key) {
 
 function nowIso() { return new Date().toISOString(); }
 
+// Default (empty) finances block attached to every building. `revenueAnnuel`
+// and `depensesAnnuelles` stay null until the user enters them so UI can
+// distinguish "zero" from "not yet filled". Unit-mix counters default to 0
+// so arithmetic (computeBuildingTotalUnits) is safe even on fresh rows.
+function emptyFinances() {
+  return {
+    revenueAnnuel: null,
+    depensesAnnuelles: null,
+    unitMix: {
+      u1_5: 0,
+      u2_5: 0,
+      u3_5: 0,
+      u4_5: 0,
+      u5_5_plus: 0,
+    },
+  };
+}
+
+// Normalize a potentially-missing / partial finances object on a building.
+// Preserves any existing values, fills gaps with safe defaults. Returns a
+// NEW building object (non-mutating) for React-friendly state updates.
+export function ensureBuildingFinances(building) {
+  if (!building || typeof building !== "object") return building;
+  const f = building.finances || {};
+  const mix = f.unitMix || {};
+  return {
+    ...building,
+    finances: {
+      revenueAnnuel: Number.isFinite(f.revenueAnnuel) ? f.revenueAnnuel : (f.revenueAnnuel == null ? null : Number(f.revenueAnnuel) || null),
+      depensesAnnuelles: Number.isFinite(f.depensesAnnuelles) ? f.depensesAnnuelles : (f.depensesAnnuelles == null ? null : Number(f.depensesAnnuelles) || null),
+      unitMix: {
+        u1_5: Number(mix.u1_5) || 0,
+        u2_5: Number(mix.u2_5) || 0,
+        u3_5: Number(mix.u3_5) || 0,
+        u4_5: Number(mix.u4_5) || 0,
+        u5_5_plus: Number(mix.u5_5_plus) || 0,
+      },
+    },
+  };
+}
+
+// Net Operating Income = gross annual rent − annual operating expenses.
+// Returns null when either input is missing so the UI can show "—" rather
+// than a misleading "0" that could be read as "no profit".
+export function computeBuildingNOI(building) {
+  const f = building?.finances;
+  if (!f) return null;
+  const rev = f.revenueAnnuel;
+  const exp = f.depensesAnnuelles;
+  if (rev == null || exp == null) return null;
+  if (!Number.isFinite(rev) || !Number.isFinite(exp)) return null;
+  return rev - exp;
+}
+
+// Total door count across the unit-mix categories. Always numeric; zero
+// if the mix is empty.
+export function computeBuildingTotalUnits(building) {
+  const mix = building?.finances?.unitMix;
+  if (!mix) return 0;
+  return (Number(mix.u1_5) || 0)
+    + (Number(mix.u2_5) || 0)
+    + (Number(mix.u3_5) || 0)
+    + (Number(mix.u4_5) || 0)
+    + (Number(mix.u5_5_plus) || 0);
+}
+
 function buildingFromRow(row) {
   return {
     id: `bld_${Math.random().toString(36).slice(2, 9)}`,
@@ -247,6 +313,7 @@ function buildingFromRow(row) {
     yearBuilt: row.yearBuilt || "",
     lotArea: row.lotArea || "",
     sourceFile: row.sourceFile || "",
+    finances: emptyFinances(),
     // rawRow is intentionally omitted from the persisted building to keep
     // localStorage small. The enrichment payload can be reconstructed from
     // the owner's postalAddress + the building's civic address + aliases.
@@ -267,6 +334,7 @@ function buildingFromLead(lead) {
     yearBuilt: lead?.yearBuilt || "",
     lotArea: lead?.lotArea || "",
     sourceFile: lead?.sourceFile || "",
+    finances: emptyFinances(),
   };
 }
 

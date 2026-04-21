@@ -51,15 +51,21 @@ const I18N = {
     nav_phonefinder: "Recherche Tél.",
     nav_new_deal: "＋ Nouveau deal",
     topbar_dashboard: "Dashboard",
+    topbar_dashboard_sub: "Vue d'ensemble · deals, follow-ups, activité",
     topbar_pipeline: "Pipeline",
+    topbar_pipeline_sub: "Glissez les deals d'une étape à l'autre",
     topbar_map: "Carte",
     topbar_map_sub: "Vue géographique des deals au Québec",
     topbar_followups: "Follow-ups",
+    topbar_followups_sub: "Appels et relances à faire",
     topbar_calendar: "Calendrier",
+    topbar_calendar_sub: "Événements et échéances des deals",
     topbar_owners: "Investisseurs",
     topbar_owners_sub: "Un investisseur = une adresse postale. Toutes ses compagnies, numéros et propriétés regroupés.",
     topbar_leads: "Leads",
-    topbar_leads_sub: "Importez, enrichissez et gérez vos prospects propriétaires",
+    topbar_leads_sub: "Propriétaires — importez, enrichissez, suivez vos pistes",
+    topbar_phonefinder: "Recherche Tél.",
+    topbar_phonefinder_sub: "Enrichit des numéros manquants via Google Places",
     topbar_workspace: "Workspace",
     topbar_workspace_empty: "Sélectionnez un deal",
     flag_banner: "🚩 Soumettre ce lead à Anthony",
@@ -79,6 +85,114 @@ const I18N = {
     chat_thinking: "Réflexion…",
     chat_greet: (name) => `Bonjour ${name} ! Je suis l'assistant SOCLE. Posez-moi vos questions sur le CRM (stages, leads, follow-ups, calendrier, etc.) pour éviter de déranger Anthony.`,
     lang_switch: "EN",
+
+    // Leads page (merged owner-grouped view) -----------------------------
+    leads_label_proprio: "Propriétaire",
+    leads_search_placeholder: "🔍 Rechercher propriétaire, compagnie, téléphone… (⌘K)",
+    leads_filter_all_stages: "Tous les statuts",
+    leads_filter_all_sources: "Tous les numéros",
+    leads_filter_missing_phone: "Numéro manquant",
+    leads_sort_buildings: "Tri: plus de propriétés",
+    leads_sort_phones: "Tri: plus de numéros",
+    leads_sort_name: "Tri: nom A–Z",
+    leads_btn_import: "📥 Importer un rôle",
+    leads_btn_import_busy: "Lecture…",
+    leads_btn_enrich: "🔍 Enrichir numéros manquants",
+    leads_btn_enrich_busy: "Recherche…",
+    leads_btn_test100: "▶︎ Tester 100 d'abord",
+    leads_header_title: "Propriétaires",
+    leads_header_counts: (bldCount, bldS, phCount, phS) =>
+      `${bldCount} propriété${bldS} · ${phCount} numéro${phS} tracé${phS}`,
+    leads_header_missing: (n) => ` · ${n} sans numéro`,
+    leads_hint: "Un propriétaire = une adresse postale. Les compagnies à numéro sont regroupées comme aliases.",
+    leads_empty_title: "Aucun propriétaire pour le moment",
+    leads_empty_body: "Importez un rôle d'évaluation avec le bouton « 📥 Importer un rôle » ci-dessus.",
+    leads_empty_search: (q) => `Aucun propriétaire ne correspond à « ${q} »`,
+    leads_select_hint: "Sélectionnez un propriétaire à gauche pour voir sa fiche.",
+    leads_loading: "Chargement des propriétaires…",
+    leads_err_label: "la page Leads",
+    leads_no_buildings: "Aucune propriété enregistrée.",
+    leads_no_companies: "Aucune compagnie recensée.",
+    leads_no_phones: "Aucun numéro tracé pour l'instant.",
+    leads_no_emails: "Aucun courriel.",
+    leads_buildings_tt: "Toutes les propriétés détenues par ce propriétaire",
+    leads_phones_tt: "Les badges indiquent la provenance de chaque numéro",
+    leads_companies_tt: "Toutes les entités à numéro et fiducies de ce propriétaire",
+    leads_contacts_tt: "Les personnes identifiées à cette adresse postale (conjoints, etc.)",
+    leads_count_buildings: (n, s) => `${n} propriété${s}`,
+    leads_count_phones: (n) => `${n} tél`,
+    leads_count_also: (names) => `Aussi: ${names}`,
+    leads_places_matched: "Places a associé ce propriétaire à :",
+    leads_call_notes: "Notes d'appel",
+    leads_call_notes_placeholder: "Notes d'appel, impressions, prochaine étape…",
+    leads_ia_btn: "✦ IA",
+    leads_ia_btn_busy: "Organisation…",
+    leads_ia_label: "✦ Résumé IA",
+    leads_ia_placeholder: "Résumé IA — cliquez pour organiser les notes",
+    leads_ia_clear: "Effacer",
+    leads_ia_err_empty: "Ajoutez des notes avant d'utiliser l'IA.",
+    leads_ia_err_server: "Erreur de connexion au serveur.",
+
+    // Finances section --------------------------------------------------
+    fin_section: "Finances",
+    fin_revenue: "Revenu brut annuel ($)",
+    fin_revenue_en_short: "Gross annual income",
+    fin_expenses: "Dépenses annuelles ($)",
+    fin_expenses_en_short: "Annual expenses",
+    fin_noi: "NOI",
+    fin_total_units: "Total unités",
+    fin_unit_mix: "Unit mix",
+    fin_unit_1_5: "1½",
+    fin_unit_2_5: "2½",
+    fin_unit_3_5: "3½",
+    fin_unit_4_5: "4½",
+    fin_unit_5_5: "5½+",
+
+    // Stage labels (owner/lead) ----------------------------------------
+    stage_new: "Nouveau",
+    stage_to_call: "À appeler",
+    stage_contacted: "Contacté",
+    stage_qualified: "Qualifié",
+    stage_converted: "Converti",
+    stage_closed: "Fermé",
+    stage_lost: "Perdu",
+
+    // Deal-pipeline stages (the ones surfaced on cards) ----------------
+    pipeline_prospection: "Prospection",
+    pipeline_negotiation: "Négociation",
+    pipeline_due_diligence: "Due diligence",
+    pipeline_closing: "Closing",
+    pipeline_lost: "Perdu",
+
+    // Phone-source badges -----------------------------------------------
+    src_excel: "Excel",
+    src_places: "Places",
+    src_manual: "Manuel",
+    src_migrated: "Importé",
+
+    // Import modal -------------------------------------------------------
+    import_title: "Importer un rôle d'évaluation",
+    import_cancel: "Annuler",
+    import_only: "Importer seulement",
+    import_enrich_100: "Importer + tester 100",
+    import_enrich_all: "Importer + enrichir tout",
+    import_filters_title: "Filtres de ciblage (optionnels)",
+    import_preview_title: "Aperçu — 5 premiers propriétaires",
+    import_done: (newN, updN, leadsN) =>
+      `📥 Import terminé · ${newN} nouveau${newN > 1 ? "x" : ""} · ${updN} mis à jour · ${leadsN} propriété${leadsN > 1 ? "s" : ""} ajoutée${leadsN > 1 ? "s" : ""}.`,
+
+    // Enrichment notices -------------------------------------------------
+    enrich_none_targeted: "Aucun propriétaire à enrichir avec ces critères.",
+    enrich_none_usable: "Aucun propriétaire ciblé n'a une adresse postale exploitable.",
+    enrich_cap_hit: (cost) => `Plafond quotidien atteint (${cost}). Réessayez demain.`,
+    enrich_budget_hit: "Budget quotidien Google Places atteint. Réessayez demain.",
+    enrich_ok: (found, foundS, total) => `✅ ${found} propriétaire${foundS} enrichi${foundS} sur ${total}.`,
+    enrich_nothing_found: (n, s) => `Aucun nouveau numéro trouvé sur ${n} recherche${s}.`,
+
+    // Toasts & misc ------------------------------------------------------
+    toast_saved: "Enregistré.",
+    toast_storage_full: "⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.",
+    loading_generic: "Chargement…",
   },
   en: {
     login_title: "SOCLE Sign-in",
@@ -97,15 +211,21 @@ const I18N = {
     nav_phonefinder: "Phone Finder",
     nav_new_deal: "＋ New deal",
     topbar_dashboard: "Dashboard",
+    topbar_dashboard_sub: "Overview · deals, follow-ups, activity",
     topbar_pipeline: "Pipeline",
+    topbar_pipeline_sub: "Drag deals from one stage to the next",
     topbar_map: "Map",
     topbar_map_sub: "Geographic view of deals across Québec",
     topbar_followups: "Follow-ups",
+    topbar_followups_sub: "Calls and follow-ups to make",
     topbar_calendar: "Calendar",
+    topbar_calendar_sub: "Deal events and deadlines",
     topbar_owners: "Investors",
     topbar_owners_sub: "One investor = one mailing address. Companies, phone numbers and properties all grouped.",
     topbar_leads: "Leads",
-    topbar_leads_sub: "Import, enrich, and manage owner prospects",
+    topbar_leads_sub: "Property owners — import, enrich, track your leads",
+    topbar_phonefinder: "Phone Finder",
+    topbar_phonefinder_sub: "Fills missing numbers via Google Places",
     topbar_workspace: "Workspace",
     topbar_workspace_empty: "Select a deal",
     flag_banner: "🚩 Submit this lead to Anthony",
@@ -125,6 +245,106 @@ const I18N = {
     chat_thinking: "Thinking…",
     chat_greet: (name) => `Hi ${name}! I'm the SOCLE assistant. Ask me anything about the CRM (stages, leads, follow-ups, calendar, etc.) so you don't have to call Anthony.`,
     lang_switch: "FR",
+
+    leads_label_proprio: "Owner",
+    leads_search_placeholder: "🔍 Search owner, company, phone… (⌘K)",
+    leads_filter_all_stages: "All statuses",
+    leads_filter_all_sources: "All phone sources",
+    leads_filter_missing_phone: "Missing phone",
+    leads_sort_buildings: "Sort: most properties",
+    leads_sort_phones: "Sort: most phones",
+    leads_sort_name: "Sort: name A–Z",
+    leads_btn_import: "📥 Import a rôle",
+    leads_btn_import_busy: "Reading…",
+    leads_btn_enrich: "🔍 Enrich missing numbers",
+    leads_btn_enrich_busy: "Searching…",
+    leads_btn_test100: "▶︎ Test 100 first",
+    leads_header_title: "Property owners",
+    leads_header_counts: (bldCount, bldS, phCount, phS) =>
+      `${bldCount} propert${bldCount === 1 ? "y" : "ies"} · ${phCount} tracked phone${phS}`,
+    leads_header_missing: (n) => ` · ${n} missing phone`,
+    leads_hint: "One owner = one mailing address. Numbered companies roll up as aliases.",
+    leads_empty_title: "No owners yet",
+    leads_empty_body: "Import a rôle to get started — use the « 📥 Import a rôle » button above.",
+    leads_empty_search: (q) => `No owner matches « ${q} »`,
+    leads_select_hint: "Select an owner on the left to view their fiche.",
+    leads_loading: "Loading owners…",
+    leads_err_label: "the Leads page",
+    leads_no_buildings: "No properties on file.",
+    leads_no_companies: "No companies on file.",
+    leads_no_phones: "No phone tracked yet.",
+    leads_no_emails: "No email.",
+    leads_buildings_tt: "All properties held by this owner",
+    leads_phones_tt: "Badges show the source of each phone number",
+    leads_companies_tt: "All numbered entities and trusts belonging to this owner",
+    leads_contacts_tt: "People identified at this mailing address (spouses, etc.)",
+    leads_count_buildings: (n) => `${n} propert${n === 1 ? "y" : "ies"}`,
+    leads_count_phones: (n) => `${n} ph`,
+    leads_count_also: (names) => `Also: ${names}`,
+    leads_places_matched: "Places matched this owner to:",
+    leads_call_notes: "Call notes",
+    leads_call_notes_placeholder: "Call notes, impressions, next step…",
+    leads_ia_btn: "✦ AI",
+    leads_ia_btn_busy: "Organizing…",
+    leads_ia_label: "✦ AI summary",
+    leads_ia_placeholder: "AI summary — click to organize notes",
+    leads_ia_clear: "Clear",
+    leads_ia_err_empty: "Add notes before using AI.",
+    leads_ia_err_server: "Server connection error.",
+
+    fin_section: "Finances",
+    fin_revenue: "Gross annual income ($)",
+    fin_revenue_en_short: "Gross annual income",
+    fin_expenses: "Annual expenses ($)",
+    fin_expenses_en_short: "Annual expenses",
+    fin_noi: "NOI",
+    fin_total_units: "Total units",
+    fin_unit_mix: "Unit mix",
+    fin_unit_1_5: "1½",
+    fin_unit_2_5: "2½",
+    fin_unit_3_5: "3½",
+    fin_unit_4_5: "4½",
+    fin_unit_5_5: "5½+",
+
+    stage_new: "New",
+    stage_to_call: "To call",
+    stage_contacted: "Contacted",
+    stage_qualified: "Qualified",
+    stage_converted: "Converted",
+    stage_closed: "Closed",
+    stage_lost: "Lost",
+
+    pipeline_prospection: "Prospecting",
+    pipeline_negotiation: "Negotiation",
+    pipeline_due_diligence: "Due diligence",
+    pipeline_closing: "Closing",
+    pipeline_lost: "Lost",
+
+    src_excel: "Excel",
+    src_places: "Places",
+    src_manual: "Manual",
+    src_migrated: "Legacy",
+
+    import_title: "Import an évaluation rôle",
+    import_cancel: "Cancel",
+    import_only: "Import only",
+    import_enrich_100: "Import + test 100",
+    import_enrich_all: "Import + enrich all",
+    import_filters_title: "Targeting filters (optional)",
+    import_preview_title: "Preview — first 5 owners",
+    import_done: (newN, updN, leadsN) =>
+      `📥 Import done · ${newN} new · ${updN} updated · ${leadsN} propert${leadsN === 1 ? "y" : "ies"} added.`,
+
+    enrich_none_targeted: "No owner matches the enrichment criteria.",
+    enrich_none_usable: "No targeted owner has a usable mailing address.",
+    enrich_cap_hit: (cost) => `Daily cap hit (${cost}). Try again tomorrow.`,
+    enrich_budget_hit: "Daily Google Places budget hit. Try again tomorrow.",
+    enrich_ok: (found, _foundS, total) => `✅ ${found} owner${found === 1 ? "" : "s"} enriched out of ${total}.`,
+    enrich_nothing_found: (n) => `No new number found over ${n} search${n === 1 ? "" : "es"}.`,
+
+    toast_saved: "Saved.",
+    toast_storage_full: "⚠️ Local storage full. Export and remove leads to free up space.",
+    loading_generic: "Loading…",
   },
 };
 
@@ -150,7 +370,8 @@ import ErrorBoundary from "./components/ErrorBoundary.jsx";
 // fallback flashes for ~0ms instead of the 150–400ms a cold fetch takes.
 const DealMap = lazyWithPreload(() => import("./components/DealMap.jsx"));
 const XlsxViewer = lazyWithPreload(() => import("./components/XlsxViewer.jsx"));
-const LeadsManager = lazyWithPreload(() => import("./pages/LeadsManager.jsx"));
+// LeadsManager (flat per-property view) is retired from the UI but kept in
+// the repo to avoid blast radius during this merge. Not imported here.
 const PhoneFinder = lazyWithPreload(() => import("./pages/PhoneFinder.jsx"));
 const OwnersManager = lazyWithPreload(() => import("./pages/OwnersManager.jsx"));
 
@@ -160,9 +381,11 @@ const OwnersManager = lazyWithPreload(() => import("./pages/OwnersManager.jsx"))
 // → prefetch becomes a no-op.
 const NAV_PRELOAD = {
   map: DealMap.preload,
-  leads: LeadsManager.preload,
+  // "Leads" now renders the owner-grouped page (OwnersManager); the legacy
+  // flat-leads module (LeadsManager) is no longer routed to but kept on
+  // disk for now so its import flow can be revived if needed.
+  leads: OwnersManager.preload,
   phonefinder: PhoneFinder.preload,
-  owners: OwnersManager.preload,
 };
 
 const CSS = `
@@ -641,21 +864,41 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", flush);
   }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
 
-  // One-time migration: rebuild the Investisseurs view from legacy Leads.
-  // Runs only when we have leads but no owners yet (fresh install of the
-  // owner-primary model). Subsequent changes to `owners` happen through the
-  // OwnersManager UI or during Phone Finder imports (see Task #4).
+  // One-time migration: absorb flat legacy Leads into the owner-grouped
+  // model. Runs once per browser (guarded by `migratedLeads_v1` in
+  // localStorage) so re-opening the app doesn't re-import legacy leads
+  // every time. After the merge, the user works only with owners; the
+  // leads array stays on disk but isn't surfaced in the UI.
   const migratedRef = useRef(false);
   useEffect(() => {
     if (migratedRef.current) return;
-    if (owners.length > 0) { migratedRef.current = true; return; }
-    if (!Array.isArray(leads) || leads.length === 0) return;
+    let alreadyDone = false;
+    try { alreadyDone = localStorage.getItem("migratedLeads_v1") === "1"; } catch {}
+    if (alreadyDone) { migratedRef.current = true; return; }
+    if (!Array.isArray(leads) || leads.length === 0) {
+      // Still mark the flag so a user who has neither leads nor owners
+      // doesn't re-enter this branch on every boot.
+      try { localStorage.setItem("migratedLeads_v1", "1"); } catch {}
+      migratedRef.current = true;
+      return;
+    }
     const migrated = migrateLeadsToOwners(leads);
     if (migrated.length > 0) {
-      setOwners(migrated);
+      // If the user already has owners, merge — don't clobber. Otherwise
+      // set directly.
+      setOwners(prev => {
+        if (!Array.isArray(prev) || prev.length === 0) return migrated;
+        // Cheap merge: dedupe by ownerKey, prefer existing record.
+        const byKey = new Map(prev.map(o => [o.ownerKey, o]));
+        for (const m of migrated) {
+          if (!byKey.has(m.ownerKey)) byKey.set(m.ownerKey, m);
+        }
+        return Array.from(byKey.values());
+      });
     }
+    try { localStorage.setItem("migratedLeads_v1", "1"); } catch {}
     migratedRef.current = true;
-  }, [leads, owners.length]);
+  }, [leads]);
 
   const current = useMemo(() => deals.find(d => d.id === currentId) || null, [deals, currentId]);
   const currentCalls = useMemo(() => {
@@ -1298,7 +1541,10 @@ export default function App() {
               { id:"map", label:t("nav_map") },
               { id:"followups", label:t("nav_followups") },
               { id:"calendar", label:t("nav_calendar") },
-              { id:"owners", label:t("nav_owners") },
+              // Leads is now the merged owner-grouped page — "Investors"
+              // used to be a separate nav item but it pointed at the same
+              // data model. Dropped to reduce confusion; "Leads" is the
+              // single entry point.
               { id:"leads", label:t("nav_leads") },
               // Phone Finder is admin-only: Gaylord doesn't get it in the nav.
               ...(isAdmin ? [{ id:"phonefinder", label:t("nav_phonefinder") }] : []),
@@ -1369,7 +1615,7 @@ export default function App() {
         <main className="main">
           {view === "dashboard" && (
             <>
-              <Topbar title={t("topbar_dashboard")} {...topbarCommon} />
+              <Topbar title={t("topbar_dashboard")} subtitle={t("topbar_dashboard_sub")} {...topbarCommon} />
               <div className="content">
                 {isAdmin && flaggedLeads.length > 0 && (
                   <div
@@ -1556,7 +1802,7 @@ export default function App() {
 
           {view === "pipeline" && (
             <>
-              <Topbar title={t("topbar_pipeline")} {...topbarCommon} />
+              <Topbar title={t("topbar_pipeline")} subtitle={t("topbar_pipeline_sub")} {...topbarCommon} />
               <div className="content">
                 <div className="kanban-wrap">
                   <div className="kanban">
@@ -1643,7 +1889,7 @@ export default function App() {
 
           {view === "followups" && (
             <>
-              <Topbar title={t("topbar_followups")} {...topbarCommon} />
+              <Topbar title={t("topbar_followups")} subtitle={t("topbar_followups_sub")} {...topbarCommon} />
               <div className="content">
                 {followUps.length===0 ? (
                   <div className="card empty">
@@ -1680,7 +1926,7 @@ export default function App() {
 
           {view === "calendar" && (
             <>
-              <Topbar title={t("topbar_calendar")} {...topbarCommon} />
+              <Topbar title={t("topbar_calendar")} subtitle={t("topbar_calendar_sub")} {...topbarCommon} />
               <div className="content">
                 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   <button className="btn btn-gold" onClick={connectGoogleCalendar} disabled={gcalLoading}>{gcalLoading?"Connexion...":gcalOk?"Actualiser Google Calendar":"Connecter Google Calendar"}</button>
@@ -1737,26 +1983,16 @@ export default function App() {
             </>
           )}
 
-          {view === "owners" && (
-            <>
-              <Topbar title={t("topbar_owners")} subtitle={t("topbar_owners_sub")} {...topbarCommon} />
-              <div className="content">
-                <ErrorBoundary label="la page Investisseurs">
-                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des investisseurs…</div>}>
-                    <OwnersManager owners={owners} setOwners={setOwners} onAddLeads={importLeadsFromRole} />
-                  </Suspense>
-                </ErrorBoundary>
-              </div>
-            </>
-          )}
-
-          {view === "leads" && (
+          {/* Legacy "owners" view id stays routed to OwnersManager for
+              backwards-compat with anyone bookmarking the old URL hash.
+              Primary entry point is now view === "leads" (same render). */}
+          {(view === "leads" || view === "owners") && (
             <>
               <Topbar title={t("topbar_leads")} subtitle={t("topbar_leads_sub")} {...topbarCommon} />
               <div className="content">
-                <ErrorBoundary label="la page Leads">
-                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>Chargement des leads…</div>}>
-                    <LeadsManager leads={leads} setLeads={setLeads} onCreateDealFromLead={createDealFromLead} />
+                <ErrorBoundary label={t("leads_err_label")}>
+                  <Suspense fallback={<div style={{padding:40,textAlign:"center",fontSize:13,color:"var(--text2)"}}>{t("leads_loading")}</div>}>
+                    <OwnersManager owners={owners} setOwners={setOwners} onAddLeads={importLeadsFromRole} t={t} lang={lang} />
                   </Suspense>
                 </ErrorBoundary>
               </div>

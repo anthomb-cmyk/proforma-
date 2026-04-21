@@ -7,6 +7,9 @@ import {
   mergeOwners,
   ownersToLookupRows,
   applyLookupResultsToOwners,
+  ensureBuildingFinances,
+  computeBuildingNOI,
+  computeBuildingTotalUnits,
 } from "./ownerGrouping.js";
 
 // Helper — the shape returned by LeadsManager's `prepared` row, minimal.
@@ -353,6 +356,86 @@ describe("ownersToLookupRows", () => {
     expect(row["Propriétaire1_Nom"]).toBe("Primary");
     expect(row["Propriétaire4_Nom"]).toBe("C");
     expect(row["Propriétaire5_Nom"]).toBeUndefined();
+  });
+});
+
+describe("ensureBuildingFinances", () => {
+  test("fills in defaults when finances is missing", () => {
+    const b = { id: "b1", address: "100 Elm" };
+    const out = ensureBuildingFinances(b);
+    expect(out.finances).toEqual({
+      revenueAnnuel: null,
+      depensesAnnuelles: null,
+      unitMix: { u1_5: 0, u2_5: 0, u3_5: 0, u4_5: 0, u5_5_plus: 0 },
+    });
+    // Does not mutate the input.
+    expect(b.finances).toBeUndefined();
+  });
+
+  test("preserves existing finances values", () => {
+    const b = {
+      id: "b1",
+      finances: {
+        revenueAnnuel: 120000,
+        depensesAnnuelles: 40000,
+        unitMix: { u1_5: 1, u2_5: 3, u3_5: 5, u4_5: 2, u5_5_plus: 1 },
+      },
+    };
+    const out = ensureBuildingFinances(b);
+    expect(out.finances.revenueAnnuel).toBe(120000);
+    expect(out.finances.depensesAnnuelles).toBe(40000);
+    expect(out.finances.unitMix.u3_5).toBe(5);
+    expect(out.finances.unitMix.u5_5_plus).toBe(1);
+  });
+
+  test("fills in missing unit-mix keys with 0", () => {
+    const b = { id: "b1", finances: { revenueAnnuel: 1000, unitMix: { u3_5: 4 } } };
+    const out = ensureBuildingFinances(b);
+    expect(out.finances.unitMix).toEqual({ u1_5: 0, u2_5: 0, u3_5: 4, u4_5: 0, u5_5_plus: 0 });
+    expect(out.finances.depensesAnnuelles).toBe(null);
+  });
+
+  test("returns the same value for null/undefined input", () => {
+    expect(ensureBuildingFinances(null)).toBe(null);
+    expect(ensureBuildingFinances(undefined)).toBe(undefined);
+  });
+});
+
+describe("computeBuildingNOI", () => {
+  test("returns revenue minus expenses when both present", () => {
+    const b = { finances: { revenueAnnuel: 120000, depensesAnnuelles: 45000 } };
+    expect(computeBuildingNOI(b)).toBe(75000);
+  });
+
+  test("returns null when either is missing", () => {
+    expect(computeBuildingNOI({ finances: { revenueAnnuel: 100, depensesAnnuelles: null } })).toBe(null);
+    expect(computeBuildingNOI({ finances: { revenueAnnuel: null, depensesAnnuelles: 100 } })).toBe(null);
+    expect(computeBuildingNOI({ finances: {} })).toBe(null);
+    expect(computeBuildingNOI({})).toBe(null);
+    expect(computeBuildingNOI(null)).toBe(null);
+  });
+
+  test("allows negative NOI (expenses exceed revenue)", () => {
+    const b = { finances: { revenueAnnuel: 10000, depensesAnnuelles: 15000 } };
+    expect(computeBuildingNOI(b)).toBe(-5000);
+  });
+});
+
+describe("computeBuildingTotalUnits", () => {
+  test("sums all unit-mix counts", () => {
+    const b = { finances: { unitMix: { u1_5: 1, u2_5: 2, u3_5: 3, u4_5: 4, u5_5_plus: 5 } } };
+    expect(computeBuildingTotalUnits(b)).toBe(15);
+  });
+
+  test("returns 0 when unit-mix is missing", () => {
+    expect(computeBuildingTotalUnits({})).toBe(0);
+    expect(computeBuildingTotalUnits({ finances: {} })).toBe(0);
+    expect(computeBuildingTotalUnits(null)).toBe(0);
+  });
+
+  test("coerces string counts to numbers (input-field friendly)", () => {
+    const b = { finances: { unitMix: { u1_5: "2", u2_5: "3" } } };
+    expect(computeBuildingTotalUnits(b)).toBe(5);
   });
 });
 

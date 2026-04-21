@@ -1,26 +1,31 @@
-// Owners view — the primary CRM entity is now the investor (1 postal address
-// = 1 person), not the individual building. An Owner can have many companies
-// (aliases), many phone numbers, many buildings, and one mailing address.
+// Leads page — owner-grouped view (1 mailing address = 1 Propriétaire).
+// This module was formerly `OwnersManager` and is now the single rendering
+// surface for the "Leads" sidebar entry; the flat per-property LeadsManager
+// has been retired. See App.js: view === "leads" → <OwnersManager />.
 //
-// This page is a minimal, functional investor-centric view:
+// Layout:
 //   • Left column: owner list with search + sort + source filter
-//   • Right column: owner fiche showing aliases (companies), phones (with
-//     source badges), emails, buildings, postal address, and call notes
-//   • Header: "Importer un rôle" (XLSX) + "Enrichir numéros manquants"
-//     with a "tester 100 d'abord" preset to validate hit rate before
-//     committing to a full batch
+//   • Right column: owner fiche (aliases, phones with source badges, emails,
+//     buildings w/ optional Finances accordion, call notes + ✦ IA organizer)
+//   • Header: "Importer un rôle" (XLSX) + "Enrichir numéros manquants" +
+//     "Tester 100 d'abord" preset.
 //
-// Owners come from App state (populated either via migration of existing
-// leads, via the roleImport flow, or by the Leads importer — see
-// lib/ownerGrouping.js + lib/roleImport.js). Call notes and stage persist
-// per-owner, not per-building.
+// Owners come from App state — populated by migrateLeadsToOwners (one-time
+// on boot), the rôle-import flow, or the Leads importer. Call notes,
+// finances and stage persist per-owner (not per-building).
 
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useCallback } from "react";
 import useFocusHotkey from "../lib/useFocusHotkey.js";
 import useDebouncedValue from "../lib/useDebouncedValue.js";
 import useEscapeKey from "../lib/useEscapeKey.js";
 import { describeOwnerKey } from "../lib/ownerKey.js";
-import { ownersToLookupRows, applyLookupResultsToOwners, mergeOwners } from "../lib/ownerGrouping.js";
+import {
+  ownersToLookupRows,
+  applyLookupResultsToOwners,
+  ensureBuildingFinances,
+  computeBuildingNOI,
+  computeBuildingTotalUnits,
+} from "../lib/ownerGrouping.js";
 import { normalizePhoneKey } from "../lib/phoneUtils.js";
 import { parseRoleXlsx, buildOwnersAndLeadsFromRole } from "../lib/roleImport.js";
 import { estimateLookupCost, formatCost } from "../lib/phoneLookupCost.js";
@@ -39,27 +44,27 @@ const DAILY_SPEND_CAP_USD = 50;
 // before committing the full batch.
 const TEST_BATCH_SIZE = 100;
 
+// Stage catalog. Labels are resolved through t() at render time so
+// switching FR↔EN updates the dropdown + pill text without remounts.
 const STAGES = [
-  { id: "new",       label: "Nouveau",    color: "#6B6B6B", bg: "#ECECEC" },
-  { id: "to_call",   label: "À appeler",  color: "#C9A84C", bg: "#F5EDD6" },
-  { id: "contacted", label: "Contacté",   color: "#2563EB", bg: "#E0EAFF" },
-  { id: "qualified", label: "Qualifié",   color: "#2D8C4E", bg: "#E0F4E6" },
-  { id: "converted", label: "Converti",   color: "#2D8C4E", bg: "#D0ECD9" },
-  { id: "lost",      label: "Perdu",      color: "#C0392B", bg: "#FCE9E6" },
+  { id: "new",       tkey: "stage_new",       color: "#6B6B6B", bg: "#ECECEC" },
+  { id: "to_call",   tkey: "stage_to_call",   color: "#C9A84C", bg: "#F5EDD6" },
+  { id: "contacted", tkey: "stage_contacted", color: "#2563EB", bg: "#E0EAFF" },
+  { id: "qualified", tkey: "stage_qualified", color: "#2D8C4E", bg: "#E0F4E6" },
+  { id: "converted", tkey: "stage_converted", color: "#2D8C4E", bg: "#D0ECD9" },
+  { id: "lost",      tkey: "stage_lost",      color: "#C0392B", bg: "#FCE9E6" },
 ];
 
 function stageCfg(id) {
   return STAGES.find(s => s.id === id) || STAGES[0];
 }
 
-// Source badge colors + labels. Excel = Rôle d'évaluation import, Places =
-// Google Places lookup, Manual = typed into the fiche, Migrated = pre-dates
-// the phoneSources convention (absent source).
+// Source badge palette. Labels are pulled from i18n (src_*) at render time.
 const SOURCE_CFG = {
-  Excel:    { label: "Excel",    bg: "#ECECEC", color: "#6B6B6B" },
-  Places:   { label: "Places",   bg: "#F5EDD6", color: "#8D742D" },
-  Manual:   { label: "Manuel",   bg: "#E0EAFF", color: "#2563EB" },
-  Migrated: { label: "Importé",  bg: "#F0EDE3", color: "#7B7B7B" },
+  Excel:    { tkey: "src_excel",    bg: "#ECECEC", color: "#6B6B6B" },
+  Places:   { tkey: "src_places",   bg: "#F5EDD6", color: "#8D742D" },
+  Manual:   { tkey: "src_manual",   bg: "#E0EAFF", color: "#2563EB" },
+  Migrated: { tkey: "src_migrated", bg: "#F0EDE3", color: "#7B7B7B" },
 };
 
 function sourceFor(owner, phone) {
@@ -76,9 +81,31 @@ function matches(haystack, needle) {
   return norm(haystack).includes(norm(needle));
 }
 
-// One-line formatter for the owner's mailing address. Fallback to the key
-// itself (human-legible) if the structured address is missing.
-function formatPostalAddress(owner) {
+// "Ville (Province) · H1A 1A1" — compact one-liner used in the declutterd
+// fiche (replaces the three stacked city/province/postal rows).
+function formatCityLine(owner) {
+  if (!owner) return "";
+  const p = owner.postalAddress || {};
+  const city = (p.city || "").trim();
+  const prov = (p.province || "").trim();
+  const pc   = (p.postalCode || "").trim();
+  const bits = [];
+  if (city && prov) bits.push(`${city} (${prov})`);
+  else if (city) bits.push(city);
+  else if (prov) bits.push(prov);
+  if (pc) bits.push(pc);
+  return bits.join(" · ");
+}
+
+// Mailing street — separate from city/postal so the fiche can show it on
+// its own line.
+function formatStreetLine(owner) {
+  if (!owner) return "";
+  const p = owner.postalAddress || {};
+  return (p.street || "").trim();
+}
+
+function formatPostalAddressFallback(owner) {
   if (!owner) return "";
   const p = owner.postalAddress || {};
   const parts = [p.street, p.city, p.province, p.postalCode].filter(Boolean);
@@ -86,7 +113,35 @@ function formatPostalAddress(owner) {
   return describeOwnerKey(owner.ownerKey);
 }
 
-export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
+// Fallback i18n function in case the App didn't pass one (e.g. when this
+// module is rendered directly from a test harness). Always returns the
+// French key value if available.
+function makeDefaultT() {
+  return (key, ...args) => {
+    // Minimal default labels — only what's essential for the page to not
+    // crash if `t` is absent. Real strings flow through App's I18N.
+    const fallback = {
+      leads_label_proprio: "Propriétaire",
+      leads_loading: "Chargement…",
+      leads_ia_btn: "✦ IA",
+      leads_ia_btn_busy: "…",
+      leads_ia_clear: "Effacer",
+      fin_section: "Finances",
+      fin_noi: "NOI",
+      fin_total_units: "Total unités",
+      fin_revenue: "Revenu brut annuel ($)",
+      fin_expenses: "Dépenses annuelles ($)",
+      fin_unit_1_5: "1½", fin_unit_2_5: "2½", fin_unit_3_5: "3½",
+      fin_unit_4_5: "4½", fin_unit_5_5: "5½+",
+    };
+    const v = fallback[key];
+    if (typeof v === "function") return v(...args);
+    return v != null ? v : key;
+  };
+}
+
+export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, lang = "fr" }) {
+  const tr = typeof t === "function" ? t : makeDefaultT();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(owners[0]?.id || null);
   const [stageFilter, setStageFilter] = useState("all");
@@ -97,12 +152,15 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
   const [enrichProgress, setEnrichProgress] = useState(null); // { done, total, newlyFound }
   const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
 
+  // IA button busy flag — loads the /api/ai/summarize response for the
+  // currently selected owner's callNotes.
+  const [aiBusy, setAiBusy] = useState(false);
+
   // Rôle import modal state. rolePreview holds the parsed structure while
   // the user reviews stats + filters; null means no modal open.
   const [rolePreview, setRolePreview] = useState(null);
   const [roleBusy, setRoleBusy] = useState(false);
   const [roleError, setRoleError] = useState("");
-  // Targeting filters applied BEFORE we emit Leads. Defaults: all off.
   const [rfMinValue, setRfMinValue] = useState("");
   const [rfMaxYear, setRfMaxYear] = useState("");
   const [rfInscriptionBefore, setRfInscriptionBefore] = useState("");
@@ -124,7 +182,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
       list = list.filter(o => {
         const phones = o.phones || [];
         if (sourceFilter === "missing") return phones.length === 0;
-        // Match if ANY phone on the owner has this source.
         return phones.some(p => sourceFor(o, p) === sourceFilter);
       });
     }
@@ -134,7 +191,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
         if ((o.aliases || []).some(a => matches(a, debouncedSearch))) return true;
         if ((o.contactNames || []).some(n => matches(n, debouncedSearch))) return true;
         if ((o.phones || []).some(p => matches(p, debouncedSearch))) return true;
-        if (matches(formatPostalAddress(o), debouncedSearch)) return true;
+        if (matches(formatPostalAddressFallback(o), debouncedSearch)) return true;
         if ((o.buildings || []).some(b => matches(b.buildingAddress, debouncedSearch))) return true;
         return false;
       });
@@ -142,7 +199,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     list.sort((a, b) => {
       if (sortBy === "name") return (a.displayName || "").localeCompare(b.displayName || "");
       if (sortBy === "phones") return (b.phones?.length || 0) - (a.phones?.length || 0);
-      // default: most buildings first — the biggest investors float up
       return (b.buildings?.length || 0) - (a.buildings?.length || 0);
     });
     return list;
@@ -153,10 +209,35 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     [owners, selectedId, filteredOwners],
   );
 
-  function updateOwner(id, patch) {
+  // Patch an owner in App state. Also touches updatedAt so the persist
+  // debounce picks the change up.
+  const updateOwner = useCallback((id, patch) => {
     if (typeof setOwners !== "function") return;
     setOwners(prev => prev.map(o => o.id === id ? { ...o, ...patch, updatedAt: Date.now() } : o));
-  }
+  }, [setOwners]);
+
+  // Patch a specific building's finances on the selected owner. Uses a
+  // functional update so concurrent edits (e.g. typing in two fields at
+  // once) don't clobber each other.
+  const updateBuildingFinances = useCallback((ownerId, buildingId, patch) => {
+    if (typeof setOwners !== "function") return;
+    setOwners(prev => prev.map(o => {
+      if (o.id !== ownerId) return o;
+      const nextBuildings = (o.buildings || []).map(b => {
+        if (b.id !== buildingId) return b;
+        const prevFin = ensureBuildingFinances(b).finances;
+        return {
+          ...b,
+          finances: {
+            ...prevFin,
+            ...patch,
+            unitMix: { ...prevFin.unitMix, ...(patch.unitMix || {}) },
+          },
+        };
+      });
+      return { ...o, buildings: nextBuildings, updatedAt: Date.now() };
+    }));
+  }, [setOwners]);
 
   const totals = useMemo(() => {
     const owns = Array.isArray(owners) ? owners : [];
@@ -190,8 +271,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     inp.click();
   }
 
-  // Build the filter predicate from the modal's targeting inputs. Each
-  // input is optional — blanks mean "no constraint on that axis".
   function buildFilterFn() {
     const minValue = Number(rfMinValue) || 0;
     const maxYear = Number(rfMaxYear) || 0;
@@ -205,7 +284,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
       if (minValue && (p.valeurImmeuble || 0) < minValue) return false;
       if (maxYear && (p.yearBuilt || 0) > maxYear) return false;
       if (inscriptionYearMax && p.dateInscription) {
-        // dateInscription format varies — pull out the year with a regex.
         const m = String(p.dateInscription).match(/(19|20)\d{2}/);
         const y = m ? Number(m[0]) : 0;
         if (y && y > inscriptionYearMax) return false;
@@ -217,8 +295,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     };
   }
 
-  // Apply the staged import and optionally kick off enrichment. `mode`
-  // is one of "import_only" | "import_enrich_all" | "import_enrich_100".
   async function confirmRoleImport(mode) {
     if (!rolePreview?.parsed) return;
     const filterFn = buildFilterFn();
@@ -228,19 +304,13 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
       owners,
       { sourceFile: fileName, filterFn },
     );
-    // Commit the merge into App state — setOwners receives the full list.
     if (typeof setOwners === "function") setOwners(allOwners);
     if (typeof onAddLeads === "function" && leads.length) onAddLeads(leads);
-    setEnrichNotice(
-      `📥 Import terminé · ${newOwners.length} nouveau${newOwners.length > 1 ? "x" : ""} · `
-      + `${updatedOwners.length} mis à jour · ${leads.length} propriété${leads.length > 1 ? "s" : ""} ajoutée${leads.length > 1 ? "s" : ""}.`
-    );
+    setEnrichNotice(tr("import_done", newOwners.length, updatedOwners.length, leads.length));
     setTimeout(() => setEnrichNotice(""), 6000);
     setRolePreview(null);
     resetRoleFilters();
 
-    // Kick off enrichment using the freshly merged owner list so we target
-    // the just-imported records, not a stale snapshot.
     if (mode !== "import_only") {
       const targets = allOwners.filter(o =>
         (newOwners.some(n => n.id === o.id) || updatedOwners.some(u => u.id === o.id))
@@ -263,30 +333,22 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
 
   // ── Places enrichment ────────────────────────────────────────────────────
 
-  // Run the lookup on an arbitrary list of target owners. `seedOwners` is
-  // the "source of truth" owner list we mutate incrementally — defaults to
-  // the current App state but the caller can pass the freshly-merged list
-  // right after an import so we don't lose the rôle's newly added owners
-  // in the first setOwners call.
   async function runEnrichment(targets, seedOwners) {
     if (typeof setOwners !== "function") return;
     if (!Array.isArray(targets) || !targets.length) {
-      setEnrichNotice("Aucun investisseur à enrichir avec ces critères.");
+      setEnrichNotice(tr("enrich_none_targeted"));
       setTimeout(() => setEnrichNotice(""), 4000);
       return;
     }
     const rowLookup = ownersToLookupRows(targets);
     if (!rowLookup.length) {
-      setEnrichNotice("Aucun investisseur ciblé n'a une adresse postale exploitable.");
+      setEnrichNotice(tr("enrich_none_usable"));
       setTimeout(() => setEnrichNotice(""), 4000);
       return;
     }
-    // Refuse to start if we're already past the daily cap — the backend
-    // will 402 the request anyway, but surfacing it here keeps the UX
-    // honest.
     const currentSpend = loadTodaySpend();
     if (currentSpend.estCost >= DAILY_SPEND_CAP_USD) {
-      setEnrichNotice(`Plafond quotidien atteint (${formatCost(currentSpend.estCost)}). Réessayez demain.`);
+      setEnrichNotice(tr("enrich_cap_hit", formatCost(currentSpend.estCost)));
       setTimeout(() => setEnrichNotice(""), 6000);
       return;
     }
@@ -310,7 +372,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
         const data = await resp.json();
         if (!data?.ok) {
           if (resp.status === 402) {
-            setEnrichNotice(data.error || "Budget quotidien Google Places atteint. Réessayez demain.");
+            setEnrichNotice(data.error || tr("enrich_budget_hit"));
           } else {
             setEnrichNotice(data?.error || `Erreur serveur (${resp.status}).`);
           }
@@ -325,8 +387,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
         totalFound += applied.touched;
         done += slice.length;
         setEnrichProgress({ done, total: rowLookup.length, newlyFound: totalFound });
-        // Commit intermediate progress so the UI updates row-by-row —
-        // matches PhoneFinder's per-batch setResultRuns pattern.
         setOwners(workingOwners);
       } catch (err) {
         setEnrichNotice(`Erreur réseau: ${err?.message || err}`);
@@ -344,14 +404,13 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     if (!bail) {
       setEnrichNotice(
         totalFound > 0
-          ? `✅ ${totalFound} investisseur${totalFound > 1 ? "s" : ""} enrichi${totalFound > 1 ? "s" : ""} sur ${done}.`
-          : `Aucun nouveau numéro trouvé sur ${done} recherche${done > 1 ? "s" : ""}.`
+          ? tr("enrich_ok", totalFound, totalFound > 1 ? "s" : "", done)
+          : tr("enrich_nothing_found", done, done > 1 ? "s" : "")
       );
       setTimeout(() => setEnrichNotice(""), 6000);
     }
   }
 
-  // Public entry points for the two buttons.
   async function enrichAll() {
     const targets = (owners || []).filter(o =>
       (!o.phones || o.phones.length === 0) && (o.postalAddress?.street || o.postalAddress?.postalCode)
@@ -365,7 +424,44 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
     await runEnrichment(targets.slice(0, TEST_BATCH_SIZE), owners);
   }
 
+  // ── AI note organizer ────────────────────────────────────────────────────
+
+  async function runAI() {
+    if (!selected) return;
+    const text = (selected.callNotes || "").trim();
+    if (!text) {
+      setEnrichNotice(tr("leads_ia_err_empty"));
+      setTimeout(() => setEnrichNotice(""), 4000);
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const res = await fetch("/api/ai/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "lead", text }),
+      });
+      const data = await res.json();
+      const summary = data?.ok ? data.summary : (data?.error || tr("leads_ia_err_server"));
+      updateOwner(selected.id, { aiLead: summary });
+    } catch {
+      updateOwner(selected.id, { aiLead: tr("leads_ia_err_server") });
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function clearAI() {
+    if (!selected) return;
+    updateOwner(selected.id, { aiLead: "" });
+  }
+
   // ── Rendering ────────────────────────────────────────────────────────────
+
+  const bCount = totals.buildings;
+  const pCount = totals.phones;
+  const bS = bCount !== 1 ? "s" : "";
+  const pS = pCount !== 1 ? "s" : "";
 
   return (
     <div className="om-shell">
@@ -373,62 +469,59 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
 
       <header className="om-head">
         <div>
-          <div className="om-title">Investisseurs · {totals.owners}</div>
+          <div className="om-title">{tr("leads_header_title")} · {totals.owners}</div>
           <div className="om-sub">
-            {totals.buildings} propriété{totals.buildings !== 1 ? "s" : ""} · {totals.phones} numéro{totals.phones !== 1 ? "s" : ""} tracé{totals.phones !== 1 ? "s" : ""}
-            {totals.missing > 0 ? ` · ${totals.missing} sans numéro` : ""}
+            {tr("leads_header_counts", bCount, bS, pCount, pS)}
+            {totals.missing > 0 ? tr("leads_header_missing", totals.missing) : ""}
           </div>
         </div>
-        <div className="om-hint">Un propriétaire = une adresse postale. Les compagnies à numéro sont regroupées comme aliases.</div>
+        <div className="om-hint">{tr("leads_hint")}</div>
       </header>
 
       <div className="om-toolbar">
         <input
           ref={searchRef}
           className="om-search"
-          placeholder="🔍 Rechercher propriétaire, compagnie, téléphone… (⌘K)"
+          placeholder={tr("leads_search_placeholder")}
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
         <select className="om-select" value={stageFilter} onChange={e => setStageFilter(e.target.value)}>
-          <option value="all">Tous les statuts</option>
-          {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          <option value="all">{tr("leads_filter_all_stages")}</option>
+          {STAGES.map(s => <option key={s.id} value={s.id}>{tr(s.tkey)}</option>)}
         </select>
         <select className="om-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
-          <option value="all">Tous les numéros</option>
-          <option value="missing">Numéro manquant</option>
-          <option value="Excel">Excel</option>
-          <option value="Places">Places</option>
-          <option value="Manual">Manuel</option>
+          <option value="all">{tr("leads_filter_all_sources")}</option>
+          <option value="missing">{tr("leads_filter_missing_phone")}</option>
+          <option value="Excel">{tr("src_excel")}</option>
+          <option value="Places">{tr("src_places")}</option>
+          <option value="Manual">{tr("src_manual")}</option>
         </select>
         <select className="om-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          <option value="buildings">Tri: plus de propriétés</option>
-          <option value="phones">Tri: plus de numéros</option>
-          <option value="name">Tri: nom A–Z</option>
+          <option value="buildings">{tr("leads_sort_buildings")}</option>
+          <option value="phones">{tr("leads_sort_phones")}</option>
+          <option value="name">{tr("leads_sort_name")}</option>
         </select>
         <button
           className="om-import-btn"
           onClick={pickRoleFile}
           disabled={roleBusy}
-          title="Importe un rôle d'évaluation XLSX de la Ville (Longueuil, Montréal, etc.). Dédupe par adresse postale du propriétaire."
         >
-          {roleBusy ? "Lecture…" : "📥 Importer un rôle"}
+          {roleBusy ? tr("leads_btn_import_busy") : tr("leads_btn_import")}
         </button>
         <button
           className="om-enrich-btn"
           onClick={enrichAll}
           disabled={enrichBusy || totals.missing === 0}
-          title="Enrichit les numéros manquants via Google Places — une requête par investisseur."
         >
-          {enrichBusy ? "Recherche…" : "🔍 Enrichir numéros manquants"}
+          {enrichBusy ? tr("leads_btn_enrich_busy") : tr("leads_btn_enrich")}
         </button>
         <button
           className="om-test-btn"
           onClick={enrichTest100}
           disabled={enrichBusy || totals.missing === 0}
-          title={`Teste la recherche Places sur les ${TEST_BATCH_SIZE} premiers investisseurs sans numéro pour mesurer le taux de succès avant un lot complet.`}
         >
-          ▶︎ Tester 100 d'abord
+          {tr("leads_btn_test100")}
         </button>
       </div>
       {enrichNotice && <div className="om-notice">{enrichNotice}</div>}
@@ -436,8 +529,8 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
       {enrichProgress && (
         <div className="om-progress">
           <div className="om-progress-row">
-            <span>⏳ {enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound} trouvé{enrichProgress.newlyFound !== 1 ? "s" : ""}</span>
-            <span className="om-progress-spend">Aujourd'hui ~{formatCost(dailySpend.estCost)}</span>
+            <span>⏳ {enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound}</span>
+            <span className="om-progress-spend">~{formatCost(dailySpend.estCost)}</span>
           </div>
           <div className="om-progress-bar">
             <div style={{ width: `${Math.round((enrichProgress.done / Math.max(1, enrichProgress.total)) * 100)}%` }} />
@@ -450,7 +543,6 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
         const stats = rolePreview.parsed.stats;
         const needLookup = stats.needLookup;
         const est = estimateLookupCost(needLookup);
-        // Sanity check: show the first 5 owners' display names.
         const firstFive = [];
         for (const drafts of rolePreview.parsed.ownersMap.values()) {
           if (firstFive.length >= 5) break;
@@ -461,65 +553,66 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
             phones: drafts.flatMap(x => x.phones).slice(0, 2),
           });
         }
+        const locale = lang === "en" ? "en-CA" : "fr-CA";
         return (
           <div className="mo" onClick={() => !roleBusy && setRolePreview(null)}>
             <div className="mo-box" onClick={e => e.stopPropagation()} style={{maxWidth:640}}>
-              <div className="mo-title">Importer un rôle d'évaluation</div>
+              <div className="mo-title">{tr("import_title")}</div>
               <div className="mo-sub">
                 <strong>{rolePreview.fileName}</strong>
               </div>
               <div className="mo-stats">
-                <div><strong>{stats.properties.toLocaleString("fr-CA")}</strong> propriétés</div>
-                <div><strong>{stats.uniquePostal.toLocaleString("fr-CA")}</strong> investisseurs uniques</div>
-                <div>{stats.withPhone.toLocaleString("fr-CA")} avec numéro dans le rôle</div>
-                <div style={{color:"#8D742D",fontWeight:700}}>{needLookup.toLocaleString("fr-CA")} à rechercher via Places</div>
+                <div><strong>{stats.properties.toLocaleString(locale)}</strong> {lang === "en" ? "properties" : "propriétés"}</div>
+                <div><strong>{stats.uniquePostal.toLocaleString(locale)}</strong> {lang === "en" ? "unique owners" : "propriétaires uniques"}</div>
+                <div>{stats.withPhone.toLocaleString(locale)} {lang === "en" ? "already with a phone" : "avec numéro dans le rôle"}</div>
+                <div style={{color:"#8D742D",fontWeight:700}}>
+                  {needLookup.toLocaleString(locale)} {lang === "en" ? "to look up via Places" : "à rechercher via Places"}
+                </div>
                 <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>
-                  Coût estimé de l'enrichissement: <strong>{formatCost(est.mid)}</strong> ({formatCost(est.lo)}–{formatCost(est.hi)})
+                  {lang === "en" ? "Estimated enrichment cost:" : "Coût estimé de l'enrichissement:"}{" "}
+                  <strong>{formatCost(est.mid)}</strong> ({formatCost(est.lo)}–{formatCost(est.hi)})
                 </div>
               </div>
 
-              <div className="mo-sec-title">Aperçu — 5 premiers investisseurs</div>
+              <div className="mo-sec-title">{tr("import_preview_title")}</div>
               <ul className="mo-list">
                 {firstFive.map((o, i) => (
                   <li key={i}>
                     <strong>{o.name}</strong>
-                    <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || "(adresse postale manquante)"}</div>
+                    <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || (lang === "en" ? "(missing mailing address)" : "(adresse postale manquante)")}</div>
                     {o.phones.length > 0 && <div style={{fontSize:11,color:"var(--gold)"}}>📞 {o.phones.join(" · ")}</div>}
                   </li>
                 ))}
               </ul>
 
-              <div className="mo-sec-title">Filtres de ciblage (optionnels)</div>
+              <div className="mo-sec-title">{tr("import_filters_title")}</div>
               <div className="mo-filters">
                 <label>
-                  <span>Valeur de l'immeuble ≥</span>
+                  <span>{lang === "en" ? "Property value ≥" : "Valeur de l'immeuble ≥"}</span>
                   <input type="number" placeholder="$" value={rfMinValue} onChange={e => setRfMinValue(e.target.value)} />
                 </label>
                 <label>
-                  <span>Année de construction ≤</span>
+                  <span>{lang === "en" ? "Year built ≤" : "Année de construction ≤"}</span>
                   <input type="number" placeholder="1970" value={rfMaxYear} onChange={e => setRfMaxYear(e.target.value)} />
                 </label>
                 <label>
-                  <span>Inscrit au rôle avant</span>
+                  <span>{lang === "en" ? "Registered before" : "Inscrit au rôle avant"}</span>
                   <input type="number" placeholder="2005" value={rfInscriptionBefore} onChange={e => setRfInscriptionBefore(e.target.value)} />
                 </label>
                 <label>
-                  <span>Unités entre</span>
+                  <span>{lang === "en" ? "Units between" : "Unités entre"}</span>
                   <span style={{display:"flex",gap:6}}>
                     <input type="number" placeholder="min" value={rfUnitsMin} onChange={e => setRfUnitsMin(e.target.value)} style={{width:"50%"}} />
                     <input type="number" placeholder="max" value={rfUnitsMax} onChange={e => setRfUnitsMax(e.target.value)} style={{width:"50%"}} />
                   </span>
                 </label>
-                <div style={{fontSize:11,color:"var(--text3)",gridColumn:"1 / -1"}}>
-                  Les filtres s'appliquent aux Leads (propriétés). Tous les investisseurs sont importés quoi qu'il arrive.
-                </div>
               </div>
 
               <div className="mo-foot">
-                <button className="btn" onClick={() => setRolePreview(null)} disabled={roleBusy}>Annuler</button>
-                <button className="btn" onClick={() => confirmRoleImport("import_only")} disabled={roleBusy}>Importer seulement</button>
-                <button className="btn" onClick={() => confirmRoleImport("import_enrich_100")} disabled={roleBusy}>Importer + tester 100</button>
-                <button className="btn btn-gold" onClick={() => confirmRoleImport("import_enrich_all")} disabled={roleBusy}>Importer + enrichir tout</button>
+                <button className="btn" onClick={() => setRolePreview(null)} disabled={roleBusy}>{tr("import_cancel")}</button>
+                <button className="btn" onClick={() => confirmRoleImport("import_only")} disabled={roleBusy}>{tr("import_only")}</button>
+                <button className="btn" onClick={() => confirmRoleImport("import_enrich_100")} disabled={roleBusy}>{tr("import_enrich_100")}</button>
+                <button className="btn btn-gold" onClick={() => confirmRoleImport("import_enrich_all")} disabled={roleBusy}>{tr("import_enrich_all")}</button>
               </div>
             </div>
           </div>
@@ -528,14 +621,14 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
 
       {totals.owners === 0 ? (
         <div className="om-empty">
-          <div style={{fontSize:15, fontWeight:600, marginBottom:6}}>Aucun investisseur pour le moment</div>
-          <div>Importez un rôle d'évaluation via le bouton « Importer un rôle » ci-dessus, ou importez vos leads depuis la page « Leads ».</div>
+          <div style={{fontSize:15, fontWeight:600, marginBottom:6}}>{tr("leads_empty_title")}</div>
+          <div>{tr("leads_empty_body")}</div>
         </div>
       ) : (
         <div className="om-grid">
           <section className="om-list">
             {filteredOwners.length === 0 ? (
-              <div className="om-empty-small">Aucun investisseur ne correspond à « {debouncedSearch} »</div>
+              <div className="om-empty-small">{tr("leads_empty_search", debouncedSearch)}</div>
             ) : filteredOwners.map(o => {
               const s = stageCfg(o.stage || "new");
               const active = selected && selected.id === o.id;
@@ -547,12 +640,12 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
                 >
                   <div className="om-row-main">
                     <div className="om-row-name">{o.displayName || "(Propriétaire inconnu)"}</div>
-                    <div className="om-row-sub">{formatPostalAddress(o) || describeOwnerKey(o.ownerKey)}</div>
+                    <div className="om-row-sub">{formatPostalAddressFallback(o) || describeOwnerKey(o.ownerKey)}</div>
                   </div>
                   <div className="om-row-meta">
-                    <span className="om-badge">{o.buildings?.length || 0} propriété{(o.buildings?.length || 0) !== 1 ? "s" : ""}</span>
-                    <span className="om-badge">{o.phones?.length || 0} tél</span>
-                    <span className="om-pill" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+                    <span className="om-badge">{tr("leads_count_buildings", o.buildings?.length || 0, (o.buildings?.length || 0) !== 1 ? "s" : "")}</span>
+                    <span className="om-badge">{tr("leads_count_phones", o.phones?.length || 0)}</span>
+                    <span className="om-pill" style={{ background: s.bg, color: s.color }}>{tr(s.tkey)}</span>
                   </div>
                 </button>
               );
@@ -560,8 +653,18 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
           </section>
 
           <section className="om-fiche">
-            {selected ? <OwnerFiche owner={selected} onUpdate={patch => updateOwner(selected.id, patch)} /> : (
-              <div className="om-empty-small">Sélectionnez un investisseur à gauche pour voir sa fiche.</div>
+            {selected ? (
+              <OwnerFiche
+                owner={selected}
+                onUpdate={patch => updateOwner(selected.id, patch)}
+                onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
+                onRunAI={runAI}
+                onClearAI={clearAI}
+                aiBusy={aiBusy}
+                tr={tr}
+              />
+            ) : (
+              <div className="om-empty-small">{tr("leads_select_hint")}</div>
             )}
           </section>
         </div>
@@ -570,135 +673,238 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads }) {
   );
 }
 
-function OwnerFiche({ owner, onUpdate }) {
+// Per-building Finances block. Collapsed by default (disclosure triangle).
+// Three numeric inputs for revenue / expenses, a 5-cell grid for the unit
+// mix, and two read-only computed lines (NOI + total units). All edits
+// propagate via onChange (called every keystroke; App-level persist is
+// debounced 500ms).
+function BuildingFinances({ building, onChange, tr }) {
+  const withFin = ensureBuildingFinances(building);
+  const fin = withFin.finances;
+  const [open, setOpen] = useState(false);
+
+  const noi = computeBuildingNOI(withFin);
+  const totalUnits = computeBuildingTotalUnits(withFin);
+
+  const setField = (key, value) => {
+    const num = value === "" ? null : Number(value);
+    onChange({ [key]: Number.isFinite(num) ? num : null });
+  };
+  const setMix = (key, value) => {
+    const num = Number(value) || 0;
+    onChange({ unitMix: { [key]: num } });
+  };
+
+  return (
+    <div className={`bld-fin${open ? " open" : ""}`}>
+      <button type="button" className="bld-fin-toggle" onClick={() => setOpen(o => !o)}>
+        <span className="bld-fin-caret">{open ? "▾" : "▸"}</span>
+        <span>{tr("fin_section")}</span>
+        <span className="bld-fin-readouts">
+          {tr("fin_noi")}: <strong>{noi == null ? "—" : `$${noi.toLocaleString("en-CA")}`}</strong>
+          <span style={{margin:"0 8px",color:"var(--text3)"}}>·</span>
+          {tr("fin_total_units")}: <strong>{totalUnits || "—"}</strong>
+        </span>
+      </button>
+      {open && (
+        <div className="bld-fin-body">
+          <div className="bld-fin-row">
+            <label className="bld-fin-field">
+              <span>{tr("fin_revenue")}</span>
+              <input
+                type="number"
+                value={fin.revenueAnnuel == null ? "" : fin.revenueAnnuel}
+                placeholder="0"
+                onChange={e => setField("revenueAnnuel", e.target.value)}
+              />
+            </label>
+            <label className="bld-fin-field">
+              <span>{tr("fin_expenses")}</span>
+              <input
+                type="number"
+                value={fin.depensesAnnuelles == null ? "" : fin.depensesAnnuelles}
+                placeholder="0"
+                onChange={e => setField("depensesAnnuelles", e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="bld-fin-mix">
+            <div className="bld-fin-mix-lbl">{tr("fin_unit_mix")}</div>
+            <div className="bld-fin-mix-grid">
+              {[
+                ["u1_5", tr("fin_unit_1_5")],
+                ["u2_5", tr("fin_unit_2_5")],
+                ["u3_5", tr("fin_unit_3_5")],
+                ["u4_5", tr("fin_unit_4_5")],
+                ["u5_5_plus", tr("fin_unit_5_5")],
+              ].map(([k, lbl]) => (
+                <label key={k} className="bld-fin-cell">
+                  <span>{lbl}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={fin.unitMix[k] || ""}
+                    placeholder="0"
+                    onChange={e => setMix(k, e.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Owner fiche — decluttered single-card layout. Previously had four
+// bordered sub-sections + inner horizontal rules; now one outer card with
+// internal padding + gap, and the only visible divider is the stage/header
+// line.
+function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, aiBusy, tr }) {
   const s = stageCfg(owner.stage || "new");
   const contactNames = Array.isArray(owner.contactNames) ? owner.contactNames : [];
+  const primary = owner.displayName || "(Propriétaire inconnu)";
+  // "Also:" subtitle for any contact name that isn't the primary display
+  // name (spouses, co-owners). Dedupes + drops the primary.
+  const alsoNames = contactNames.filter(n => n && n !== primary);
+
+  const street = formatStreetLine(owner);
+  const cityLine = formatCityLine(owner);
 
   return (
     <div className="fiche-body">
+      {/* Header: "Propriétaire" eyebrow, then name, then stage control. */}
       <header className="fiche-head">
-        <div>
-          <div className="fiche-name">{owner.displayName || "(Propriétaire inconnu)"}</div>
-          <div className="fiche-addr">📍 {formatPostalAddress(owner) || describeOwnerKey(owner.ownerKey)}</div>
+        <div style={{minWidth:0,flex:1}}>
+          <div className="fiche-eyebrow">{tr("leads_label_proprio")}</div>
+          <div className="fiche-name">{primary}</div>
+          {alsoNames.length > 0 && (
+            <div className="fiche-also">{tr("leads_count_also", alsoNames.join(" · "))}</div>
+          )}
+          <div className="fiche-addr-stack">
+            {street && <div className="fiche-addr">📍 {street}</div>}
+            {cityLine && <div className="fiche-addr-sub">{cityLine}</div>}
+            {!street && !cityLine && (
+              <div className="fiche-addr">📍 {describeOwnerKey(owner.ownerKey)}</div>
+            )}
+          </div>
           {owner.matchedBusinessName ? (
             <div className="fiche-matched">
-              Places a associé cet investisseur à : <strong>{owner.matchedBusinessName}</strong>
+              {tr("leads_places_matched")} <strong>{owner.matchedBusinessName}</strong>
             </div>
           ) : null}
         </div>
         <div className="fiche-stage-wrap">
-          <span className="om-pill" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+          <span className="om-pill" style={{ background: s.bg, color: s.color }}>{tr(s.tkey)}</span>
           <select
             className="om-select fiche-stage"
             value={owner.stage || "new"}
             onChange={e => onUpdate({ stage: e.target.value })}
           >
-            {STAGES.map(st => <option key={st.id} value={st.id}>{st.label}</option>)}
+            {STAGES.map(st => <option key={st.id} value={st.id}>{tr(st.tkey)}</option>)}
           </select>
         </div>
       </header>
 
-      <div className="fiche-grid">
-        <section className="fiche-sec">
-          <div className="fiche-sec-title">
-            Compagnies ({owner.aliases?.length || 0})
-            <span className="fiche-sec-hint">Toutes les entités à numéro et fiducies de ce propriétaire</span>
-          </div>
-          {owner.aliases?.length ? (
-            <ul className="fiche-list">
-              {owner.aliases.map((a, i) => <li key={i}>{a}</li>)}
-            </ul>
-          ) : <div className="fiche-empty">Aucune compagnie recensée.</div>}
-        </section>
+      {/* Inline phones + companies + emails row — decluttered (no stacked
+          sub-cards with inner borders). Each group is a flex row with
+          wrap; badges are inline on the same baseline as the number. */}
+      {(owner.phones?.length > 0) && (
+        <div className="fiche-phones">
+          {owner.phones.map((p, i) => {
+            const src = sourceFor(owner, p);
+            const cfg = SOURCE_CFG[src] || SOURCE_CFG.Migrated;
+            return (
+              <span key={i} className="fiche-phone-chip">
+                <a href={`tel:${String(p).replace(/\D+/g, "")}`}>{p}</a>
+                <span className="om-src-badge" style={{background: cfg.bg, color: cfg.color}} title={tr(cfg.tkey)}>{tr(cfg.tkey)}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
 
-        <section className="fiche-sec">
-          <div className="fiche-sec-title">
-            Téléphones ({owner.phones?.length || 0})
-            <span className="fiche-sec-hint">Les badges indiquent la provenance de chaque numéro</span>
-          </div>
-          {owner.phones?.length ? (
-            <ul className="fiche-list">
-              {owner.phones.map((p, i) => {
-                const src = sourceFor(owner, p);
-                const cfg = SOURCE_CFG[src] || SOURCE_CFG.Migrated;
-                return (
-                  <li key={i} className="fiche-phone">
-                    <a href={`tel:${String(p).replace(/\D+/g, "")}`} style={{color: "var(--blue)", textDecoration: "none", fontWeight: 600}}>{p}</a>
-                    <span className="om-src-badge" style={{background: cfg.bg, color: cfg.color}} title={`Source: ${cfg.label}`}>{cfg.label}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : <div className="fiche-empty">Aucun numéro tracé pour l'instant.</div>}
-        </section>
-
-        <section className="fiche-sec">
-          <div className="fiche-sec-title">
-            Courriels ({owner.emails?.length || 0})
-          </div>
-          {owner.emails?.length ? (
-            <ul className="fiche-list">
-              {owner.emails.map((e, i) => <li key={i}><a href={`mailto:${e}`}>{e}</a></li>)}
-            </ul>
-          ) : <div className="fiche-empty">Aucun courriel.</div>}
-        </section>
-
-        {contactNames.length > 0 && (
-          <section className="fiche-sec">
-            <div className="fiche-sec-title">
-              Personnes physiques ({contactNames.length})
-              <span className="fiche-sec-hint">Les personnes identifiées à cette adresse postale (conjoints, etc.)</span>
+      {(owner.aliases?.length > 0 || owner.emails?.length > 0) && (
+        <div className="fiche-inline">
+          {owner.aliases?.length > 0 && (
+            <div className="fiche-inline-grp">
+              <span className="fiche-inline-lbl">{tr("leads_companies_tt") ? "" : ""}</span>
+              {owner.aliases.map((a, i) => (
+                <span key={i} className="fiche-chip">{a}</span>
+              ))}
             </div>
-            <ul className="fiche-list">
-              {contactNames.map((n, i) => <li key={i}>{n}</li>)}
-            </ul>
-          </section>
-        )}
-
-        <section className="fiche-sec fiche-sec-wide">
-          <div className="fiche-sec-title">
-            Propriétés ({owner.buildings?.length || 0})
-            <span className="fiche-sec-hint">Toutes les propriétés détenues par cet investisseur</span>
-          </div>
-          {owner.buildings?.length ? (
-            <div className="bld-table-wrap">
-              <table className="bld-table">
-                <thead>
-                  <tr>
-                    <th>Adresse</th>
-                    <th>Ville</th>
-                    <th style={{textAlign:"right"}}>Unités</th>
-                    <th>Utilisation</th>
-                    <th style={{textAlign:"right"}}>Évaluation</th>
-                    <th style={{textAlign:"right"}}>Construit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {owner.buildings.map((b, i) => (
-                    <tr key={b.id || i}>
-                      <td>{b.address || b.buildingAddress || "—"}</td>
-                      <td>{b.city || "—"}</td>
-                      <td style={{textAlign:"right"}}>{b.units || "—"}</td>
-                      <td>{b.utilisation || "—"}</td>
-                      <td style={{textAlign:"right"}}>{b.assessment || "—"}</td>
-                      <td style={{textAlign:"right"}}>{b.yearBuilt || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          )}
+          {owner.emails?.length > 0 && (
+            <div className="fiche-inline-grp">
+              {owner.emails.map((e, i) => (
+                <a key={i} className="fiche-email" href={`mailto:${e}`}>{e}</a>
+              ))}
             </div>
-          ) : <div className="fiche-empty">Aucune propriété enregistrée.</div>}
-        </section>
+          )}
+        </div>
+      )}
 
-        <section className="fiche-sec fiche-sec-wide">
-          <div className="fiche-sec-title">Notes d'appel</div>
-          <textarea
-            className="fiche-textarea"
-            placeholder="Notes d'appel, impressions, prochaine étape…"
-            value={owner.callNotes || ""}
-            onChange={e => onUpdate({ callNotes: e.target.value })}
-          />
-        </section>
+      {/* Buildings + finances: each building is a row with a compact
+          summary line and an expandable Finances block. */}
+      <div className="fiche-buildings">
+        <div className="fiche-section-lbl">
+          {(owner.buildings?.length || 0)} × propriét{(owner.buildings?.length || 0) === 1 ? "é" : "és"}
+        </div>
+        {owner.buildings?.length ? (
+          <div className="bld-stack">
+            {owner.buildings.map((b, i) => (
+              <div key={b.id || i} className="bld-card">
+                <div className="bld-head-line">
+                  <span className="bld-addr">{b.address || b.buildingAddress || "—"}</span>
+                  <span className="bld-meta">
+                    {b.city ? `${b.city}` : ""}
+                    {b.units ? ` · ${b.units} u.` : ""}
+                    {b.yearBuilt ? ` · ${b.yearBuilt}` : ""}
+                    {b.assessment ? ` · ${b.assessment}` : ""}
+                  </span>
+                </div>
+                <BuildingFinances
+                  building={b}
+                  onChange={(patch) => onUpdateBuildingFinances(b.id, patch)}
+                  tr={tr}
+                />
+              </div>
+            ))}
+          </div>
+        ) : <div className="fiche-empty">{tr("leads_no_buildings")}</div>}
+      </div>
+
+      {/* Call notes + IA organizer — the IA button sits on the notes
+          header so it's discoverable without taking up its own section. */}
+      <div className="fiche-notes">
+        <div className="fiche-notes-head">
+          <div className="fiche-section-lbl">{tr("leads_call_notes")}</div>
+          <button
+            type="button"
+            className={`ai-btn${aiBusy ? " loading" : ""}`}
+            onClick={onRunAI}
+            disabled={aiBusy || !((owner.callNotes || "").trim())}
+            title={tr("leads_ia_placeholder")}
+          >
+            {aiBusy ? tr("leads_ia_btn_busy") : tr("leads_ia_btn")}
+          </button>
+        </div>
+        <textarea
+          className="fiche-textarea"
+          placeholder={tr("leads_call_notes_placeholder")}
+          value={owner.callNotes || ""}
+          onChange={e => onUpdate({ callNotes: e.target.value })}
+        />
+        {owner.aiLead ? (
+          <div className="ai-box">
+            <div className="ai-box-lbl">{tr("leads_ia_label")}</div>
+            <div style={{whiteSpace:"pre-wrap"}}>{owner.aiLead}</div>
+            <button className="btn btn-sm" style={{marginTop:10}} onClick={onClearAI}>
+              {tr("leads_ia_clear")}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -751,33 +957,60 @@ const CSS = `
 .om-pill{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 .om-src-badge{font-size:10px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 
+/* ── Fiche (decluttered) ──────────────────────────────────────────────── */
 .om-fiche{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-y:auto;min-height:0;max-height:calc(100vh - 240px)}
-.fiche-body{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
-.fiche-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border);padding-bottom:12px}
-.fiche-name{font-size:20px;font-weight:700;color:var(--text)}
-.fiche-addr{font-size:13px;color:var(--text2);margin-top:4px}
+.fiche-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.fiche-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.fiche-eyebrow{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text3);margin-bottom:4px}
+.fiche-name{font-size:20px;font-weight:700;color:var(--text);line-height:1.2}
+.fiche-also{font-size:11px;color:var(--text3);margin-top:2px;font-style:italic}
+.fiche-addr-stack{margin-top:4px;display:flex;flex-direction:column;gap:2px}
+.fiche-addr{font-size:13px;color:var(--text2)}
+.fiche-addr-sub{font-size:12px;color:var(--text3)}
 .fiche-matched{font-size:11px;color:var(--text3);margin-top:4px;font-style:italic}
-.fiche-stage-wrap{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.fiche-stage-wrap{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0}
 .fiche-stage{font-size:12px;padding:4px 8px}
 
-.fiche-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
-.fiche-sec{background:#FAF8F4;border:1px solid var(--border);border-radius:10px;padding:12px 14px}
-.fiche-sec-wide{grid-column:1 / -1}
-.fiche-sec-title{font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;flex-direction:column;gap:2px}
-.fiche-sec-hint{font-size:10px;font-weight:500;color:var(--text3);letter-spacing:0}
-.fiche-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--text)}
-.fiche-list li{padding:4px 0;border-bottom:1px dashed var(--border)}
-.fiche-list li:last-child{border-bottom:none}
-.fiche-phone{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.fiche-phones{display:flex;flex-wrap:wrap;gap:6px}
+.fiche-phone-chip{display:inline-flex;align-items:center;gap:6px;background:#FAF8F4;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--text)}
+.fiche-phone-chip a{color:var(--blue);text-decoration:none;font-weight:600}
+
+.fiche-inline{display:flex;flex-wrap:wrap;gap:16px;align-items:center}
+.fiche-inline-grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.fiche-chip{display:inline-flex;align-items:center;background:#F0EDE3;color:var(--text2);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600}
+.fiche-email{color:var(--blue);text-decoration:none;font-size:12px;font-weight:600}
+
+.fiche-section-lbl{font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.3px;text-transform:uppercase;margin-bottom:6px}
 .fiche-empty{font-size:12px;color:var(--text3);font-style:italic}
 
-.bld-table-wrap{overflow-x:auto}
-.bld-table{width:100%;border-collapse:collapse;font-size:12px}
-.bld-table th{text-align:left;padding:8px 10px;background:#F0EDE3;color:var(--text2);font-weight:700;border-bottom:1px solid var(--border)}
-.bld-table td{padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text)}
-.bld-table tr:last-child td{border-bottom:none}
+.fiche-buildings{display:flex;flex-direction:column}
 
-.fiche-textarea{width:100%;min-height:100px;border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;outline:none;resize:vertical}
+.bld-stack{display:flex;flex-direction:column;gap:8px}
+.bld-card{background:#FAF8F4;border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.bld-head-line{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between}
+.bld-addr{font-size:13px;font-weight:700;color:var(--text)}
+.bld-meta{font-size:11px;color:var(--text3)}
+
+/* Building finances accordion */
+.bld-fin{border-top:1px dashed var(--border);padding-top:8px}
+.bld-fin-toggle{display:flex;align-items:center;gap:10px;background:transparent;border:none;cursor:pointer;padding:0;width:100%;text-align:left;color:var(--text);font-size:12px;font-weight:700}
+.bld-fin-caret{display:inline-block;width:10px;color:var(--text3)}
+.bld-fin-readouts{margin-left:auto;font-size:11px;font-weight:500;color:var(--text2)}
+.bld-fin-readouts strong{color:var(--text);font-weight:700}
+.bld-fin-body{margin-top:10px;display:flex;flex-direction:column;gap:10px}
+.bld-fin-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.bld-fin-field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text2);font-weight:600}
+.bld-fin-field input{border:1px solid var(--border);background:#fff;border-radius:6px;padding:6px 8px;font-size:13px;outline:none}
+.bld-fin-field input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
+.bld-fin-mix-lbl{font-size:11px;color:var(--text2);font-weight:600;margin-bottom:4px}
+.bld-fin-mix-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.bld-fin-cell{display:flex;flex-direction:column;gap:3px;font-size:10px;font-weight:700;color:var(--text2);text-align:center}
+.bld-fin-cell input{border:1px solid var(--border);background:#fff;border-radius:6px;padding:5px 4px;font-size:12px;text-align:center;outline:none;min-width:0;width:100%}
+.bld-fin-cell input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
+
+.fiche-notes{display:flex;flex-direction:column;gap:8px}
+.fiche-notes-head{display:flex;justify-content:space-between;align-items:center}
+.fiche-textarea{width:100%;min-height:110px;border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;outline:none;resize:vertical}
 .fiche-textarea:focus{border-color:#D9C07A;box-shadow:0 0 0 3px #F5EDD6}
 
 /* Modal */
@@ -797,9 +1030,9 @@ const CSS = `
 
 @media (max-width: 1100px){
   .om-grid{grid-template-columns:1fr}
-  .fiche-grid{grid-template-columns:1fr 1fr}
 }
 @media (max-width: 720px){
-  .fiche-grid{grid-template-columns:1fr}
+  .bld-fin-row{grid-template-columns:1fr}
+  .bld-fin-mix-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 `;
