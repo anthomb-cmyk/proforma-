@@ -1626,17 +1626,18 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
 .map-layout{position:relative}
 .map-wrap{position:relative;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
-.map-viewport{width:100%;height:calc(100vh - 140px)}
+.map-viewport{width:100%;height:calc(100vh - 140px);height:calc(100dvh - 140px)}
 .map-viewport.mini{height:280px}
 .map-overlay{position:absolute;z-index:500;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
 .map-overlay.legend{left:12px;top:12px;padding:10px}
 .map-overlay.filters{right:12px;top:12px;padding:8px}
-.map-close-btn{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:600;
+.map-close-btn{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;
   background:var(--text);color:#fff;border:none;border-radius:999px;
-  padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;
-  box-shadow:0 4px 14px rgba(0,0,0,0.22);transition:background .15s}
+  padding:11px 22px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.2px;
+  min-height:44px;box-shadow:0 6px 20px rgba(0,0,0,0.28);transition:background .15s;
+  -webkit-tap-highlight-color:transparent}
 .map-close-btn:hover{background:#000}
-.map-close-btn:active{transform:translateX(-50%) scale(.97)}
+.map-close-btn:active{transform:translateX(-50%) scale(.97);background:#000}
 .map-overlay h4{font-size:10px;letter-spacing:.8px;color:var(--text3);text-transform:uppercase;margin-bottom:6px}
 .legend-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);margin-bottom:4px;white-space:nowrap}
 .legend-row:last-child{margin-bottom:0}
@@ -1805,14 +1806,30 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   /* Filter bar selects single-column when wrapped */
   .om-toolbar select{flex:1 1 48%}
   /* Map: close button sits at top, overlays stack below */
-  .map-close-btn{top:8px;padding:8px 14px;font-size:12px}
-  .map-overlay.legend{left:8px;top:52px;padding:8px;max-width:45vw}
-  .map-overlay.filters{right:8px;top:52px;padding:6px}
+  .map-close-btn{top:10px;padding:10px 18px;font-size:13px;min-height:44px}
+  .map-overlay.legend{left:8px;top:64px;padding:8px;max-width:45vw}
+  .map-overlay.filters{right:8px;top:64px;padding:6px}
   .map-overlay.legend h4{font-size:9px;margin-bottom:4px}
   .legend-row{font-size:10px;margin-bottom:2px}
   .map-filter{min-width:130px}
   .map-filter select{max-width:140px}
-  .map-viewport{height:calc(100vh - 180px)}
+  .map-viewport{height:calc(100vh - 200px);height:calc(100dvh - 200px)}
+  /* iOS: bump common tap targets from 40px to 44px (Apple HIG minimum) */
+  button,.btn,.nav-item{min-height:44px}
+  /* Remove the gray flash on tap — we manage our own :active states */
+  button,.btn,.nav-item,a{-webkit-tap-highlight-color:transparent}
+}
+
+/* Kill iOS 300ms click delay + gray flash globally on interactive surfaces */
+button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* iOS Safari: use dynamic viewport height so 100vh doesn't hide behind the
+   URL bar. The 100vh fallback stays for non-supporting browsers. */
+@supports (height:100dvh){
+  .app-shell{min-height:100dvh}
 }
 
 /* iPhone notch safe area */
@@ -1820,6 +1837,7 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .topbar{padding-top:calc(14px + env(safe-area-inset-top))}
   .sidebar{padding-top:env(safe-area-inset-top)}
   .content{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
+  .chat-window{padding-bottom:env(safe-area-inset-bottom)}
 }
 `;
 
@@ -1906,6 +1924,50 @@ export default function App() {
   // toggle button on wider viewports so desktop stays unchanged.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+
+  // Global ESC handler: closes the mobile drawer if open, then falls back
+  // to popping us out of any full-viewport "stuck" view (map, calendar)
+  // back to Dashboard. Gives keyboard users and iPad-with-keyboard users a
+  // reliable escape hatch.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      if (mobileNavOpen) {
+        setMobileNavOpen(false);
+      } else if (view === "map" || view === "calendar") {
+        setView("dashboard");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line
+  }, [mobileNavOpen, view]);
+
+  // ─── Daily reminder scan (follow-ups + calendar events) ────────────────────
+  // Pings /api/push/scan-reminders on each mount and then hourly while the tab
+  // is open. The backend is idempotent (ledger entry per tag+day in
+  // socle_crm_state.__reminderLog), so running it "too often" is a no-op —
+  // the user only gets each reminder once per day. This replaces the need
+  // for a dedicated cron job as long as someone opens the app daily.
+  useEffect(() => {
+    if (!currentUser) return;
+    let cancelled = false;
+    const kick = () => {
+      if (cancelled) return;
+      // Fire-and-forget: a failure here just means no push today; the next
+      // tab load will retry and the ledger keeps everything idempotent.
+      fetch("/api/push/scan-reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }).catch(() => {});
+    };
+    // Delay the first kick by 8 s so server hydration + push subscription
+    // have time to land before we try to notify.
+    const first = setTimeout(kick, 8000);
+    const interval = setInterval(kick, 60 * 60 * 1000); // hourly
+    return () => { cancelled = true; clearTimeout(first); clearInterval(interval); };
+  }, [currentUser]);
   const persistTimerRef = useRef(null);
   // Guard so the debounced persist effect doesn't fire a server write during
   // the initial mount/hydration — otherwise we'd immediately overwrite the
@@ -2729,7 +2791,19 @@ export default function App() {
               <button
                 key={item.id}
                 className={`nav-item${view===item.id?" active":""}`}
-                onClick={() => { setView(item.id); closeMobileNav(); }}
+                onClick={() => {
+                  // Tapping the active nav item again is a common "take me
+                  // back" instinct on mobile. Toggle heavy views (map,
+                  // calendar) back to Dashboard instead of silently doing
+                  // nothing — gives users a second escape hatch if the
+                  // close button isn't obvious.
+                  if (view === item.id && (item.id === "map" || item.id === "calendar")) {
+                    setView("dashboard");
+                  } else {
+                    setView(item.id);
+                  }
+                  closeMobileNav();
+                }}
                 onMouseEnter={NAV_PRELOAD[item.id]}
                 onFocus={NAV_PRELOAD[item.id]}
               >

@@ -4268,6 +4268,174 @@ app.post("/api/push/notify", express.json({ limit: "10kb" }), async (req, res) =
   res.json(result);
 });
 
+// ─── Scheduled reminders: due follow-ups + calendar events ──────────────────
+// This endpoint scans the shared CRM state for:
+//   (a) deals with a followUpDate that is today or overdue (and not closed-lost)
+//   (b) deal events (d.events[]) scheduled for today
+// …and fires one push per item per day. Idempotency is enforced by a
+// "sent reminders ledger" persisted inside socle_crm_state under
+// state.__reminderLog = { [tag]: "YYYY-MM-DD" } — that way if the endpoint
+// is hit twice in a day (cron retry, client poll) we don't spam the user.
+//
+// Trigger options:
+//   1. Railway cron job — `curl -s -X POST $HOST/api/push/scan-reminders`
+//      once a day (08:00 local works well).
+//   2. Client-side: every authenticated load, the app POSTs here with
+//      { clientTriggered: true }. The ledger keeps it idempotent.
+//
+// Body: { userId? }  — if provided, only fires for that assignee;
+//                      omitted = fires for everyone.
+// Response: { ok, todaysISO, sent: n, skipped: n, items: [...] }
+app.post("/api/push/scan-reminders", express.json({ limit: "10kb" }), async (req, res) => {
+  if (!supabaseServerClient) {
+    return res.status(503).json({ ok: false, error: "supabase-not-configured" });
+  }
+  if (!pushConfigured) {
+    return res.status(503).json({ ok: false, error: "push-not-configured" });
+  }
+
+  // YYYY-MM-DD in America/Toronto (Quebec). All followUpDate / event.date
+  // values are stored as local-day strings so we compare in the same zone.
+  const now = new Date();
+  const todaysISO = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Toronto",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now); // en-CA formatter returns YYYY-MM-DD already
+
+  // Pull the CRM state + reminder ledger.
+  let state = {};
+  try {
+    const { data, error } = await supabaseServerClient
+      .from("socle_crm_state")
+      .select("state")
+      .eq("id", SOCLE_STATE_ROW_ID)
+      .maybeSingle();
+    if (error) {
+      console.warn("[push/scan] state fetch error:", error.message);
+      return res.status(502).json({ ok: false, error: error.message });
+    }
+    state = (data?.state && typeof data.state === "object") ? data.state : {};
+  } catch (err) {
+    console.error("[push/scan] state fetch crash:", err?.message);
+    return res.status(500).json({ ok: false, error: err?.message || "fetch failed" });
+  }
+
+  const deals = Array.isArray(state.deals) ? state.deals : [];
+  const ledger = (state.__reminderLog && typeof state.__reminderLog === "object")
+    ? state.__reminderLog
+    : {};
+
+  // Prune ledger entries older than 14 days so the map doesn't grow forever.
+  const cutoff = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 14);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(d);
+  })();
+  const freshLedger = {};
+  for (const [k, v] of Object.entries(ledger)) {
+    if (typeof v === "string" && v >= cutoff) freshLedger[k] = v;
+  }
+
+  // Build candidate reminder list.
+  // Only the admin owner ("anthony") gets routed by userId; other deals
+  // broadcast so whoever subscribed with that deal's ID sees it. This matches
+  // the two-person trust model (Anthony + Gaylord) — both want to see
+  // everything by default.
+  const filterUserId = req.body?.userId || null;
+  const candidates = [];
+
+  for (const d of deals) {
+    if (!d || d.stage === "perdu") continue;
+    const dealLbl = String(d.title || d.name || d.id || "").slice(0, 120);
+
+    // (a) due follow-up
+    if (typeof d.followUpDate === "string" && d.followUpDate && d.followUpDate <= todaysISO) {
+      const tag = `followup-${d.id}-${todaysISO}`;
+      const daysOverdue = Math.round(
+        (Date.parse(todaysISO + "T12:00:00Z") - Date.parse(d.followUpDate + "T12:00:00Z")) / 86400000
+      );
+      const frenchBody = daysOverdue > 0
+        ? `${dealLbl} — en retard de ${daysOverdue} jour${daysOverdue > 1 ? "s" : ""}`
+        : `${dealLbl} — à faire aujourd'hui`;
+      candidates.push({
+        tag,
+        payload: {
+          title: "🔔 Follow-up à faire",
+          body: frenchBody,
+          url: `/?deal=${encodeURIComponent(d.id)}`,
+          tag,
+          requireInteraction: true,
+        },
+      });
+    }
+
+    // (b) events scheduled for today
+    (Array.isArray(d.events) ? d.events : []).forEach((ev) => {
+      if (!ev || typeof ev.date !== "string") return;
+      if (ev.date !== todaysISO) return;
+      const tag = `event-${d.id}-${ev.id}-${todaysISO}`;
+      const timeTxt = ev.time ? ` à ${ev.time}` : "";
+      candidates.push({
+        tag,
+        payload: {
+          title: `📅 ${ev.title || "Événement"}`,
+          body: `${dealLbl}${timeTxt}`,
+          url: `/?deal=${encodeURIComponent(d.id)}`,
+          tag,
+          requireInteraction: false,
+        },
+      });
+    });
+  }
+
+  // Fire each candidate that isn't already logged for today.
+  let sent = 0, skipped = 0;
+  const fired = [];
+  for (const c of candidates) {
+    if (freshLedger[c.tag] === todaysISO) { skipped++; continue; }
+    const result = await dispatchPush(
+      filterUserId ? { userId: filterUserId } : { all: true },
+      c.payload
+    );
+    if (result.ok && result.sent > 0) {
+      sent += result.sent;
+      freshLedger[c.tag] = todaysISO;
+      fired.push({ tag: c.tag, recipients: result.sent });
+    } else if (result.ok && result.sent === 0) {
+      // No subscriptions yet — still mark as "handled" for today so we
+      // don't loop through the same deals every poll. The ledger entry
+      // will auto-prune after 14 days.
+      freshLedger[c.tag] = todaysISO;
+      skipped++;
+    }
+  }
+
+  // Write back the updated ledger. Done as a shallow merge on state.
+  try {
+    const nextState = { ...state, __reminderLog: freshLedger };
+    await supabaseServerClient
+      .from("socle_crm_state")
+      .upsert(
+        { id: SOCLE_STATE_ROW_ID, state: nextState, updated_at: new Date().toISOString() },
+        { onConflict: "id" }
+      );
+  } catch (err) {
+    console.warn("[push/scan] ledger upsert failed:", err?.message);
+    // Non-fatal: notifications already went out.
+  }
+
+  res.json({
+    ok: true,
+    todaysISO,
+    scanned: candidates.length,
+    sent,
+    skipped,
+    fired,
+  });
+});
+
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
 // All enrichment logic lives in services/phoneEnrichment.js. This endpoint is
 // now a thin HTTP adapter: validate the payload, delegate to the service, map
