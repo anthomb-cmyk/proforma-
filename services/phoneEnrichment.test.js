@@ -1123,10 +1123,13 @@ test("runPhoneLookupBatch: blocked_type candidates are pre-rejected without a De
   assert.equal(results[0].status, "not_found");
 });
 
-test("runPhoneLookupBatch: directory scrapers skip when Places returned a strong name match", async () => {
-  // The cost optimization says: if Places found a ≥60% confidence match (even
-  // without a phone), don't bother with Pages Jaunes/411.ca. Strong match =
-  // Google knows the business; the listing just happens to have no phone.
+test("runPhoneLookupBatch: directory scrapers DO fire when Places found a business but no phone", async () => {
+  // Pages Jaunes + 411.ca are curated Canadian directories that often carry
+  // Québec business phones Places misses — Places depends on owners claiming
+  // listings on Google, while PJ and 411 license/curate listings. Even when
+  // Places returns a strong name match without a phone, the fallback must run:
+  // that's exactly the case where directories recover a lead. An earlier cost-
+  // optimisation skipped the fallback here and quietly ate real business leads.
   const calls = [];
   const fetchImpl = stubFetch(
     (url) => {
@@ -1142,7 +1145,7 @@ test("runPhoneLookupBatch: directory scrapers skip when Places returned a strong
         return placesDetails({
           name: "Les Immeubles Hamel-Rivard Inc.",
           formatted_address: "74 Rue Des Hospitalieres, Victoriaville, QC G6P 6N6",
-          formatted_phone_number: "",   // key: strong name match, no phone
+          formatted_phone_number: "",   // strong name match, no phone
           types: ["real_estate_agency", "establishment"],
           business_status: "OPERATIONAL",
         });
@@ -1150,8 +1153,14 @@ test("runPhoneLookupBatch: directory scrapers skip when Places returned a strong
       return placesTextSearch([]);
     },
     (url) => {
-      if (url.includes("pagesjaunes")) calls.push("pj");
-      if (url.includes("411.ca") || url.includes("411ca")) calls.push("411");
+      if (url.includes("pagesjaunes")) {
+        calls.push("pj");
+        return '<a href="tel:+14187521234">418 752-1234</a>';
+      }
+      if (url.includes("411.ca") || url.includes("411ca")) {
+        calls.push("411");
+        return "";
+      }
       return "";
     }
   );
@@ -1166,10 +1175,12 @@ test("runPhoneLookupBatch: directory scrapers skip when Places returned a strong
     apiKey: "FAKE_KEY",
     options: { fetchImpl, perRowDelayMs: 0, globalPhoneCap: 0 },
   });
-  assert.ok(!calls.includes("pj"), `PJ should not have been called; calls=${calls.join(",")}`);
-  assert.ok(!calls.includes("411"), `411.ca should not have been called; calls=${calls.join(",")}`);
-  // Status is not_found because no phone surfaced, but the skip itself is the win.
-  assert.equal(results[0].status, "not_found");
+  assert.ok(calls.includes("pj"), `PJ should have been called; calls=${calls.join(",")}`);
+  assert.ok(calls.includes("411"), `411.ca should have been called; calls=${calls.join(",")}`);
+  // PJ returned a phone → status becomes found, sourced from pages_jaunes.
+  assert.equal(results[0].status, "found");
+  assert.ok(results[0].pjDirectoryPhones.length > 0);
+  assert.ok(results[0].source.includes("pages_jaunes"));
 });
 
 test("runPhoneLookupBatch: progressive radius skipped when Places returned a strong name match without phone", async () => {

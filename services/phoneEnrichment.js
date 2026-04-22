@@ -1285,22 +1285,23 @@ async function lookupOneRow({ rawRow, plan = null, client, opts, idFactory, quer
   const onlinePhones = mergePhoneLists(online.map((c) => c.phone));
 
   // ── Directory fallback: Pages Jaunes + 411.ca (concurrent) ─────────────────
-  // Only fires when Google Places AND file columns returned no phone.
-  // Both directories are queried in parallel to minimise latency; results are
-  // merged and deduped. Each scraper fails gracefully (returns []) on any error.
+  // Fires whenever Google Places AND file columns returned zero phones. Both
+  // directories are queried in parallel to minimise latency; results are merged
+  // and deduped. Each scraper fails gracefully (returns []) on any error.
   //
-  // COST OPTIMIZATION: skip directory scraping when Places already returned a
-  // strong-confidence match (≥60%) — even without a phone. In that case we found
-  // the right business; the listing just happens to have no number. Scraping
-  // will usually return 0 results anyway and wastes 1-2 HTTP round-trips per row.
-  const hasAnyOnlineMatch = ranked.some((c) => c.confidence >= 60);
+  // Note: earlier versions skipped the fallback when Places returned a strong
+  // (≥60%) name match without a phone, assuming PJ/411 would return empty too.
+  // That assumption was wrong — PJ and 411.ca are curated Canadian directories
+  // that often carry Québec business phones Places misses entirely (Places
+  // depends on owners claiming listings on Google; PJ and 411 buy/license them).
+  // Losing those recoveries to a 1-HTTP-round-trip "cost optimisation" was a bad
+  // trade for an acquisitions CRM that needs every phone it can get.
   let pjDirectoryPhones = [];
   let c411DirectoryPhones = [];
   if (
     client &&
     !onlinePhones.length &&
     !fileInputPhones.length &&
-    !hasAnyOnlineMatch &&
     norm.businessNames.length > 0 &&
     norm.city
   ) {
