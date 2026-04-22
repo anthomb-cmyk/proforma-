@@ -10,7 +10,8 @@ import {
   completeFollowUp,
   cancelFollowUp,
   showOverdue,
-  syncFollowUpToBlob
+  syncFollowUpToBlob,
+  logAgentAction
 } from "./followUpEngine.js";
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
@@ -222,13 +223,11 @@ export async function dispatch(supabase, { intent, dealId }) {
     }
     const count = result.data?.length ?? 0;
     const scope = params.dealId ? `for ${dealLabel}` : "globally";
-    return {
-      actionTaken: "show_overdue",
-      followUpChanges: result.data,
-      shortExplanation: count === 0
-        ? `No overdue follow-ups ${scope}.`
-        : `${count} overdue follow-up${count !== 1 ? "s" : ""} ${scope}.`
-    };
+    const explanation = count === 0
+      ? `No overdue follow-ups ${scope}.`
+      : `${count} overdue follow-up${count !== 1 ? "s" : ""} ${scope}.`;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: explanation });
+    return { actionTaken: "show_overdue", followUpChanges: result.data, shortExplanation: explanation };
   }
 
   // ── create ────────────────────────────────────────────────────────────────
@@ -246,11 +245,9 @@ export async function dispatch(supabase, { intent, dealId }) {
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
     const timeLabel = params.time ? ` at ${params.time}` : "";
-    return {
-      actionTaken: "create",
-      followUpChanges: result.data,
-      shortExplanation: `Follow-up created for ${dealLabel} on ${params.date}${timeLabel}.`
-    };
+    const createExp = `Follow-up created for ${dealLabel} on ${params.date}${timeLabel}.`;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: createExp });
+    return { actionTaken: "create", followUpChanges: result.data, shortExplanation: createExp };
   }
 
   // ── reschedule ────────────────────────────────────────────────────────────
@@ -268,11 +265,9 @@ export async function dispatch(supabase, { intent, dealId }) {
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
     const timeLabel = params.time ? ` at ${params.time}` : "";
-    return {
-      actionTaken: "reschedule",
-      followUpChanges: result.data,
-      shortExplanation: `Follow-up for ${dealLabel} rescheduled to ${params.date}${timeLabel}.`
-    };
+    const reschedExp = `Follow-up for ${dealLabel} rescheduled to ${params.date}${timeLabel}.`;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: reschedExp });
+    return { actionTaken: "reschedule", followUpChanges: result.data, shortExplanation: reschedExp };
   }
 
   // ── complete ──────────────────────────────────────────────────────────────
@@ -285,11 +280,9 @@ export async function dispatch(supabase, { intent, dealId }) {
       return { actionTaken: "complete", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
-    return {
-      actionTaken: "complete",
-      followUpChanges: result.data,
-      shortExplanation: `Follow-up for ${dealLabel} marked as completed.`
-    };
+    const completeExp = `Follow-up for ${dealLabel} marked as completed.`;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: completeExp });
+    return { actionTaken: "complete", followUpChanges: result.data, shortExplanation: completeExp };
   }
 
   // ── cancel ────────────────────────────────────────────────────────────────
@@ -302,11 +295,9 @@ export async function dispatch(supabase, { intent, dealId }) {
       return { actionTaken: "cancel", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
-    return {
-      actionTaken: "cancel",
-      followUpChanges: result.data,
-      shortExplanation: `Follow-up for ${dealLabel} cancelled.`
-    };
+    const cancelExp = `Follow-up for ${dealLabel} cancelled.`;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: cancelExp });
+    return { actionTaken: "cancel", followUpChanges: result.data, shortExplanation: cancelExp };
   }
 
   return { actionTaken: "none", followUpChanges: null, shortExplanation: "Unhandled action — this is a bug." };

@@ -142,7 +142,8 @@ export async function cancelFollowUp(supabase, { dealId }) {
 }
 
 // List all overdue pending follow-ups (due_at < now, status = pending).
-// Optionally scoped to a single dealId.
+// Optionally scoped to a single dealId.  Each row is enriched with dealName
+// resolved from the CRM blob (null when the deal is not in the blob).
 export async function showOverdue(supabase, { dealId = null } = {}) {
   try {
     const now = new Date().toISOString();
@@ -157,7 +158,16 @@ export async function showOverdue(supabase, { dealId = null } = {}) {
 
     const { data, error } = await query;
     if (error) return { ok: false, data: null, error: error.message };
-    return { ok: true, data: data || [], error: null };
+
+    const rows = data || [];
+    if (rows.length > 0) {
+      const { blob } = await getCrmBlob(supabase);
+      const nameMap = {};
+      for (const d of (blob?.deals || [])) nameMap[d.id] = d.name || null;
+      for (const row of rows) row.dealName = nameMap[row.deal_id] ?? null;
+    }
+
+    return { ok: true, data: rows, error: null };
   } catch (err) {
     return { ok: false, data: null, error: err?.message || "showOverdue failed" };
   }
@@ -207,5 +217,23 @@ export async function syncFollowUpToBlob(supabase, { dealId, dueAt }) {
     return { ok: true, skipped: false };
   } catch (err) {
     return { ok: false, error: err?.message || "syncFollowUpToBlob failed" };
+  }
+}
+
+// Append a record to communication_events for every agent action.
+// Non-fatal: any error is console.error'd and swallowed.
+export async function logAgentAction(supabase, { dealId, contactId, action, intent, shortExplanation }) {
+  try {
+    await supabase.from("communication_events").insert({
+      deal_id:    dealId    || null,
+      contact_id: contactId || null,
+      channel:    "agent",
+      direction:  "internal",
+      content:    shortExplanation,
+      metadata:   { action, intent },
+      occurred_at: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("[logAgentAction]", err?.message);
   }
 }
