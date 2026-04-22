@@ -313,6 +313,7 @@ const I18N = {
     ws_tab_documents: "Documents",
     ws_tab_checklist: "Checklist",
     ws_tab_activity: "Activité",
+    ws_tab_agent: "Agent",
 
     // Contact card
     ws_contact_title: "Contact (vendeur / courtier)",
@@ -916,6 +917,7 @@ const I18N = {
     ws_tab_documents: "Documents",
     ws_tab_checklist: "Checklist",
     ws_tab_activity: "Activity",
+    ws_tab_agent: "Agent",
 
     // Contact card
     ws_contact_title: "Contact (seller / broker)",
@@ -1350,6 +1352,7 @@ import Topbar from "./components/Topbar.jsx";
 import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
 import ActivityLogger from "./components/ActivityLogger.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import AgentPanel from "./components/AgentPanel.jsx";
 // Heavy pages/viewers — code-split with React.lazy so their deps
 // (Leaflet via window.L, SheetJS via window.XLSX, react-window, and each
 // page's local helpers) only load when the corresponding view/modal is
@@ -3929,7 +3932,7 @@ export default function App() {
                   </div>
 
                   <div className="tabs">
-                    {[ ["crm",t("ws_tab_crm")], ["notes",t("ws_tab_notes")], ["documents",`${t("ws_tab_documents")}${(current.files||[]).length>0?` (${current.files.length})`:""}`], ["checklist",`${t("ws_tab_checklist")}${stageCL.length>0?` ${stagePct}%`:""}`], ["activity",t("ws_tab_activity")] ].map(([id,label]) => (
+                    {[ ["crm",t("ws_tab_crm")], ["notes",t("ws_tab_notes")], ["documents",`${t("ws_tab_documents")}${(current.files||[]).length>0?` (${current.files.length})`:""}`], ["checklist",`${t("ws_tab_checklist")}${stageCL.length>0?` ${stagePct}%`:""}`], ["activity",t("ws_tab_activity")], ["agent",t("ws_tab_agent")] ].map(([id,label]) => (
                       <button key={id} className={`tab${tab===id?" active":""}`} onClick={() => setTab(id)}>{label}</button>
                     ))}
                   </div>
@@ -4241,6 +4244,10 @@ export default function App() {
                         }
                       </div>
                     </>
+                  )}
+
+                  {tab === "agent" && (
+                    <AgentPanel deal={current} />
                   )}
                 </div>
               </>
