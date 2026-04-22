@@ -40,10 +40,14 @@ export default function AgentPanel({ deal }) {
     setResult(null);
     setFetchError("");
     try {
+      const gcalToken = localStorage.getItem("socle_gcal_token") || null;
+      const body = { intent: trimmed, dealId: effectiveDealId };
+      if (gcalToken) body.gcalToken = gcalToken;
+
       const res = await fetch("/api/agent/action", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ intent: trimmed, dealId: effectiveDealId })
+        body:    JSON.stringify(body)
       });
       const data = await res.json();
       if (!res.ok) {
@@ -140,6 +144,13 @@ export default function AgentPanel({ deal }) {
             </span>
             <span style={{ fontSize: 13 }}>{result.shortExplanation}</span>
           </div>
+
+          {/* GCal warning */}
+          {result.warning && (
+            <div style={{ fontSize: 12, color: "var(--orange, #e67e22)", marginBottom: 6 }}>
+              ⚠ {result.warning}
+            </div>
+          )}
 
           {/* "dealId required" inline error */}
           {needsDealId && (

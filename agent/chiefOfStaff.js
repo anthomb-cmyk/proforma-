@@ -194,7 +194,7 @@ function parseIntent(intentStr, dealId = null) {
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
-export async function dispatch(supabase, { intent, dealId }) {
+export async function dispatch(supabase, { intent, dealId, gcalToken = null }) {
   const parsed = parseIntent(intent, dealId);
 
   if (parsed.action === "unknown") {
@@ -207,7 +207,7 @@ export async function dispatch(supabase, { intent, dealId }) {
 
   const { action, params } = parsed;
 
-  // Resolve deal name once for richer explanations.
+  // Resolve deal name once for richer explanations and GCal event titles.
   let dealLabel = params.dealId || "unknown deal";
   if (params.dealId) {
     const { blob } = await getCrmBlob(supabase);
@@ -239,15 +239,24 @@ export async function dispatch(supabase, { intent, dealId }) {
       return { actionTaken: "none", followUpChanges: null, shortExplanation: "Could not parse a date. Try: 'create follow-up for deal X tomorrow at 3pm'." };
     }
     const dueAt = torontoToUtc(params.date, params.time);
-    const result = await createFollowUp(supabase, { dealId: params.dealId, dueAt, note: params.note });
+    const result = await createFollowUp(supabase, {
+      dealId: params.dealId, dueAt, note: params.note,
+      gcalToken, dealName: dealLabel
+    });
     if (!result.ok) {
       return { actionTaken: "create", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
-    const timeLabel = params.time ? ` at ${params.time}` : "";
-    const createExp = `Follow-up created for ${dealLabel} on ${params.date}${timeLabel}.`;
-    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: createExp });
-    return { actionTaken: "create", followUpChanges: result.data, shortExplanation: createExp };
+    const timeLabel  = params.time ? ` at ${params.time}` : "";
+    const createExp  = `Follow-up created for ${dealLabel} on ${params.date}${timeLabel}.`;
+    const gcalMeta   = gcalToken ? { attempted: true, ok: !result.gcalWarning, eventId: result.gcalEventId || null } : null;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: createExp, gcalMeta });
+    return {
+      actionTaken: "create",
+      followUpChanges: result.data,
+      shortExplanation: createExp,
+      ...(result.gcalWarning ? { warning: result.gcalWarning } : {})
+    };
   }
 
   // ── reschedule ────────────────────────────────────────────────────────────
@@ -259,15 +268,24 @@ export async function dispatch(supabase, { intent, dealId }) {
       return { actionTaken: "none", followUpChanges: null, shortExplanation: "Could not parse a new date. Try: 'reschedule follow-up for deal X to next Tuesday at 2pm'." };
     }
     const dueAt = torontoToUtc(params.date, params.time);
-    const result = await rescheduleFollowUp(supabase, { dealId: params.dealId, dueAt });
+    const result = await rescheduleFollowUp(supabase, {
+      dealId: params.dealId, dueAt,
+      gcalToken, dealName: dealLabel
+    });
     if (!result.ok) {
       return { actionTaken: "reschedule", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
-    const timeLabel = params.time ? ` at ${params.time}` : "";
+    const timeLabel  = params.time ? ` at ${params.time}` : "";
     const reschedExp = `Follow-up for ${dealLabel} rescheduled to ${params.date}${timeLabel}.`;
-    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: reschedExp });
-    return { actionTaken: "reschedule", followUpChanges: result.data, shortExplanation: reschedExp };
+    const gcalMeta   = gcalToken ? { attempted: true, ok: !result.gcalWarning, eventId: result.gcalEventId || null } : null;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: reschedExp, gcalMeta });
+    return {
+      actionTaken: "reschedule",
+      followUpChanges: result.data,
+      shortExplanation: reschedExp,
+      ...(result.gcalWarning ? { warning: result.gcalWarning } : {})
+    };
   }
 
   // ── complete ──────────────────────────────────────────────────────────────
@@ -275,14 +293,20 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!params.dealId) {
       return { actionTaken: "none", followUpChanges: null, shortExplanation: "dealId is required to complete a follow-up." };
     }
-    const result = await completeFollowUp(supabase, { dealId: params.dealId });
+    const result = await completeFollowUp(supabase, { dealId: params.dealId, gcalToken });
     if (!result.ok) {
       return { actionTaken: "complete", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
     const completeExp = `Follow-up for ${dealLabel} marked as completed.`;
-    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: completeExp });
-    return { actionTaken: "complete", followUpChanges: result.data, shortExplanation: completeExp };
+    const gcalMeta    = gcalToken ? { attempted: true, ok: !result.gcalWarning } : null;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: completeExp, gcalMeta });
+    return {
+      actionTaken: "complete",
+      followUpChanges: result.data,
+      shortExplanation: completeExp,
+      ...(result.gcalWarning ? { warning: result.gcalWarning } : {})
+    };
   }
 
   // ── cancel ────────────────────────────────────────────────────────────────
@@ -290,14 +314,20 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!params.dealId) {
       return { actionTaken: "none", followUpChanges: null, shortExplanation: "dealId is required to cancel a follow-up." };
     }
-    const result = await cancelFollowUp(supabase, { dealId: params.dealId });
+    const result = await cancelFollowUp(supabase, { dealId: params.dealId, gcalToken });
     if (!result.ok) {
       return { actionTaken: "cancel", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
     await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
     const cancelExp = `Follow-up for ${dealLabel} cancelled.`;
-    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: cancelExp });
-    return { actionTaken: "cancel", followUpChanges: result.data, shortExplanation: cancelExp };
+    const gcalMeta  = gcalToken ? { attempted: true, ok: !result.gcalWarning } : null;
+    await logAgentAction(supabase, { dealId: params.dealId, contactId: null, action, intent, shortExplanation: cancelExp, gcalMeta });
+    return {
+      actionTaken: "cancel",
+      followUpChanges: result.data,
+      shortExplanation: cancelExp,
+      ...(result.gcalWarning ? { warning: result.gcalWarning } : {})
+    };
   }
 
   return { actionTaken: "none", followUpChanges: null, shortExplanation: "Unhandled action — this is a bug." };
