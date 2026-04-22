@@ -304,7 +304,7 @@ export async function syncFollowUpToBlob(supabase, { dealId, dueAt }) {
 // Append a record to communication_events for every agent action.
 // Non-fatal: any error is console.error'd and swallowed.
 // gcalMeta: { attempted: bool, ok: bool, eventId?: string } — optional
-export async function logAgentAction(supabase, { dealId, contactId, action, intent, shortExplanation, gcalMeta = null }) {
+export async function logAgentAction(supabase, { dealId, contactId, action, intent, shortExplanation, gcalMeta = null, source = null }) {
   try {
     await supabase.from("communication_events").insert({
       deal_id:    dealId    || null,
@@ -312,7 +312,7 @@ export async function logAgentAction(supabase, { dealId, contactId, action, inte
       channel:    "agent",
       direction:  "internal",
       content:    shortExplanation,
-      metadata:   { action, intent, ...(gcalMeta ? { gcal: gcalMeta } : {}) },
+      metadata:   { action, intent, source, ...(gcalMeta ? { gcal: gcalMeta } : {}) },
       occurred_at: new Date().toISOString()
     });
   } catch (err) {

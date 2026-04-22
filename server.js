@@ -6526,7 +6526,7 @@ app.put("/api/admin/candidates/:id", async (req, res) => {
 // Body: { intent: string, dealId?: string, gcalToken?: string }
 // Response: { actionTaken, followUpChanges, shortExplanation, warning? }
 app.post("/api/agent/action", async (req, res) => {
-  const { intent, dealId, gcalToken } = req.body || {};
+  const { intent, dealId, gcalToken, source } = req.body || {};
 
   if (!intent || typeof intent !== "string" || !intent.trim()) {
     return res.status(400).json({
@@ -6547,7 +6547,8 @@ app.post("/api/agent/action", async (req, res) => {
   const result = await agentDispatch(supabaseServerClient, {
     intent: intent.trim(),
     dealId: typeof dealId === "string" ? dealId.trim() || null : null,
-    gcalToken: typeof gcalToken === "string" && gcalToken.trim() ? gcalToken.trim() : null
+    gcalToken: typeof gcalToken === "string" && gcalToken.trim() ? gcalToken.trim() : null,
+    source: typeof source === "string" ? source.trim() || null : null
   });
 
   return res.json(result);
