@@ -20,6 +20,7 @@ import { createListingsService } from "./services/listingsService.js";
 import { createQualificationService } from "./services/qualificationService.js";
 import { runPhoneLookupBatch } from "./services/phoneEnrichment.js";
 import { planPhoneLookups } from "./services/phoneLookupPlanner.js";
+import { dispatch as agentDispatch } from "./agent/chiefOfStaff.js";
 
 dotenv.config();
 
@@ -277,6 +278,23 @@ function normalizeDialPhone(phone) {
   }
 
   return "";
+}
+
+// Convert a YYYY-MM-DD date + HH:MM time (America/Toronto) to a UTC ISO string.
+// Defaults to 09:00 Toronto when timeStr is omitted or empty.
+function torontoToUtc(dateStr, timeStr) {
+  const time = ((timeStr || "").trim() || "09:00");
+  const fakeUtc = new Date(`${dateStr}T${time}:00Z`);
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Toronto",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false
+  });
+  const parts = fmt.formatToParts(fakeUtc);
+  const g = (type) => Number(parts.find(p => p.type === type)?.value ?? 0);
+  const torMs = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") % 24, g("minute"), g("second"));
+  return new Date(fakeUtc.getTime() + (fakeUtc.getTime() - torMs)).toISOString();
 }
 
 function getTwilioBasicAuthHeader() {
@@ -6501,6 +6519,37 @@ app.put("/api/admin/candidates/:id", async (req, res) => {
       error: "Impossible de modifier le candidat."
     });
   }
+});
+
+// ─── Agent: intent → action ───────────────────────────────────────────────────
+// POST /api/agent/action
+// Body: { intent: string, dealId?: string }
+// Response: { actionTaken, followUpChanges, shortExplanation }
+app.post("/api/agent/action", async (req, res) => {
+  const { intent, dealId } = req.body || {};
+
+  if (!intent || typeof intent !== "string" || !intent.trim()) {
+    return res.status(400).json({
+      actionTaken: "none",
+      followUpChanges: null,
+      shortExplanation: "Missing required field: intent (string)."
+    });
+  }
+
+  if (!supabaseServerClient) {
+    return res.status(503).json({
+      actionTaken: "none",
+      followUpChanges: null,
+      shortExplanation: "Supabase not configured — agent unavailable."
+    });
+  }
+
+  const result = await agentDispatch(supabaseServerClient, {
+    intent: intent.trim(),
+    dealId: typeof dealId === "string" ? dealId.trim() || null : null
+  });
+
+  return res.json(result);
 });
 
 app.get("*", (req, res, next) => {
