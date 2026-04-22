@@ -1912,6 +1912,16 @@ export default function App() {
   const [gcalEvents, setGcalEvents] = useState([]);
   const [gcalLoading, setGcalLoading] = useState(false);
   const [gcalError, setGcalError] = useState("");
+  // Persisted access token — stored in localStorage with expiry so it survives
+  // page reloads. GIS tokens last ~1 hour; on expiry the user just hits
+  // "Refresh" to re-authorize (no full consent screen needed after first time).
+  const [gcalToken, setGcalToken] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("socle_gcal_token") || "null");
+      if (saved?.token && saved.expiry > Date.now()) return saved.token;
+    } catch {}
+    return null;
+  });
   const [view, setView]           = useState("dashboard");
   const [tab, setTab]             = useState("crm");
   const [modal, setModal]         = useState(null);
@@ -2808,6 +2818,43 @@ export default function App() {
     }
   };
 
+  // Fetch upcoming events from Google Calendar using a given access token.
+  // Returns the mapped event array; throws on API error.
+  const fetchGcalEvents = useCallback(async (token) => {
+    const timeMin = new Date().toISOString();
+    const query = new URLSearchParams({ maxResults: "50", orderBy: "startTime", singleEvents: "true", timeMin });
+    const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Google API ${res.status}`);
+    const data = await res.json();
+    return (data.items || []).map((event) => {
+      if (!event.start?.dateTime && !event.start?.date) return null;
+      return {
+        id: event.id,
+        title: event.summary || t("cal_event_untitled"),
+        date: event.start.dateTime ? event.start.dateTime.split("T")[0] : event.start.date,
+        time: event.start.dateTime ? event.start.dateTime.split("T")[1].slice(0,5) : "",
+        type: "google",
+        dealId: null,
+      };
+    }).filter(Boolean);
+  }, [t]);
+
+  // On load, silently restore events if a valid persisted token exists.
+  useEffect(() => {
+    if (!gcalToken) return;
+    fetchGcalEvents(gcalToken)
+      .then(mapped => { setGcalEvents(mapped); setGcalOk(true); })
+      .catch(() => {
+        // Token likely expired — clear it so the "Connect" button reappears.
+        setGcalToken(null);
+        setGcalOk(false);
+        localStorage.removeItem("socle_gcal_token");
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run once on mount only
+
   const connectGoogleCalendar = useCallback(() => {
     const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
     if (!clientId) { setGcalError(t("cal_err_client_missing")); return; }
@@ -2818,7 +2865,8 @@ export default function App() {
 
     const tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: "https://www.googleapis.com/auth/calendar.readonly",
+      // Full calendar scope — needed to create events from the CRM.
+      scope: "https://www.googleapis.com/auth/calendar",
       callback: async (tokenResponse) => {
         if (tokenResponse?.error || !tokenResponse?.access_token) {
           setGcalOk(false);
@@ -2826,27 +2874,15 @@ export default function App() {
           setGcalError(t("cal_err_auth"));
           return;
         }
+        const token = tokenResponse.access_token;
+        // Persist token + expiry (GIS tokens last ~3600 s; keep a 60 s buffer).
+        const expiry = Date.now() + ((tokenResponse.expires_in ?? 3600) - 60) * 1000;
         try {
-          const timeMin = new Date().toISOString();
-          const query = new URLSearchParams({ maxResults: "20", orderBy: "startTime", singleEvents: "true", timeMin });
-          const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${query.toString()}`, {
-            headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
-          });
-          if (!res.ok) throw new Error(`Google API ${res.status}`);
-          const data = await res.json();
-
-          const mapped = (data.items || []).map((event) => {
-            if (!event.start?.dateTime && !event.start?.date) return null;
-            return {
-              id: event.id,
-              title: event.summary || t("cal_event_untitled"),
-              date: event.start.dateTime ? event.start.dateTime.split("T")[0] : event.start.date,
-              time: event.start.dateTime ? event.start.dateTime.split("T")[1].slice(0,5) : "",
-              type: "google",
-              dealId: null,
-            };
-          }).filter(Boolean);
-
+          localStorage.setItem("socle_gcal_token", JSON.stringify({ token, expiry }));
+        } catch {}
+        setGcalToken(token);
+        try {
+          const mapped = await fetchGcalEvents(token);
           setGcalEvents(mapped);
           setGcalOk(true);
         } catch {
@@ -2860,7 +2896,7 @@ export default function App() {
     });
 
     tokenClient.requestAccessToken({ prompt: gcalOk ? "" : "consent" });
-  }, [gcalOk, t]);
+  }, [gcalOk, t, fetchGcalEvents]);
 
   const allEvents = useMemo(() => {
     const evs = [];
@@ -2888,6 +2924,36 @@ export default function App() {
     if (normalizedDate) {
       const [yy, mm] = normalizedDate.split("-").map(Number);
       if (yy && mm) setCalDate(new Date(yy, mm - 1, 1));
+    }
+
+    // Mirror the event to Google Calendar if we have a valid token.
+    if (gcalToken) {
+      const dealTitle = deals.find(d => d.id === did)?.title || "";
+      let gcalBody;
+      if (newEv.time) {
+        const startDT = `${normalizedDate}T${newEv.time}:00`;
+        const endDT   = `${normalizedDate}T${newEv.time.replace(/(\d+):(\d+)/, (_, h, m) => `${String(Number(h)+1).padStart(2,"0")}:${m}`)}:00`;
+        gcalBody = {
+          summary: newEv.title,
+          description: dealTitle ? `Acquisition — ${dealTitle}` : undefined,
+          start: { dateTime: startDT, timeZone: "America/Toronto" },
+          end:   { dateTime: endDT,   timeZone: "America/Toronto" },
+        };
+      } else {
+        const nextDay = new Date(normalizedDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+        gcalBody = {
+          summary: newEv.title,
+          description: dealTitle ? `Acquisition — ${dealTitle}` : undefined,
+          start: { date: normalizedDate },
+          end:   { date: nextDay.toISOString().split("T")[0] },
+        };
+      }
+      fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${gcalToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(gcalBody),
+      }).catch(() => {}); // silent — CRM save already succeeded
     }
 
     setNewEv({ title:"", date:"", time:"", dealId:"" });
