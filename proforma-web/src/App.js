@@ -2863,18 +2863,44 @@ export default function App() {
   // source of truth and network failures are swallowed silently.
 
   // Create or update a single deal's follow-up event. Returns the Google
-  // event id (new or existing), or null if the call failed.
+  // event id (new or existing), or null if the call failed. Follow-ups with
+  // a followUpTime are created as timed events (+1 h duration, America/Toronto);
+  // follow-ups without a time fall back to all-day.
   const pushFollowUpToGcal = useCallback(async (deal, token) => {
     if (!deal?.followUpDate || !token) return null;
     const date = deal.followUpDate;
-    const nextDay = new Date(date);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const body = {
-      summary: `🔔 ${deal.title || "Suivi"}`,
-      description: `Follow-up acquisition — ${deal.title || ""}`.trim(),
-      start: { date },
-      end:   { date: nextDay.toISOString().split("T")[0] },
-    };
+    const time = (deal.followUpTime || "").trim();
+    const summary     = `🔔 ${deal.title || "Suivi"}`;
+    const description = `Follow-up acquisition — ${deal.title || ""}`.trim();
+    let body;
+    if (time && /^\d{2}:\d{2}$/.test(time)) {
+      // Timed — add 1 h to get end. Handles midnight rollover.
+      const [h, m] = time.split(":").map(Number);
+      let endH = h + 1;
+      let endDate = date;
+      if (endH >= 24) {
+        endH -= 24;
+        const nd = new Date(date);
+        nd.setDate(nd.getDate() + 1);
+        endDate = nd.toISOString().split("T")[0];
+      }
+      const endTime = `${String(endH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      body = {
+        summary,
+        description,
+        start: { dateTime: `${date}T${time}:00`,       timeZone: "America/Toronto" },
+        end:   { dateTime: `${endDate}T${endTime}:00`, timeZone: "America/Toronto" },
+      };
+    } else {
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      body = {
+        summary,
+        description,
+        start: { date },
+        end:   { date: nextDay.toISOString().split("T")[0] },
+      };
+    }
     try {
       if (deal.gcalFollowUpEventId) {
         const res = await fetch(
@@ -2940,22 +2966,25 @@ export default function App() {
   }, [gcalToken, deals.length, syncAllFollowUps]);
 
   // Single-deal follow-up setter — local state first, Google Calendar in the
-  // background. Use this instead of raw `upd(id, d => ({ ...d, followUpDate }))`
-  // anywhere the follow-up date is mutated.
-  const setFollowUp = useCallback((dealId, newDate) => {
-    const cleaned = (newDate || "").trim();
+  // background. Pass both date and time ("" to clear either). Use this instead
+  // of raw `upd(id, d => ({ ...d, followUpDate }))` anywhere the follow-up is
+  // mutated so the Google side stays in sync.
+  const setFollowUp = useCallback((dealId, newDate, newTime) => {
+    const cleanedDate = (newDate || "").trim();
+    const cleanedTime = (newTime || "").trim();
     const deal = deals.find(d => d.id === dealId);
     if (!deal) return;
     const oldEventId = deal.gcalFollowUpEventId || null;
     const oldDate    = deal.followUpDate        || "";
+    const oldTime    = deal.followUpTime        || "";
 
     // Local update first so the UI never waits on the network.
-    upd(dealId, d => ({ ...d, followUpDate: cleaned }));
+    upd(dealId, d => ({ ...d, followUpDate: cleanedDate, followUpTime: cleanedTime }));
 
-    if (!gcalToken)        return; // Not connected — local only.
-    if (cleaned === oldDate) return; // No real change.
+    if (!gcalToken) return; // Not connected — local only.
+    if (cleanedDate === oldDate && cleanedTime === oldTime) return; // No real change.
 
-    if (!cleaned) {
+    if (!cleanedDate) {
       // Cleared — delete the Google event if we had one.
       if (oldEventId) {
         deleteFollowUpFromGcal(oldEventId, gcalToken).finally(() => {
@@ -2966,7 +2995,10 @@ export default function App() {
     }
 
     // Create-or-update on Google.
-    pushFollowUpToGcal({ ...deal, followUpDate: cleaned }, gcalToken).then(id => {
+    pushFollowUpToGcal(
+      { ...deal, followUpDate: cleanedDate, followUpTime: cleanedTime },
+      gcalToken
+    ).then(id => {
       if (id && id !== oldEventId) {
         upd(dealId, d => ({ ...d, gcalFollowUpEventId: id }));
       }
@@ -3019,7 +3051,7 @@ export default function App() {
   const allEvents = useMemo(() => {
     const evs = [];
     deals.forEach(d => {
-      if (d.followUpDate) evs.push({ id:`fu_${d.id}`, date:d.followUpDate, title:`🔔 ${d.title}`, type:"followup", dealId:d.id });
+      if (d.followUpDate) evs.push({ id:`fu_${d.id}`, date:d.followUpDate, time:d.followUpTime || "", title:`🔔 ${d.title}`, type:"followup", dealId:d.id });
       (d.events || []).forEach(e => evs.push({ ...e, dealId:d.id }));
     });
     (gcalEvents || []).forEach(e => evs.push(e));
@@ -3653,7 +3685,7 @@ export default function App() {
                                 <div className="k-title">{dealLabel(d)}</div>
                                 <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || t("pipeline_no_contact")}</span></div>
                                 <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("en-CA")} $` : t("pipeline_price_tbd")}</div>
-                                {d.followUpDate && <div className="k-row"><span className="k-mk">{t("pipeline_followup_label")}</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:d.followUpDate}</span></div>}
+                                {d.followUpDate && <div className="k-row"><span className="k-mk">{t("pipeline_followup_label")}</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:`${d.followUpDate}${d.followUpTime ? ` ${d.followUpTime}` : ""}`}</span></div>}
                                 <div className="k-row"><span className="k-mk">{t("pipeline_documents_label")}</span><span className="k-mv">{(d.files||[]).length}</span></div>
                                 <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
                                 <div className="k-foot">
@@ -4017,7 +4049,23 @@ export default function App() {
                           </div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_units")}</div><input type="number" min="1" step="1" value={current.units || ""} onChange={e => upd(current.id,d => ({ ...d, units: e.target.value }))} placeholder={t("ws_field_units_ph")} /></div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_price")}</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder={t("ws_field_price_ph")} /></div>
-                          <div className="f-row"><div className="f-lbl">{t("ws_field_followup_date")}</div><input type="date" value={current.followUpDate || ""} onChange={e => setFollowUp(current.id, e.target.value)} /></div>
+                          <div className="f-row">
+                            <div className="f-lbl">{t("ws_field_followup_date")}</div>
+                            <div style={{ display: "flex", gap: 8, flex: 1 }}>
+                              <input
+                                type="date"
+                                style={{ flex: 2 }}
+                                value={current.followUpDate || ""}
+                                onChange={e => setFollowUp(current.id, e.target.value, current.followUpTime || "")}
+                              />
+                              <input
+                                type="time"
+                                style={{ flex: 1 }}
+                                value={current.followUpTime || ""}
+                                onChange={e => setFollowUp(current.id, current.followUpDate || "", e.target.value)}
+                              />
+                            </div>
+                          </div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_followup_note")}</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder={t("ws_field_followup_note_ph")} /></div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_next_action")}</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder={t("ws_field_next_action_ph")} /></div>
                           <div className="f-row">
