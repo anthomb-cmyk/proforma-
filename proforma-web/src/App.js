@@ -2852,7 +2852,7 @@ export default function App() {
         setGcalOk(false);
         localStorage.removeItem("socle_gcal_token");
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line
   }, []); // intentionally run once on mount only
 
   const connectGoogleCalendar = useCallback(() => {
