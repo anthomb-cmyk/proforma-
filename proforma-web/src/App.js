@@ -2046,6 +2046,10 @@ export default function App() {
   // the initial mount/hydration — otherwise we'd immediately overwrite the
   // freshly-fetched server state with whatever was in localStorage.
   const hydratedRef = useRef(false);
+  // True once fetchServerState() returns ok:true — Supabase is reachable, so
+  // localStorage writes for acq_crm_v4 become redundant (Supabase is canonical).
+  // Stays false on network failure so offline cold-start still works.
+  const supabaseActiveRef = useRef(false);
 
   // ─── Shared backend state sync ─────────────────────────────────────────────
   // Hydrate from the Supabase-backed server state on mount so teammates see
@@ -2090,7 +2094,10 @@ export default function App() {
           await pushServerState({ deals, leads, owners, flaggedLeads, currentId, gcalOk });
         }
       }
-      if (!cancelled) hydratedRef.current = true;
+      if (!cancelled) {
+        hydratedRef.current = true;
+        if (res?.ok) supabaseActiveRef.current = true;
+      }
     })();
     return () => { cancelled = true; };
     // Runs once on mount. Subsequent syncs happen via the debounced persist
@@ -2112,12 +2119,14 @@ export default function App() {
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
       const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
-      persist(payload, (err) => {
-        if (isQuotaError(err)) {
-          setAppToast(tr(lang, "toast_storage_full"));
-          setTimeout(() => setAppToast(""), 8000);
-        }
-      });
+      if (!supabaseActiveRef.current) {
+        persist(payload, (err) => {
+          if (isQuotaError(err)) {
+            setAppToast(tr(lang, "toast_storage_full"));
+            setTimeout(() => setAppToast(""), 8000);
+          }
+        });
+      }
       // Don't push to server until after the initial hydrate has landed —
       // otherwise we'd clobber the shared state with stale local data.
       if (hydratedRef.current) {
@@ -2138,7 +2147,7 @@ export default function App() {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
         const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
-        persist(payload);
+        if (!supabaseActiveRef.current) persist(payload);
         // Best-effort: fire the PUT but don't await. beforeunload handlers
         // can't block — the browser may or may not finish the request.
         if (hydratedRef.current) {
