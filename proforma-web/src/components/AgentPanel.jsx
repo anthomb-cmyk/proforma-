@@ -1,6 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
-// Format a UTC timestamptz string into a short local date+time label.
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Return today + n calendar days as YYYY-MM-DD in Toronto timezone.
+function torontoDatePlusDays(n) {
+  const d = new Date(Date.now() + n * 86400000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(d);
+}
+
+// Format a UTC ISO string to a short Toronto date+time (for overdue list).
 function fmtDue(due_at) {
   if (!due_at) return "";
   try {
@@ -14,6 +22,17 @@ function fmtDue(due_at) {
   }
 }
 
+// ─── Preset buttons ───────────────────────────────────────────────────────────
+
+// Each intent is a function so date strings are computed at click time.
+const DEAL_PRESETS = [
+  { label: "Demain 9h",         intent: () => "créer follow-up demain à 9h"                     },
+  { label: "Dans 3 jours",      intent: () => `créer follow-up ${torontoDatePlusDays(3)} à 9h`  },
+  { label: "Semaine prochaine", intent: () => "créer follow-up lundi à 9h"                      },
+  { label: "Terminer ✓",        intent: () => "complete the follow-up"                           },
+  { label: "Annuler ✗",         intent: () => "cancel the follow-up"                             },
+];
+
 const ACTION_LABELS = {
   create:       "Créé",
   reschedule:   "Reporté",
@@ -23,6 +42,8 @@ const ACTION_LABELS = {
   none:         "Aucune action",
 };
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function AgentPanel({ deal }) {
   const [intent,         setIntent]         = useState("");
   const [dealIdOverride, setDealIdOverride] = useState("");
@@ -30,11 +51,17 @@ export default function AgentPanel({ deal }) {
   const [result,         setResult]         = useState(null);
   const [fetchError,     setFetchError]     = useState("");
 
+  // 3D: clear result + error when the selected deal changes.
+  useEffect(() => {
+    setResult(null);
+    setFetchError("");
+  }, [deal?.id]);
+
   const effectiveDealId = deal?.id || dealIdOverride.trim() || null;
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const trimmed = intent.trim();
+  // Shared submit handler — accepts any intent string; no duplication with presets.
+  const fire = useCallback(async (intentStr) => {
+    const trimmed = (intentStr || "").trim();
     if (!trimmed) return;
     setLoading(true);
     setResult(null);
@@ -60,6 +87,11 @@ export default function AgentPanel({ deal }) {
     } finally {
       setLoading(false);
     }
+  }, [effectiveDealId]);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    fire(intent);
   }
 
   const needsDealId = result?.actionTaken === "none" &&
@@ -72,7 +104,7 @@ export default function AgentPanel({ deal }) {
       {/* Deal context */}
       <div style={{ marginBottom: 12, fontSize: 12, color: "var(--muted, #888)" }}>
         {deal
-          ? <>Deal actif : <strong>{deal.name || deal.id}</strong></>
+          ? <>Deal actif : <strong>{deal.title || deal.address || deal.id}</strong></>
           : <span style={{ color: "var(--red, #c0392b)" }}>Aucun deal sélectionné</span>
         }
       </div>
@@ -90,12 +122,38 @@ export default function AgentPanel({ deal }) {
         </div>
       )}
 
-      {/* Intent input + submit */}
+      {/* Quick action presets */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+        {deal && DEAL_PRESETS.map(p => (
+          <button
+            key={p.label}
+            className="btn"
+            style={{ fontSize: 12, padding: "4px 10px" }}
+            disabled={loading}
+            onClick={() => fire(p.intent())}
+          >
+            {p.label}
+          </button>
+        ))}
+        <button
+          className="btn"
+          style={{ fontSize: 12, padding: "4px 10px" }}
+          disabled={loading}
+          onClick={() => fire("show overdue")}
+        >
+          Voir en retard
+        </button>
+      </div>
+
+      {/* Custom intent input */}
+      <div style={{ fontSize: 11, color: "var(--muted, #888)", marginBottom: 4 }}>
+        Action personnalisée
+      </div>
       <form onSubmit={handleSubmit}>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <input
             type="text"
-            placeholder="Ex : créer follow-up demain à 14h · show overdue · complete the follow-up"
+            placeholder="Ex : créer follow-up vendredi à 14h · reporter à mardi"
             value={intent}
             onChange={e => setIntent(e.target.value)}
             disabled={loading}
@@ -114,7 +172,7 @@ export default function AgentPanel({ deal }) {
       {/* Hint: mutation without a dealId */}
       {!effectiveDealId && (
         <div style={{ fontSize: 11, color: "var(--muted, #888)", marginBottom: 8 }}>
-          Les actions globales (show overdue) fonctionnent sans deal.
+          Les actions globales (voir en retard) fonctionnent sans deal.
           Pour créer / modifier un suivi, sélectionnez un deal.
         </div>
       )}
@@ -122,7 +180,7 @@ export default function AgentPanel({ deal }) {
       {/* Fetch-level error */}
       {fetchError && (
         <div style={{ color: "var(--red, #c0392b)", fontSize: 12, marginBottom: 8 }}>
-          {fetchError}
+          ⚠ {fetchError}
         </div>
       )}
 
@@ -172,12 +230,8 @@ export default function AgentPanel({ deal }) {
                       fontSize: 12, padding: "4px 8px",
                       background: "var(--bg-alt, #f5f5f5)", borderRadius: 4
                     }}>
-                      <span style={{ fontWeight: 500 }}>
-                        {row.dealName || row.deal_id}
-                      </span>
-                      <span style={{ color: "var(--red, #c0392b)" }}>
-                        {fmtDue(row.due_at)}
-                      </span>
+                      <span style={{ fontWeight: 500 }}>{row.dealName || row.deal_id}</span>
+                      <span style={{ color: "var(--red, #c0392b)" }}>{fmtDue(row.due_at)}</span>
                     </div>
                   ))}
                 </div>
