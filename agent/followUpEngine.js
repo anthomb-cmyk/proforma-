@@ -162,3 +162,50 @@ export async function showOverdue(supabase, { dealId = null } = {}) {
     return { ok: false, data: null, error: err?.message || "showOverdue failed" };
   }
 }
+
+// Mirror a follow-up mutation into the CRM blob so the frontend stays in sync.
+// dueAt: UTC ISO string → sets followUpDate + followUpTime on the deal.
+// dueAt: null           → clears followUpDate and followUpTime (complete/cancel).
+// Silently no-ops when the dealId is not found in the blob (deal may not exist yet).
+// Failure is non-fatal — the follow_ups table write already succeeded.
+export async function syncFollowUpToBlob(supabase, { dealId, dueAt }) {
+  try {
+    const { data, error: fetchErr } = await supabase
+      .from("socle_crm_state")
+      .select("state")
+      .eq("id", 1)
+      .maybeSingle();
+    if (fetchErr) return { ok: false, error: fetchErr.message };
+
+    const blob  = data?.state || {};
+    const deals = Array.isArray(blob.deals) ? [...blob.deals] : [];
+    const idx   = deals.findIndex(d => d.id === dealId);
+    if (idx === -1) return { ok: true, skipped: true };
+
+    if (dueAt) {
+      // Convert UTC → Toronto local date + time for the blob fields.
+      const d    = new Date(String(dueAt).replace(" ", "T"));
+      const fmt  = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Toronto",
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+        hour12: false
+      });
+      const parts = fmt.formatToParts(d);
+      const g     = (type) => parts.find(p => p.type === type)?.value ?? "";
+      const h     = g("hour") === "24" ? "00" : g("hour");
+      deals[idx] = { ...deals[idx], followUpDate: `${g("year")}-${g("month")}-${g("day")}`, followUpTime: `${h}:${g("minute")}` };
+    } else {
+      deals[idx] = { ...deals[idx], followUpDate: "", followUpTime: "" };
+    }
+
+    const { error: writeErr } = await supabase
+      .from("socle_crm_state")
+      .update({ state: { ...blob, deals }, updated_at: new Date().toISOString() })
+      .eq("id", 1);
+    if (writeErr) return { ok: false, error: writeErr.message };
+    return { ok: true, skipped: false };
+  } catch (err) {
+    return { ok: false, error: err?.message || "syncFollowUpToBlob failed" };
+  }
+}

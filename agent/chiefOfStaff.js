@@ -9,7 +9,8 @@ import {
   rescheduleFollowUp,
   completeFollowUp,
   cancelFollowUp,
-  showOverdue
+  showOverdue,
+  syncFollowUpToBlob
 } from "./followUpEngine.js";
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
@@ -133,9 +134,11 @@ function parseIntent(intentStr, dealId = null) {
 
   // show_overdue — check before create/complete to avoid "show" ambiguity
   if (
-    /\b(show|list|get|find|display)\b.*\b(overdue|late|missed|expired)\b/i.test(t) ||
-    /\b(overdue|late|missed)\b.*\bfollow.?up/i.test(t) ||
-    /\boverdue\b/i.test(t)
+    /\b(show|list|get|find|display|afficher|montrer|lister|trouver)\b.*(\b(overdue|late|missed|expired)\b|en\s+retard)/i.test(t) ||
+    /\b(overdue|late|missed)\b.*\b(follow.?up|suivi)/i.test(t) ||
+    /en\s+retard\b.*\b(follow.?up|suivi)/i.test(t) ||
+    /\boverdue\b/i.test(t) ||
+    /\ben\s+retard\b/i.test(t)
   ) {
     return { action: "show_overdue", params: { dealId: dealId || null } };
   }
@@ -241,6 +244,7 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!result.ok) {
       return { actionTaken: "create", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
+    await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
     const timeLabel = params.time ? ` at ${params.time}` : "";
     return {
       actionTaken: "create",
@@ -262,6 +266,7 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!result.ok) {
       return { actionTaken: "reschedule", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
+    await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: result.data.due_at });
     const timeLabel = params.time ? ` at ${params.time}` : "";
     return {
       actionTaken: "reschedule",
@@ -279,6 +284,7 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!result.ok) {
       return { actionTaken: "complete", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
+    await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
     return {
       actionTaken: "complete",
       followUpChanges: result.data,
@@ -295,6 +301,7 @@ export async function dispatch(supabase, { intent, dealId }) {
     if (!result.ok) {
       return { actionTaken: "cancel", followUpChanges: null, shortExplanation: `Error: ${result.error}` };
     }
+    await syncFollowUpToBlob(supabase, { dealId: params.dealId, dueAt: null });
     return {
       actionTaken: "cancel",
       followUpChanges: result.data,
