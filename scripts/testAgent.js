@@ -312,6 +312,107 @@ async function test5(since) {
   return { ok };
 }
 
+async function test6() {
+  console.log("[TEST 6] DUPLICATION / IDEMPOTENCY");
+  let ok = true;
+
+  // Query helpers that bypass the created_at filter — the partial unique index
+  // guarantees at most one pending row per deal, so we can safely use maybeSingle().
+  async function countPending() {
+    const { data } = await supabase
+      .from("follow_ups")
+      .select("id")
+      .eq("deal_id", dealId)
+      .eq("status", "pending");
+    return data?.length ?? 0;
+  }
+
+  async function getPending() {
+    const { data } = await supabase
+      .from("follow_ups")
+      .select("*")
+      .eq("deal_id", dealId)
+      .eq("status", "pending")
+      .maybeSingle();
+    return data;
+  }
+
+  // Step 1: first create.
+  const { data: c1 } = await post({
+    intent: "create follow-up tomorrow at 10am",
+    dealId,
+    ...(GCAL_TOKEN ? { gcalToken: GCAL_TOKEN } : {})
+  });
+  ok = check("first create succeeded", c1.actionTaken === "create", `got "${c1.actionTaken}"`) && ok;
+
+  const row1      = await getPending();
+  const gcalId1   = row1?.gcal_event_id ?? null;
+  if (gcalId1) createdEventIds.add(gcalId1);
+
+  // Step 2: second create with same intent → upsert semantics: same row updated, count stays 1.
+  await post({
+    intent: "create follow-up tomorrow at 10am",
+    dealId,
+    ...(GCAL_TOKEN ? { gcalToken: GCAL_TOKEN } : {})
+  });
+
+  const countAfterC2 = await countPending();
+  ok = check("second create: still 1 pending row", countAfterC2 === 1,                    `count: ${countAfterC2}`) && ok;
+
+  const row2 = await getPending();
+  if (GCAL_TOKEN) {
+    ok = check("gcal_event_id consistent after second create", row2?.gcal_event_id === gcalId1, `was ${gcalId1}, now ${row2?.gcal_event_id}`) && ok;
+  } else {
+    skipped("gcal_event_id consistent after second create");
+  }
+
+  // Steps 4–5: 3 reschedules; after each, verify count = 1 and gcal_event_id unchanged.
+  const reschedIntents = [
+    "reschedule follow-up to next tuesday at 9am",
+    "reschedule follow-up to next wednesday at 2pm",
+    "reschedule follow-up to next thursday at 11am"
+  ];
+
+  let trackGcalId = row2?.gcal_event_id ?? gcalId1;
+
+  for (let i = 0; i < reschedIntents.length; i++) {
+    const n = i + 1;
+    await post({
+      intent: reschedIntents[i],
+      dealId,
+      ...(GCAL_TOKEN ? { gcalToken: GCAL_TOKEN } : {})
+    });
+
+    const cnt = await countPending();
+    ok = check(`reschedule ${n}: 1 pending row`, cnt === 1, `count: ${cnt}`) && ok;
+
+    if (GCAL_TOKEN) {
+      const rrow = await getPending();
+      ok = check(`reschedule ${n}: gcal_event_id unchanged`, rrow?.gcal_event_id === trackGcalId, `was ${trackGcalId}, now ${rrow?.gcal_event_id}`) && ok;
+      trackGcalId = rrow?.gcal_event_id ?? trackGcalId;
+    } else {
+      skipped(`reschedule ${n}: gcal_event_id unchanged`);
+    }
+  }
+
+  // Step 6: final GCal state — search for events with dealId in summary; expect exactly 1 active.
+  if (GCAL_TOKEN && trackGcalId) {
+    const searchUrl  = `${GCAL_BASE}?q=${encodeURIComponent(dealId)}&singleEvents=true&maxResults=50`;
+    const searchRes  = await fetch(searchUrl, { headers: { Authorization: `Bearer ${GCAL_TOKEN}` } });
+    const searchData = searchRes.ok ? await searchRes.json() : null;
+    const active     = (searchData?.items || []).filter(e => e.status !== "cancelled");
+    ok = check(`GCal: 1 event with dealId in summary (found ${active.length})`, active.length === 1, `expected 1, found ${active.length}`) && ok;
+
+    const lastGcal = await gcalGet(trackGcalId);
+    ok = check("GCal event time matches last reschedule", !!lastGcal?.data?.start?.dateTime, `GCal GET returned ${lastGcal?.status}`) && ok;
+  } else {
+    skipped("GCal: 1 event, time matches last reschedule");
+  }
+
+  testResult(ok);
+  return { ok };
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -344,6 +445,9 @@ async function main() {
 
   // TEST 5 — no token; leaves a pending row; cleanup handles it
   await test5(startTime);
+
+  // TEST 6 — idempotency: double-create + 3 reschedules; verifies no row duplication
+  await test6();
 
   // ─── Cleanup ───────────────────────────────────────────────────────────────
   await cleanupTest(startTime);
