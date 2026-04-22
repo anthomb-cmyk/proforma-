@@ -21,6 +21,7 @@ import { createQualificationService } from "./services/qualificationService.js";
 import { runPhoneLookupBatch } from "./services/phoneEnrichment.js";
 import { planPhoneLookups } from "./services/phoneLookupPlanner.js";
 import { dispatch as agentDispatch } from "./agent/chiefOfStaff.js";
+import { startPushNotifier } from "./agent/pushNotifier.js";
 
 dotenv.config();
 
@@ -4453,6 +4454,32 @@ app.post("/api/push/scan-reminders", express.json({ limit: "10kb" }), async (req
     skipped,
     fired,
   });
+});
+
+// ─── Follow-up push notifier (5-minute scheduler) ────────────────────────────
+// Reads from follow_ups table — complementary to /api/push/scan-reminders which
+// reads from the CRM blob. This scanner fires at minute granularity for timed
+// follow-ups stored in the follow_ups table (Phase 2B+).
+let _pushNotifier = null;
+if (pushConfigured && supabaseServerClient) {
+  _pushNotifier = startPushNotifier(supabaseServerClient, dispatchPush);
+}
+
+// Manual trigger — useful for testing without waiting 5 minutes.
+// POST /api/push/test → immediately runs scanAndNotify() once.
+app.post("/api/push/test", async (req, res) => {
+  if (!pushConfigured) {
+    return res.status(503).json({ ok: false, error: "push-not-configured" });
+  }
+  if (!_pushNotifier) {
+    return res.status(503).json({ ok: false, error: "notifier-not-started" });
+  }
+  try {
+    await _pushNotifier.scanAndNotify();
+    res.json({ ok: true, message: "scanAndNotify executed" });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || "scanAndNotify failed" });
+  }
 });
 
 // ─── Phone Number Finder ─────────────────────────────────────────────────────
