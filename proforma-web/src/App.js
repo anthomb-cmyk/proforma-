@@ -2855,6 +2855,124 @@ export default function App() {
   // eslint-disable-next-line
   }, []); // intentionally run once on mount only
 
+  // ── Follow-up → Google Calendar sync ──────────────────────────────────────
+  // A deal's followUpDate is mirrored to Google Calendar as an all-day event.
+  // We store the Google event id on the deal (gcalFollowUpEventId) so that
+  // subsequent edits PATCH the same event rather than piling up duplicates,
+  // and clears issue a DELETE. The writes are best-effort — CRM state is the
+  // source of truth and network failures are swallowed silently.
+
+  // Create or update a single deal's follow-up event. Returns the Google
+  // event id (new or existing), or null if the call failed.
+  const pushFollowUpToGcal = useCallback(async (deal, token) => {
+    if (!deal?.followUpDate || !token) return null;
+    const date = deal.followUpDate;
+    const nextDay = new Date(date);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const body = {
+      summary: `🔔 ${deal.title || "Suivi"}`,
+      description: `Follow-up acquisition — ${deal.title || ""}`.trim(),
+      start: { date },
+      end:   { date: nextDay.toISOString().split("T")[0] },
+    };
+    try {
+      if (deal.gcalFollowUpEventId) {
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events/${deal.gcalFollowUpEventId}`,
+          { method: "PATCH",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify(body) }
+        );
+        // If Google lost the event (user deleted it on their side), fall
+        // through to re-create instead of surfacing an error.
+        if (res.ok) return deal.gcalFollowUpEventId;
+        if (res.status !== 404 && res.status !== 410) return null;
+      }
+      const res = await fetch(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        { method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body) }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.id || null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Delete a follow-up event. Best effort; errors are swallowed.
+  const deleteFollowUpFromGcal = useCallback(async (eventId, token) => {
+    if (!eventId || !token) return;
+    try {
+      await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+      );
+    } catch {}
+  }, []);
+
+  // Backfill: push every unsynced follow-up to Google. Safe to call repeatedly
+  // because the per-deal gcalFollowUpEventId stops deals from being re-sent.
+  const syncAllFollowUps = useCallback(async (token) => {
+    if (!token) return;
+    const unsynced = deals.filter(d => d.followUpDate && !d.gcalFollowUpEventId);
+    for (const deal of unsynced) {
+      const id = await pushFollowUpToGcal(deal, token);
+      if (!id) continue;
+      setDeals(prev => prev.map(d =>
+        d.id === deal.id ? { ...d, gcalFollowUpEventId: id, updatedAt: Date.now() } : d
+      ));
+    }
+  }, [deals, pushFollowUpToGcal]);
+
+  // Run the backfill automatically once the calendar is connected AND deals
+  // have loaded from storage. The ref guards against re-firing while the
+  // sync is in progress (deals updates would otherwise retrigger the effect).
+  const followUpBackfillTokenRef = useRef(null);
+  useEffect(() => {
+    if (!gcalToken) { followUpBackfillTokenRef.current = null; return; }
+    if (followUpBackfillTokenRef.current === gcalToken) return;
+    if (!deals.length) return;
+    followUpBackfillTokenRef.current = gcalToken;
+    syncAllFollowUps(gcalToken);
+  }, [gcalToken, deals.length, syncAllFollowUps]);
+
+  // Single-deal follow-up setter — local state first, Google Calendar in the
+  // background. Use this instead of raw `upd(id, d => ({ ...d, followUpDate }))`
+  // anywhere the follow-up date is mutated.
+  const setFollowUp = useCallback((dealId, newDate) => {
+    const cleaned = (newDate || "").trim();
+    const deal = deals.find(d => d.id === dealId);
+    if (!deal) return;
+    const oldEventId = deal.gcalFollowUpEventId || null;
+    const oldDate    = deal.followUpDate        || "";
+
+    // Local update first so the UI never waits on the network.
+    upd(dealId, d => ({ ...d, followUpDate: cleaned }));
+
+    if (!gcalToken)        return; // Not connected — local only.
+    if (cleaned === oldDate) return; // No real change.
+
+    if (!cleaned) {
+      // Cleared — delete the Google event if we had one.
+      if (oldEventId) {
+        deleteFollowUpFromGcal(oldEventId, gcalToken).finally(() => {
+          upd(dealId, d => ({ ...d, gcalFollowUpEventId: null }));
+        });
+      }
+      return;
+    }
+
+    // Create-or-update on Google.
+    pushFollowUpToGcal({ ...deal, followUpDate: cleaned }, gcalToken).then(id => {
+      if (id && id !== oldEventId) {
+        upd(dealId, d => ({ ...d, gcalFollowUpEventId: id }));
+      }
+    });
+  }, [deals, gcalToken, upd, pushFollowUpToGcal, deleteFollowUpFromGcal]);
+
   const connectGoogleCalendar = useCallback(() => {
     const clientId = process.env.REACT_APP_GCAL_CLIENT_ID;
     if (!clientId) { setGcalError(t("cal_err_client_missing")); return; }
@@ -3899,7 +4017,7 @@ export default function App() {
                           </div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_units")}</div><input type="number" min="1" step="1" value={current.units || ""} onChange={e => upd(current.id,d => ({ ...d, units: e.target.value }))} placeholder={t("ws_field_units_ph")} /></div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_price")}</div><input type="number" min="0" step="1000" value={current.askingPrice || ""} onChange={e => upd(current.id,d => ({ ...d, askingPrice: e.target.value }))} placeholder={t("ws_field_price_ph")} /></div>
-                          <div className="f-row"><div className="f-lbl">{t("ws_field_followup_date")}</div><input type="date" value={current.followUpDate || ""} onChange={e => upd(current.id,d => ({ ...d, followUpDate:e.target.value }))} /></div>
+                          <div className="f-row"><div className="f-lbl">{t("ws_field_followup_date")}</div><input type="date" value={current.followUpDate || ""} onChange={e => setFollowUp(current.id, e.target.value)} /></div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_followup_note")}</div><input value={current.followUpNote || ""} onChange={e => upd(current.id,d => ({ ...d, followUpNote:e.target.value }))} placeholder={t("ws_field_followup_note_ph")} /></div>
                           <div className="f-row"><div className="f-lbl">{t("ws_field_next_action")}</div><input value={current.nextAction || ""} onChange={e => upd(current.id,d => ({ ...d, nextAction:e.target.value }))} placeholder={t("ws_field_next_action_ph")} /></div>
                           <div className="f-row">
