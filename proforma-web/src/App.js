@@ -1270,6 +1270,19 @@ function PushToggle({ t, currentUser }) {
   const [state, setState] = useState(() => (pushSupported() ? pushPermission() : "unsupported"));
   const [busy, setBusy] = useState(false);
 
+  // On mount, if permission is "granted" but no PushManager subscription exists,
+  // treat the component as "default" so the next click subscribes rather than
+  // attempting to unsubscribe a nonexistent registration.
+  useEffect(() => {
+    if (!pushSupported()) return;
+    if (Notification.permission !== "granted") return;
+    navigator.serviceWorker.ready.then((reg) =>
+      reg.pushManager.getSubscription().then((sub) => {
+        if (!sub) setState("default");
+      })
+    ).catch(() => {});
+  }, []);
+
   const refresh = () => {
     setState(pushSupported() ? pushPermission() : "unsupported");
   };
