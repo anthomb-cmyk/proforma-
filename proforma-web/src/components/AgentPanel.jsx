@@ -1,30 +1,60 @@
 import { useState, useEffect, useCallback } from "react";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Date / format helpers ────────────────────────────────────────────────────
 
-// Return today + n calendar days as YYYY-MM-DD in Toronto timezone.
 function torontoDatePlusDays(n) {
   const d = new Date(Date.now() + n * 86400000);
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(d);
 }
 
-// Format a UTC ISO string to a short Toronto date+time (for overdue list).
-function fmtDue(due_at) {
-  if (!due_at) return "";
+// Toronto today as YYYY-MM-DD (for overdue comparison with blob date strings).
+function torontoToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+}
+
+// Format a UTC ISO string → short French date+time in Toronto timezone.
+// e.g. "mar. 30 avr. à 9 h 00"
+function fmtUtc(utcStr) {
+  if (!utcStr) return "";
   try {
-    return new Date(due_at).toLocaleString("fr-CA", {
+    return new Date(utcStr).toLocaleString("fr-CA", {
       timeZone: "America/Toronto",
-      dateStyle: "short",
-      timeStyle: "short"
+      weekday: "short", day: "numeric", month: "short",
+      hour: "numeric", minute: "2-digit"
     });
   } catch {
-    return due_at;
+    return utcStr;
   }
+}
+
+// Format blob date+time fields (already Toronto local, e.g. "2026-04-30" / "09:00").
+// Constructs a UTC noon date to avoid browser-timezone day-shift, then formats.
+function fmtBlob(dateStr, timeStr) {
+  if (!dateStr) return "";
+  try {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d, 12)); // noon UTC — safe for any browser TZ
+    const datePart = new Intl.DateTimeFormat("fr-CA", {
+      weekday: "short", day: "numeric", month: "short"
+    }).format(dt);
+    return timeStr ? `${datePart} à ${timeStr}` : datePart;
+  } catch {
+    return dateStr;
+  }
+}
+
+// Relative label for an overdue UTC timestamp: "aujourd'hui", "hier", "N jours de retard".
+function relativeOverdue(utcStr) {
+  if (!utcStr) return "";
+  const diffMs   = Date.now() - new Date(utcStr).getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays <= 0) return "aujourd'hui";
+  if (diffDays === 1) return "hier";
+  return `${diffDays} jours de retard`;
 }
 
 // ─── Preset buttons ───────────────────────────────────────────────────────────
 
-// Each intent is a function so date strings are computed at click time.
 const DEAL_PRESETS = [
   { label: "Demain 9h",         intent: () => "créer follow-up demain à 9h"                     },
   { label: "Dans 3 jours",      intent: () => `créer follow-up ${torontoDatePlusDays(3)} à 9h`  },
@@ -33,14 +63,108 @@ const DEAL_PRESETS = [
   { label: "Annuler ✗",         intent: () => "cancel the follow-up"                             },
 ];
 
-const ACTION_LABELS = {
-  create:       "Créé",
-  reschedule:   "Reporté",
-  complete:     "Complété",
-  cancel:       "Annulé",
-  show_overdue: "En retard",
-  none:         "Aucune action",
-};
+// ─── Status line (3C) ─────────────────────────────────────────────────────────
+
+function StatusLine({ deal, localFollowUpAt }) {
+  if (!deal) return null;
+
+  // localFollowUpAt: null = use deal prop; "" = explicitly cleared; UTC ISO = override.
+  let content;
+  const muted  = { fontSize: 12, color: "var(--muted, #888)", marginBottom: 10 };
+  const normal = { fontSize: 12, color: "var(--fg, #333)",    marginBottom: 10 };
+  const amber  = { fontSize: 12, color: "var(--orange, #e67e22)", fontWeight: 500, marginBottom: 10 };
+
+  if (localFollowUpAt === "") {
+    // Cleared by complete/cancel.
+    content = <div style={muted}>Aucun suivi planifié</div>;
+  } else if (localFollowUpAt) {
+    // Set by create/reschedule — UTC ISO from API.
+    const overdue  = new Date(localFollowUpAt) < new Date();
+    const label    = fmtUtc(localFollowUpAt);
+    content = overdue
+      ? <div style={amber}>⚠ En retard — {label}</div>
+      : <div style={normal}>Suivi : {label}</div>;
+  } else if (deal.followUpDate) {
+    // From blob via deal prop.
+    const today   = torontoToday();
+    const overdue = deal.followUpDate < today;
+    const label   = fmtBlob(deal.followUpDate, deal.followUpTime);
+    content = overdue
+      ? <div style={amber}>⚠ En retard — {label}</div>
+      : <div style={normal}>Suivi : {label}</div>;
+  } else {
+    content = <div style={muted}>Aucun suivi planifié</div>;
+  }
+
+  return content;
+}
+
+// ─── Result display (3B) ──────────────────────────────────────────────────────
+
+function MutationResult({ result }) {
+  const { actionTaken, followUpChanges, warning } = result;
+
+  const VERB = {
+    create:     "Suivi créé",
+    reschedule: "Suivi reporté",
+    complete:   "Suivi complété",
+    cancel:     "Suivi annulé",
+  };
+
+  const verb   = VERB[actionTaken] || actionTaken;
+  const dueAt  = followUpChanges?.due_at;
+  const label  = dueAt && (actionTaken === "create" || actionTaken === "reschedule")
+    ? `${verb} — ${fmtUtc(dueAt)}`
+    : verb;
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ fontSize: 13, color: "var(--fg, #333)", marginBottom: warning ? 4 : 0 }}>
+        ✓ {label}
+      </div>
+      {warning ? (
+        <div style={{ fontSize: 12, color: "var(--orange, #e67e22)" }}>
+          ⚠ {warning}
+        </div>
+      ) : dueAt && (actionTaken === "create" || actionTaken === "reschedule") ? (
+        <div style={{ fontSize: 11, color: "var(--muted, #888)" }}>
+          📅 Calendrier synchronisé
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OverdueList({ items }) {
+  if (!Array.isArray(items)) return null;
+  if (items.length === 0) {
+    return (
+      <div style={{ fontSize: 13, color: "var(--fg, #333)", marginTop: 4 }}>
+        Aucun suivi en retard ✓
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+      {items.map(row => (
+        <div key={row.id} style={{
+          padding: "6px 8px",
+          background: "var(--bg-alt, #f5f5f5)", borderRadius: 4
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <strong style={{ fontSize: 13 }}>{row.dealName || row.deal_id}</strong>
+            <span style={{ fontSize: 11, color: "var(--red, #c0392b)", fontWeight: 600 }}>
+              {relativeOverdue(row.due_at)}
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted, #888)", marginTop: 2 }}>
+            {fmtUtc(row.due_at)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -50,16 +174,18 @@ export default function AgentPanel({ deal }) {
   const [loading,        setLoading]        = useState(false);
   const [result,         setResult]         = useState(null);
   const [fetchError,     setFetchError]     = useState("");
+  // null = read from deal prop; "" = cleared; UTC ISO = post-action override.
+  const [localFollowUpAt, setLocalFollowUpAt] = useState(null);
 
-  // 3D: clear result + error when the selected deal changes.
+  // Clear everything when the selected deal changes.
   useEffect(() => {
     setResult(null);
     setFetchError("");
+    setLocalFollowUpAt(null);
   }, [deal?.id]);
 
   const effectiveDealId = deal?.id || dealIdOverride.trim() || null;
 
-  // Shared submit handler — accepts any intent string; no duplication with presets.
   const fire = useCallback(async (intentStr) => {
     const trimmed = (intentStr || "").trim();
     if (!trimmed) return;
@@ -81,6 +207,12 @@ export default function AgentPanel({ deal }) {
         setFetchError(data?.shortExplanation || data?.error || `Erreur ${res.status}`);
       } else {
         setResult(data);
+        // 3C: update local status line after mutation (deal prop won't refresh without reload).
+        if (data.actionTaken === "create" || data.actionTaken === "reschedule") {
+          setLocalFollowUpAt(data.followUpChanges?.due_at || null);
+        } else if (data.actionTaken === "complete" || data.actionTaken === "cancel") {
+          setLocalFollowUpAt("");
+        }
       }
     } catch (err) {
       setFetchError(err?.message || "Requête échouée.");
@@ -94,20 +226,20 @@ export default function AgentPanel({ deal }) {
     fire(intent);
   }
 
-  const needsDealId = result?.actionTaken === "none" &&
-    result?.shortExplanation?.toLowerCase().includes("dealid");
+  const isError = result?.actionTaken === "none";
 
   return (
     <div className="card f-card">
       <div className="f-title">Agent IA — Suivi</div>
 
-      {/* Deal context */}
-      <div style={{ marginBottom: 12, fontSize: 12, color: "var(--muted, #888)" }}>
+      {/* Deal context + status line (3C) */}
+      <div style={{ marginBottom: 4, fontSize: 12, color: "var(--muted, #888)" }}>
         {deal
           ? <>Deal actif : <strong>{deal.title || deal.address || deal.id}</strong></>
           : <span style={{ color: "var(--red, #c0392b)" }}>Aucun deal sélectionné</span>
         }
       </div>
+      <StatusLine deal={deal} localFollowUpAt={localFollowUpAt} />
 
       {/* Manual dealId override — only shown when no deal is selected */}
       {!deal && (
@@ -184,59 +316,22 @@ export default function AgentPanel({ deal }) {
         </div>
       )}
 
-      {/* Result */}
+      {/* Result (3B) */}
       {result && (
         <div style={{ marginTop: 4 }}>
-          {/* Action badge + explanation */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <span style={{
-              display: "inline-block",
-              padding: "2px 8px",
-              borderRadius: 4,
-              fontSize: 11,
-              fontWeight: 600,
-              background: result.actionTaken === "none" ? "var(--red, #c0392b)" : "var(--gold, #b8920a)",
-              color: "#fff"
-            }}>
-              {ACTION_LABELS[result.actionTaken] || result.actionTaken}
-            </span>
-            <span style={{ fontSize: 13 }}>{result.shortExplanation}</span>
-          </div>
-
-          {/* GCal warning */}
-          {result.warning && (
-            <div style={{ fontSize: 12, color: "var(--orange, #e67e22)", marginBottom: 6 }}>
-              ⚠ {result.warning}
-            </div>
-          )}
-
-          {/* "dealId required" inline error */}
-          {needsDealId && (
-            <div style={{ fontSize: 12, color: "var(--red, #c0392b)", marginBottom: 6 }}>
-              Sélectionnez un deal ou entrez un Deal ID pour cette action.
-            </div>
-          )}
-
-          {/* show_overdue list */}
-          {result.actionTaken === "show_overdue" && Array.isArray(result.followUpChanges) && (
-            <div style={{ marginTop: 6 }}>
-              {result.followUpChanges.length === 0 ? (
-                <div style={{ fontSize: 12, color: "var(--muted, #888)" }}>Aucun suivi en retard.</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {result.followUpChanges.map(row => (
-                    <div key={row.id} style={{
-                      display: "flex", justifyContent: "space-between",
-                      fontSize: 12, padding: "4px 8px",
-                      background: "var(--bg-alt, #f5f5f5)", borderRadius: 4
-                    }}>
-                      <span style={{ fontWeight: 500 }}>{row.dealName || row.deal_id}</span>
-                      <span style={{ color: "var(--red, #c0392b)" }}>{fmtDue(row.due_at)}</span>
-                    </div>
-                  ))}
+          {isError ? (
+            <div style={{ fontSize: 13, color: "var(--red, #c0392b)" }}>
+              ⚠ {result.shortExplanation}
+              {result.shortExplanation?.toLowerCase().includes("dealid") && (
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  Sélectionnez un deal ou entrez un Deal ID pour cette action.
                 </div>
               )}
             </div>
+          ) : result.actionTaken === "show_overdue" ? (
+            <OverdueList items={result.followUpChanges} />
+          ) : (
+            <MutationResult result={result} />
           )}
         </div>
       )}
