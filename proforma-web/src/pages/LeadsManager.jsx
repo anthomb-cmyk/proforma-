@@ -22,6 +22,7 @@ import {
 } from "../lib/tableImport.js";
 import LeadFiche from "../components/LeadFiche.jsx";
 import LeadListRow, { LEAD_ROW_HEIGHT } from "../components/LeadListRow.jsx";
+import { FolderIcon, HourglassIcon, DownloadIcon, TrashIcon, TargetIcon, CloseIcon } from "../components/Icons.jsx";
 
 // Batch size for the POST /api/phone-lookup call when enriching imported
 // leads — keeps requests under the proxy/timeout ceiling.
@@ -345,7 +346,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     if (addedCount > 0) summary.push(`${addedCount} nouveau${addedCount > 1 ? "x" : ""}`);
     if (updatedCount > 0) summary.push(`${updatedCount} enrichi${updatedCount > 1 ? "s" : ""}`);
     if (unchangedCount > 0) summary.push(`${unchangedCount} inchangé${unchangedCount > 1 ? "s" : ""}`);
-    showToast(`✅ Import Leads terminé${summary.length ? ` · ${summary.join(" · ")}` : ""}.`, 5000);
+    showToast(`Import Leads terminé${summary.length ? ` · ${summary.join(" · ")}` : ""}.`, 5000);
     setImportFile(null);
     setColMap({});
     setShowColMap(false);
@@ -386,7 +387,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       stage: (lead.stage === "new" || lead.stage === "to_call") ? "contacted" : lead.stage,
       callNotes: existing ? `${existing}\n${line}` : line,
     });
-    showToast("✅ Appel noté dans le lead.", 2800);
+    showToast("Appel noté dans le lead.", 2800);
   }
 
   function removeLead(id) {
@@ -468,7 +469,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     }
 
     setLeads(cleaned);
-    showToast(`✅ Nettoyage terminé: ${changed} leads corrigés · ${removedValues} valeurs retirées`, 4500);
+    showToast(`Nettoyage terminé: ${changed} leads corrigés · ${removedValues} valeurs retirées`, 4500);
   }
 
   function exportLeads() {
@@ -647,7 +648,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           <div style={{fontSize:12,color:"var(--text3)",marginTop:2}}>Importez, filtrez et suivez vos pistes.</div>
         </div>
         <button className="btn btn-gold" onClick={() => setShowImportModal(true)}>
-          📂 Importer CSV / XLSX
+          <FolderIcon size={13} style={{marginRight:5}} />Importer CSV / XLSX
         </button>
       </div>
 
@@ -665,7 +666,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
               onClick={pickImportFile}
               style={{marginTop:8}}
             >
-              <div style={{fontSize:32,marginBottom:8}}>📂</div>
+              <FolderIcon size={32} style={{marginBottom:8,color:"var(--text3)"}} />
               {importFile
                 ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{importFile.fileName} · {importFile.rows.length} lignes · {importFile.headers.length} colonnes</div>
                 : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>Glissez un fichier ou cliquez pour importer</div>}
@@ -699,7 +700,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       {importBusy && importProgress && (
         <div className="card" style={{padding:16,marginBottom:14}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>⏳ {importProgress.done} / {importProgress.total} lignes importées</div>
+            <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}><HourglassIcon size={13} style={{marginRight:4}} />{importProgress.done} / {importProgress.total} lignes importées</div>
           </div>
           <div style={{height:8,background:"#F0E8D8",borderRadius:999,overflow:"hidden"}}>
             <div style={{height:"100%",background:"var(--gold)",borderRadius:999,width:`${Math.round((importProgress.done/importProgress.total)*100)}%`,transition:"width .3s"}} />
@@ -724,7 +725,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           return (
             <>
               <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <input ref={searchRef} className="tb-search" style={{width:200,minWidth:140}} placeholder="🔍 Rechercher… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+                <input ref={searchRef} className="tb-search" style={{width:200,minWidth:140}} placeholder="Rechercher… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
                 <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
                   <option value="all">Tous les statuts</option>
                   {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
@@ -746,19 +747,19 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                   {leads.length !== filteredLeads.length ? " / " + leads.length : ""}
                 </span>
                 <div style={{display:"flex",gap:5}}>
-                  <button className="btn btn-sm" onClick={exportLeads} title="Exporter">⬇</button>
-                  <button className="btn btn-sm btn-danger" onClick={clearLeads} title="Vider tout">🗑</button>
+                  <button className="btn btn-sm" onClick={exportLeads} title="Exporter"><DownloadIcon size={13} /></button>
+                  <button className="btn btn-sm btn-danger" onClick={clearLeads} title="Vider tout"><TrashIcon size={13} /></button>
                 </div>
               </div>
               {showAdvancedFilters && (
                 <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",background:"#FAF8F4",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
-                    <option value="all">📞 Tous</option>
-                    <option value="with">📞 Avec tél.</option>
-                    <option value="without">📞 Sans tél.</option>
+                    <option value="all">Téléphone: tous</option>
+                    <option value="with">Avec tél.</option>
+                    <option value="without">Sans tél.</option>
                   </select>
                   <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
-                    <option value="all">🏢 Toutes tailles</option>
+                    <option value="all">Toutes tailles</option>
                     <option value="1">1–2 unités</option>
                     <option value="3">3–5 unités</option>
                     <option value="6">6–11 unités</option>
@@ -768,7 +769,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                   </select>
                   {cityOptions.length > 0 && (
                     <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
-                      <option value="all">📍 Toutes villes</option>
+                      <option value="all">Toutes villes</option>
                       {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   )}
@@ -790,12 +791,12 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           <div style={{width:320,minWidth:240,flexShrink:0,borderRight:"1px solid var(--border)",background:"var(--bg,#FAF6EF)"}}>
             {filteredLeads.length === 0 ? (
               <div style={{padding:32,textAlign:"center",color:"var(--text3)"}}>
-                <div style={{fontSize:28,marginBottom:8}}>🎯</div>
+                <TargetIcon size={28} style={{marginBottom:8,color:"var(--text3)"}} />
                 <div style={{fontWeight:700,marginBottom:4}}>{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
                 <div style={{fontSize:12,marginBottom:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
                 {leads.length === 0 && (
                   <button className="btn btn-gold btn-sm" onClick={() => setShowImportModal(true)}>
-                    📂 Importer un fichier
+                    <FolderIcon size={12} style={{marginRight:4}} />Importer un fichier
                   </button>
                 )}
               </div>
@@ -816,7 +817,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           <div style={{flex:1,overflowY:"auto",padding:"16px 18px",minWidth:0}}>
             {!selectedLead ? (
               <div style={{padding:40,textAlign:"center",color:"var(--text3)"}}>
-                <div style={{fontSize:32,marginBottom:8}}>👈</div>
+                <div style={{fontSize:24,marginBottom:8,color:"var(--text3)"}}>←</div>
                 <div style={{fontWeight:700}}>Sélectionnez un lead</div>
                 <div style={{fontSize:12,marginTop:4}}>Cliquez sur un lead dans la liste pour voir sa fiche.</div>
               </div>

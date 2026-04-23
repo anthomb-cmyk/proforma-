@@ -25,18 +25,18 @@ describe("fmtSz", () => {
 });
 
 describe("fileIco", () => {
-  test("picks icons by mime fragment", () => {
-    expect(fileIco("application/pdf")).toBe("📄");
-    expect(fileIco("image/png")).toBe("🖼️");
-    expect(fileIco("application/msword")).toBe("📝");
-    expect(fileIco("application/vnd.openxmlformats-officedocument.wordprocessingml.document")).toBe("📝");
-    expect(fileIco("application/vnd.ms-excel")).toBe("📊");
-    expect(fileIco("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).toBe("📊");
+  test("picks labels by mime fragment", () => {
+    expect(fileIco("application/pdf")).toBe("PDF");
+    expect(fileIco("image/png")).toBe("IMG");
+    expect(fileIco("application/msword")).toBe("DOC");
+    expect(fileIco("application/vnd.openxmlformats-officedocument.wordprocessingml.document")).toBe("DOC");
+    expect(fileIco("application/vnd.ms-excel")).toBe("XLS");
+    expect(fileIco("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).toBe("XLS");
   });
 
   test("falls back for unknown types", () => {
-    expect(fileIco("application/zip")).toBe("📎");
-    expect(fileIco(undefined)).toBe("📎");
+    expect(fileIco("application/zip")).toBe("FILE");
+    expect(fileIco(undefined)).toBe("FILE");
   });
 });
 

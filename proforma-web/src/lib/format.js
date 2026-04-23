@@ -10,16 +10,16 @@ export function fmtSz(b) {
 }
 
 export function fileIco(t) {
-  if (t?.includes("pdf")) return "📄";
-  if (t?.includes("image")) return "🖼️";
+  if (t?.includes("pdf")) return "PDF";
+  if (t?.includes("image")) return "IMG";
   // Check spreadsheet shapes first: the xlsx mime
   // `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
   // contains "document" via "officedocument", so a naive "document" check
   // below would mis-flag it as Word. Match the more specific
   // sheet/excel/spreadsheet/csv tokens before the Word hints.
-  if (t?.includes("sheet") || t?.includes("excel") || t?.includes("spreadsheet") || t?.includes("csv")) return "📊";
-  if (t?.includes("word") || t?.includes("document")) return "📝";
-  return "📎";
+  if (t?.includes("sheet") || t?.includes("excel") || t?.includes("spreadsheet") || t?.includes("csv")) return "XLS";
+  if (t?.includes("word") || t?.includes("document")) return "DOC";
+  return "FILE";
 }
 
 export function initials(name, fallback = "DL") {

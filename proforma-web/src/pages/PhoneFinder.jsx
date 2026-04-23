@@ -22,6 +22,7 @@ import {
   normalizeHeader as normalizeHeaderKey,
 } from "../lib/tableImport.js";
 import PhoneResultRow from "../components/PhoneResultRow.jsx";
+import { PhoneIcon, GlobeIcon, FolderIcon, BookIcon, PencilIcon, FileIcon, DownloadIcon, CloseIcon } from "../components/Icons.jsx";
 import {
   loadRunsFromStorage,
   persistRunsDiff,
@@ -1190,8 +1191,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                   <span className={`pf-conf ${confClass(c.confidence)}`}>{c.confidence}%</span>
                 </div>
                 <div style={{fontSize:11,color:"var(--text2)"}}>{c.address}</div>
-                {c.phone && <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",marginTop:4}}>📞 {c.phone}</div>}
-                {c.website && <div style={{fontSize:11,color:"var(--blue)",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🌐 {c.website}</div>}
+                {c.phone && <div style={{fontSize:12,fontWeight:700,color:"var(--gold)",marginTop:4}}><PhoneIcon size={11} style={{marginRight:3}} />{c.phone}</div>}
+                {c.website && <div style={{fontSize:11,color:"var(--blue)",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><GlobeIcon size={11} style={{marginRight:3}} />{c.website}</div>}
               </div>
             ))}
             <div className="mo-foot">
@@ -1438,7 +1439,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 {exportBusy ? t("pf_export_busy") : t("pf_export_found_btn", exportFoundRows.length)}
               </button>
               {pfPage !== "results" && <button className="btn btn-sm" onClick={() => setPfPage("results")}>{t("pf_view_results")}</button>}
-              <button className="btn btn-sm" onClick={exportCSV}>{t("pf_export_csv")}</button>
+              <button className="btn btn-sm" onClick={exportCSV}><DownloadIcon size={12} style={{marginRight:4}} />{t("pf_export_csv")}</button>
               <button className="btn btn-danger btn-sm" onClick={clearAllRuns}>{t("pf_clear_all")}</button>
             </div>
           )}
@@ -1523,7 +1524,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                   onDragOver={e => e.preventDefault()}
                   onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVDrop(f); }}
                   onClick={pickCSVFile}>
-                  <div style={{fontSize:32,marginBottom:8}}>📂</div>
+                  <FolderIcon size={32} style={{marginBottom:8,color:"var(--text3)"}} />
                   {csvFile
                     ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
                         {/* Inline the stats sentence so the separator can
@@ -1559,7 +1560,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
 
             {!loading && resultRuns.length === 0 && (
               <div className="card empty">
-                <div className="empty-ico">📞</div>
+                <div className="empty-ico"><PhoneIcon size={36} /></div>
                 <div className="empty-title">{t("pf_empty_saved_title")}</div>
                 <div className="empty-sub">{t("pf_empty_saved_sub")}</div>
               </div>
@@ -1586,7 +1587,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         {pfPage === "results" && (
           resultRuns.length === 0 ? (
             <div className="card empty">
-              <div className="empty-ico">📚</div>
+              <div className="empty-ico"><BookIcon size={36} /></div>
               <div className="empty-title">{t("pf_empty_saved_title")}</div>
               <div className="empty-sub">{t("pf_empty_results_sub")}</div>
               <button className="btn btn-gold" onClick={() => setPfPage("search")}>{t("pf_empty_results_cta")}</button>
@@ -1612,8 +1613,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                             {t("pf_rows_found_sub", run.totalRows || 0, run.foundCount || 0)}
                           </div>
                         </button>
-                        <button className="btn btn-sm" title={t("pf_rename_title")} onClick={() => askRenameRun(run)}>✎</button>
-                        <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm(t("pf_confirm_delete_run"))) removeRun(run.id); }}>✕</button>
+                        <button className="btn btn-sm" title={t("pf_rename_title")} onClick={() => askRenameRun(run)}><PencilIcon size={12} /></button>
+                        <button className="btn btn-sm btn-danger" onClick={() => { if (window.confirm(t("pf_confirm_delete_run"))) removeRun(run.id); }}><CloseIcon size={11} /></button>
                       </div>
                     );
                   })}
@@ -1640,8 +1641,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                       >
                         {exportBusy ? t("pf_export_busy") : t("pf_export_found_leads", exportFoundRows.length)}
                       </button>
-                      <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}>{t("pf_rename_btn")}</button>
-                      <button className="btn btn-sm" onClick={exportCSV}>{t("pf_export_this_import")}</button>
+                      <button className="btn btn-sm" onClick={() => askRenameRun(activeRun)}><PencilIcon size={12} style={{marginRight:4}} />{t("pf_rename_btn")}</button>
+                      <button className="btn btn-sm" onClick={exportCSV}><DownloadIcon size={12} style={{marginRight:4}} />{t("pf_export_this_import")}</button>
                     </div>
                   </div>
                 )}
@@ -1715,7 +1716,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                     </div>
                   ) : (
                     <div className="card empty">
-                      <div className="empty-ico">📄</div>
+                      <div className="empty-ico"><FileIcon size={36} /></div>
                       <div className="empty-title">{t("pf_no_results_title")}</div>
                       <div className="empty-sub">{t("pf_no_results_sub")}</div>
                     </div>

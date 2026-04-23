@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { WarningIcon, CalendarIcon } from "./Icons.jsx";
 
 // ─── Date / format helpers ────────────────────────────────────────────────────
 
@@ -80,14 +81,14 @@ function StatusLine({ deal, localFollowUpAt }) {
     const overdue = new Date(localFollowUpAt) < new Date();
     const label   = fmtUtc(localFollowUpAt);
     return overdue
-      ? <div style={amber}>⚠ En retard — {label}</div>
+      ? <div style={amber}><WarningIcon size={12} style={{marginRight:4}} />En retard — {label}</div>
       : <div style={normal}>Suivi : {label}</div>;
   }
   if (deal.followUpDate) {
     const overdue = deal.followUpDate < torontoToday();
     const label   = fmtBlob(deal.followUpDate, deal.followUpTime);
     return overdue
-      ? <div style={amber}>⚠ En retard — {label}</div>
+      ? <div style={amber}><WarningIcon size={12} style={{marginRight:4}} />En retard — {label}</div>
       : <div style={normal}>Suivi : {label}</div>;
   }
   return <div style={muted}>Aucun suivi planifié</div>;
@@ -98,7 +99,7 @@ function GCalBadge({ hadToken, warning }) {
   if (!hadToken) {
     return (
       <div style={{ fontSize: 11, color: "var(--muted, #888)", marginTop: 4 }}>
-        ○ GCal non connecté
+        — GCal non connecté
       </div>
     );
   }
@@ -108,13 +109,14 @@ function GCalBadge({ hadToken, warning }) {
       : warning;
     return (
       <div style={{ fontSize: 11, color: "var(--red, #c0392b)", marginTop: 4 }}>
-        🔴 GCal non synchronisé — {msg}
+        <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "var(--red, #c0392b)", verticalAlign: "middle", marginRight: 4 }} />
+        GCal non synchronisé — {msg}
       </div>
     );
   }
   return (
     <div style={{ fontSize: 11, color: "var(--muted, #888)", marginTop: 4 }}>
-      📅 Synchronisé avec Google Calendar
+      <CalendarIcon size={11} style={{ marginRight: 4 }} />Synchronisé avec Google Calendar
     </div>
   );
 }
@@ -338,7 +340,7 @@ export default function AgentPanel({ deal }) {
       {/* Fetch-level error */}
       {fetchError && (
         <div style={{ color: "var(--red, #c0392b)", fontSize: 12, marginBottom: 8 }}>
-          ⚠ {fetchError}
+          <WarningIcon size={12} style={{ marginRight: 4 }} />{fetchError}
         </div>
       )}
 
@@ -347,7 +349,7 @@ export default function AgentPanel({ deal }) {
         <div style={{ marginTop: 4 }}>
           {isError ? (
             <div style={{ fontSize: 13, color: "var(--red, #c0392b)" }}>
-              ⚠ {normalizeExplanation(result.shortExplanation)}
+              <WarningIcon size={13} style={{ marginRight: 4 }} />{normalizeExplanation(result.shortExplanation)}
               {(result.shortExplanation || "").toLowerCase().includes("dealid") && (
                 <div style={{ fontSize: 12, marginTop: 4 }}>
                   Sélectionnez un deal ou entrez un Deal ID pour cette action.

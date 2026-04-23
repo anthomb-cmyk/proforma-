@@ -13,6 +13,7 @@
 
 import { memo, useState } from "react";
 import { mergePhoneLists, normalizePhoneKey } from "../lib/phoneUtils.js";
+import { BuildingIcon, TagIcon, UserIcon, PhoneIcon, WarningIcon, RefreshIcon, ClipboardIcon, MapPinIcon, CloseIcon } from "./Icons.jsx";
 
 const STATUS_CFG = {
   found:                { label: "Trouvé",         cls: "found" },
@@ -127,26 +128,28 @@ function PhoneResultRow({
           <div className="pf-cell-name">{r.companyName || r.inputName}</div>
         )}
         {(r.buildingAddress || r.inputAddress) && (
-          <div className="pf-cell-addr">🏢 {r.buildingAddress || r.inputAddress}</div>
+          <div className="pf-cell-addr"><BuildingIcon size={10} style={{marginRight:3}} />{r.buildingAddress || r.inputAddress}</div>
         )}
         {r.utilisation && (
           <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 2 }}>
-            🏷 {r.utilisation}
+            <TagIcon size={10} style={{marginRight:3}} />{r.utilisation}
           </div>
         )}
         {r.leadContact && (
           <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2 }}>
-            👤 {r.leadContact}
+            <UserIcon size={10} style={{marginRight:3}} />{r.leadContact}
           </div>
         )}
         {listedPhones.length > 0 && (
-          <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2 }}>
-            {listedPhones
-              .map((phone) => {
-                const src = sourceLabelForPhone(phone);
-                return `📇 ${phone}${src ? ` · ${src}` : ""}`;
-              })
-              .join("  ")}
+          <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 2, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {listedPhones.map((phone) => {
+              const src = sourceLabelForPhone(phone);
+              return (
+                <span key={phone}>
+                  <PhoneIcon size={10} style={{marginRight:2}} />{phone}{src ? ` · ${src}` : ""}
+                </span>
+              );
+            })}
           </div>
         )}
         {r.error && (
@@ -154,7 +157,7 @@ function PhoneResultRow({
             style={{ fontSize: 10, color: "var(--red)", marginTop: 2 }}
             title={r.error}
           >
-            ⚠ {r.error.slice(0, 60)}
+            <WarningIcon size={10} style={{marginRight:3}} />{r.error.slice(0, 60)}
           </div>
         )}
       </td>
@@ -172,7 +175,7 @@ function PhoneResultRow({
             onClick={() => navigator.clipboard?.writeText(r.phone)}
             title="Copier"
           >
-            📞 {r.phone}
+            <PhoneIcon size={11} style={{marginRight:3}} />{r.phone}
           </span>
         ) : listedPhones.length > 0 ? (
           <span
@@ -180,14 +183,14 @@ function PhoneResultRow({
             onClick={() => navigator.clipboard?.writeText(listedPhones.join(" / "))}
             title="Copier"
           >
-            📇 {listedPhones[0]}
+            <PhoneIcon size={11} style={{marginRight:3}} />{listedPhones[0]}
           </span>
         ) : (
           <span style={{ color: "var(--text3)" }}>—</span>
         )}
         {primaryPhoneSource && (
           <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 2 }}>
-            📍 {primaryPhoneSource}
+            <MapPinIcon size={10} style={{marginRight:3}} />{primaryPhoneSource}
           </div>
         )}
       </td>
@@ -232,7 +235,7 @@ function PhoneResultRow({
               disabled={loading}
               title="Relancer la recherche pour cette ligne"
             >
-              🔄
+              <RefreshIcon size={12} />
             </button>
           )}
           {(r.phone || (Array.isArray(r.inputPhones) && r.inputPhones.length > 0)) && (
@@ -245,14 +248,14 @@ function PhoneResultRow({
               }
               title="Copier"
             >
-              📋
+              <ClipboardIcon size={12} />
             </button>
           )}
           <button
             className="btn btn-sm btn-danger"
             onClick={() => onDelete(r)}
           >
-            ✕
+            <CloseIcon size={11} />
           </button>
         </div>
       </td>
@@ -294,7 +297,7 @@ function PhoneResultRow({
                       title="Copier"
                       style={{ cursor: "pointer" }}
                     >
-                      📞 {c.phone}
+                      <PhoneIcon size={11} style={{marginRight:3}} />{c.phone}
                     </span>
                   ) : <span style={{ color: "var(--text3)" }}>—</span>}
                 </div>

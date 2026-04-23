@@ -16,6 +16,7 @@
 // React 19.
 
 import { Component } from "react";
+import { WarningIcon } from "./Icons.jsx";
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -60,7 +61,7 @@ class ErrorBoundary extends Component {
         textAlign: "center",
       }}>
         <div style={{ maxWidth: 480 }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>⚠️</div>
+          <WarningIcon size={28} style={{ marginBottom: 8, color: "var(--text2, #888)" }} />
           <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>
             {this.props.label ? `Impossible de charger ${this.props.label}` : "Une erreur s'est produite"}
           </div>

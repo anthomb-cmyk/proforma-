@@ -31,6 +31,7 @@ import { parseRoleXlsx, buildOwnersAndLeadsFromRole } from "../lib/roleImport.js
 import { estimateLookupCost, formatCost } from "../lib/phoneLookupCost.js";
 import { loadTodaySpend, recordBatch } from "../lib/dailySpendTracker.js";
 import VoiceDictation from "../components/VoiceDictation.jsx";
+import { WarningIcon, HourglassIcon, PhoneIcon, MapPinIcon } from "../components/Icons.jsx";
 
 // Batch size for the POST /api/phone-lookup call — matches PhoneFinder's
 // BATCH_SIZE (keeps each request under the proxy/timeout ceiling).
@@ -528,11 +529,11 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
         </button>
       </div>
       {enrichNotice && <div className="om-notice">{enrichNotice}</div>}
-      {roleError && <div className="om-notice om-notice-err">⚠ {roleError}</div>}
+      {roleError && <div className="om-notice om-notice-err"><WarningIcon size={12} style={{marginRight:4}} />{roleError}</div>}
       {enrichProgress && (
         <div className="om-progress">
           <div className="om-progress-row">
-            <span>⏳ {enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound}</span>
+            <span><HourglassIcon size={12} style={{marginRight:4}} />{enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound}</span>
             <span className="om-progress-spend">~{formatCost(dailySpend.estCost)}</span>
           </div>
           <div className="om-progress-bar">
@@ -583,7 +584,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                   <li key={i}>
                     <strong>{o.name}</strong>
                     <div style={{fontSize:11,color:"var(--text3)"}}>{o.address || tr("om_missing_mailing")}</div>
-                    {o.phones.length > 0 && <div style={{fontSize:11,color:"var(--gold)"}}>📞 {o.phones.join(" · ")}</div>}
+                    {o.phones.length > 0 && <div style={{fontSize:11,color:"var(--gold)"}}><PhoneIcon size={10} style={{marginRight:3}} />{o.phones.join(" · ")}</div>}
                   </li>
                 ))}
               </ul>
@@ -781,10 +782,10 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
             <div className="fiche-also">{tr("leads_count_also", alsoNames.join(" · "))}</div>
           )}
           <div className="fiche-addr-stack">
-            {street && <div className="fiche-addr">📍 {street}</div>}
+            {street && <div className="fiche-addr"><MapPinIcon size={11} style={{marginRight:4}} />{street}</div>}
             {cityLine && <div className="fiche-addr-sub">{cityLine}</div>}
             {!street && !cityLine && (
-              <div className="fiche-addr">📍 {describeOwnerKey(owner.ownerKey)}</div>
+              <div className="fiche-addr"><MapPinIcon size={11} style={{marginRight:4}} />{describeOwnerKey(owner.ownerKey)}</div>
             )}
           </div>
           {owner.matchedBusinessName ? (

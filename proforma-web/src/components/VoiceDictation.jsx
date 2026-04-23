@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { MicIcon, WarningIcon } from "./Icons.jsx";
 
 const MAX_MS = 60_000;
 
@@ -65,10 +66,6 @@ export default function VoiceDictation({ onTranscript }) {
     else if (phase === "recording") stop();
   };
 
-  const label = phase === "loading" ? "…"
-              : phase === "error"   ? "⚠"
-              : "🎤";
-
   return (
     <>
       <button
@@ -79,7 +76,9 @@ export default function VoiceDictation({ onTranscript }) {
         title={phase === "recording" ? "Arrêter l'enregistrement" : "Dicter une note"}
         aria-label={phase === "recording" ? "Arrêter" : "Dicter"}
       >
-        {label}
+        {phase === "loading"  ? <span style={{fontSize:11}}>…</span>
+       : phase === "error"    ? <WarningIcon size={14} />
+       : <MicIcon size={14} />}
       </button>
       <style>{`
         .vd-btn {

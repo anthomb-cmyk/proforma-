@@ -70,7 +70,7 @@ const I18N = {
     topbar_phonefinder_sub: "Enrichit des numéros manquants via Google Places",
     topbar_workspace: "Workspace",
     topbar_workspace_empty: "Sélectionnez un deal",
-    flag_banner: "🚩 Soumettre ce lead à Anthony",
+    flag_banner: "Soumettre ce lead à Anthony",
     flag_note_placeholder: "Note pour Anthony (optionnel)…",
     flag_submit: "Soumettre",
     flag_submitted: "Lead soumis à Anthony.",
@@ -90,16 +90,16 @@ const I18N = {
 
     // Leads page (merged owner-grouped view) -----------------------------
     leads_label_proprio: "Propriétaire",
-    leads_search_placeholder: "🔍 Rechercher propriétaire, compagnie, téléphone… (⌘K)",
+    leads_search_placeholder: "Rechercher propriétaire, compagnie, téléphone… (⌘K)",
     leads_filter_all_stages: "Tous les statuts",
     leads_filter_all_sources: "Tous les numéros",
     leads_filter_missing_phone: "Numéro manquant",
     leads_sort_buildings: "Tri: plus de propriétés",
     leads_sort_phones: "Tri: plus de numéros",
     leads_sort_name: "Tri: nom A–Z",
-    leads_btn_import: "📥 Importer un rôle",
+    leads_btn_import: "Importer un rôle",
     leads_btn_import_busy: "Lecture…",
-    leads_btn_enrich: "🔍 Enrichir numéros manquants",
+    leads_btn_enrich: "Enrichir numéros manquants",
     leads_btn_enrich_busy: "Recherche…",
     leads_btn_test100: "▶︎ Tester 100 d'abord",
     leads_header_title: "Propriétaires",
@@ -108,7 +108,7 @@ const I18N = {
     leads_header_missing: (n) => ` · ${n} sans numéro`,
     leads_hint: "Un propriétaire = une adresse postale. Les compagnies à numéro sont regroupées comme aliases.",
     leads_empty_title: "Aucun propriétaire pour le moment",
-    leads_empty_body: "Importez un rôle d'évaluation avec le bouton « 📥 Importer un rôle » ci-dessus.",
+    leads_empty_body: "Importez un rôle d'évaluation avec le bouton « Importer un rôle » ci-dessus.",
     leads_empty_search: (q) => `Aucun propriétaire ne correspond à « ${q} »`,
     leads_select_hint: "Sélectionnez un propriétaire à gauche pour voir sa fiche.",
     leads_loading: "Chargement des propriétaires…",
@@ -181,19 +181,19 @@ const I18N = {
     import_filters_title: "Filtres de ciblage (optionnels)",
     import_preview_title: "Aperçu — 5 premiers propriétaires",
     import_done: (newN, updN, leadsN) =>
-      `📥 Import terminé · ${newN} nouveau${newN > 1 ? "x" : ""} · ${updN} mis à jour · ${leadsN} propriété${leadsN > 1 ? "s" : ""} ajoutée${leadsN > 1 ? "s" : ""}.`,
+      `Import terminé · ${newN} nouveau${newN > 1 ? "x" : ""} · ${updN} mis à jour · ${leadsN} propriété${leadsN > 1 ? "s" : ""} ajoutée${leadsN > 1 ? "s" : ""}.`,
 
     // Enrichment notices -------------------------------------------------
     enrich_none_targeted: "Aucun propriétaire à enrichir avec ces critères.",
     enrich_none_usable: "Aucun propriétaire ciblé n'a une adresse postale exploitable.",
     enrich_cap_hit: (cost) => `Plafond quotidien atteint (${cost}). Réessayez demain.`,
     enrich_budget_hit: "Budget quotidien Google Places atteint. Réessayez demain.",
-    enrich_ok: (found, foundS, total) => `✅ ${found} propriétaire${foundS} enrichi${foundS} sur ${total}.`,
+    enrich_ok: (found, foundS, total) => `${found} propriétaire${foundS} enrichi${foundS} sur ${total}.`,
     enrich_nothing_found: (n, s) => `Aucun nouveau numéro trouvé sur ${n} recherche${s}.`,
 
     // Toasts & misc ------------------------------------------------------
     toast_saved: "Enregistré.",
-    toast_storage_full: "⚠️ Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.",
+    toast_storage_full: "Stockage local plein. Exportez puis retirez des leads pour libérer de l'espace.",
     loading_generic: "Chargement…",
 
     // --- Sidebar ---
@@ -324,7 +324,7 @@ const I18N = {
     ws_contact_email: "Email",
     ws_contact_company: "Compagnie",
     ws_contact_role: "Rôle",
-    ws_call_start: "📞 Appeler ce contact",
+    ws_call_start: "Appeler ce contact",
     ws_call_busy: "Appel en cours...",
     ws_call_refresh: "Actualiser appels",
     ws_call_loading: "Chargement...",
@@ -336,7 +336,7 @@ const I18N = {
     ws_call_err_transcript: "Impossible de relancer la transcription.",
     ws_call_ok_launched: "Appel lancé. Le statut et l'enregistrement vont se mettre à jour automatiquement.",
     ws_call_ok_transcript: "Transcription relancée. Rafraîchissez dans quelques secondes.",
-    ws_call_act_launched: (name) => `📞 Appel lancé vers ${name}`,
+    ws_call_act_launched: (name) => `Appel lancé vers ${name}`,
     ws_call_unknown: "inconnu",
     ws_call_contact_fallback: "Contact",
     ws_call_transcript_prefix: "Transcript:",
@@ -391,7 +391,7 @@ const I18N = {
     ws_doc_drop_title: "Glissez vos fichiers ici ou cliquez pour sélectionner",
     ws_doc_drop_sub: "PDF, images, Word, Excel — tous formats acceptés",
     ws_doc_empty: "Aucun document pour ce deal.",
-    ws_doc_added: (n, names) => `📎 ${n} document${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}: ${names}`,
+    ws_doc_added: (n, names) => `${n} document${n > 1 ? "s" : ""} ajouté${n > 1 ? "s" : ""}: ${names}`,
 
     // Checklist tab
     ws_checklist_title: "Checklist par étape",
@@ -426,7 +426,7 @@ const I18N = {
     modal_event_select_placeholder: "— Sélectionner —",
     modal_event_submit: "Créer",
     modal_event_err_no_deal: "Associez l'événement à un deal.",
-    modal_event_act_created: (title, date) => `📅 Événement: ${title} le ${date}`,
+    modal_event_act_created: (title, date) => `Événement: ${title} le ${date}`,
 
     // Deal defaults
     deal_default_title: "Nouveau deal",
@@ -447,12 +447,12 @@ const I18N = {
     pf_export_busy: "Export…",
     pf_export_found_btn: (n) => `⇢ Leads trouvés (${n})`,
     pf_view_results: "Voir résultats",
-    pf_export_csv: "⬇ Exporter CSV",
+    pf_export_csv: "Exporter CSV",
     pf_clear_all: "Vider",
-    pf_tab_search: "🔎 Recherche",
-    pf_tab_results: (n) => `📚 Résultats (${n})`,
-    pf_tab_manual: "🔍 Recherche manuelle",
-    pf_tab_csv: "📂 Import CSV / XLSX",
+    pf_tab_search: "Recherche",
+    pf_tab_results: (n) => `Résultats (${n})`,
+    pf_tab_manual: "Recherche manuelle",
+    pf_tab_csv: "Import CSV / XLSX",
     pf_manual_section: "Informations de recherche",
     pf_field_name: "Nom de l'entreprise",
     pf_field_name_ph: "Ex: Dépanneur Bélanger",
@@ -466,7 +466,7 @@ const I18N = {
     pf_field_postal_ph: "Ex: J3B 6N5",
     pf_field_country: "Pays",
     pf_field_country_ph: "Canada",
-    pf_btn_search: "🔍 Rechercher",
+    pf_btn_search: "Rechercher",
     pf_btn_searching: "Recherche…",
     pf_csv_section: "Import CSV / XLSX",
     pf_csv_stats: (rows, cols, sep) => `${rows} lignes · ${cols} colonnes · séparateur : ${sep}`,
@@ -474,7 +474,7 @@ const I18N = {
     pf_csv_hint: "Colonnes utiles : adresse immeuble, entreprise, nom complet, ville, province, code postal",
     pf_csv_detected: (rows, mapped) => `${rows} lignes • ${mapped} colonnes détectées automatiquement`,
     pf_csv_advanced_mapping: "mappage avancé (optionnel)",
-    pf_csv_search_n: (n) => `🔍 Rechercher ${n} lignes`,
+    pf_csv_search_n: (n) => `Rechercher ${n} lignes`,
     pf_csv_running: "Recherche en cours…",
     pf_empty_saved_title: "Aucun import sauvegardé",
     pf_empty_saved_sub: "Lancez une recherche manuelle ou un import CSV. Chaque import sera enregistré dans l'onglet Résultats avec une date.",
@@ -491,7 +491,7 @@ const I18N = {
     pf_rename_err_empty: "Le titre ne peut pas être vide.",
     pf_export_no_phones: "Aucun numéro trouvé à exporter.",
     pf_export_unavailable: "Export vers Leads indisponible.",
-    pf_export_leads_updated: (parts) => `✅ Leads mis à jour: ${parts} · aucune donnée supprimée`,
+    pf_export_leads_updated: (parts) => `Leads mis à jour: ${parts} · aucune donnée supprimée`,
     pf_export_part_new: (n) => `${n} nouveau${n > 1 ? "x" : ""}`,
     pf_export_part_updated: (n) => `${n} enrichi${n > 1 ? "s" : ""}`,
     pf_export_part_skipped: (n) => `${n} inchangé${n > 1 ? "s" : ""}`,
@@ -501,15 +501,15 @@ const I18N = {
     pf_export_status_label_prefix: "Export vers Leads:",
     pf_export_status_current: "Trouvé uniquement (filtre affiché)",
     pf_export_found_leads: (n) => `⇢ Exporter ${n} leads trouvés`,
-    pf_rename_btn: "✎ Renommer",
-    pf_export_this_import: "⬇ Exporter cet import",
+    pf_rename_btn: "Renommer",
+    pf_export_this_import: "Exporter cet import",
     pf_filter_ph: "Filtrer les résultats… (⌘K)",
     pf_filter_status_all: "Tous les statuts",
     pf_filter_status_found: "Trouvé",
     pf_filter_status_review: "À vérifier",
     pf_filter_status_multi: "Choix multiple",
     pf_filter_status_not_found: "Non trouvé",
-    pf_rerun_not_found: "🔄 Relancer non trouvés",
+    pf_rerun_not_found: "Relancer non trouvés",
     pf_rerun_not_found_tt: "Relancer la recherche Google Places pour toutes les lignes non trouvées dans cette session",
     pf_shown_of: (shown, total) => `${shown} affichés sur ${total}`,
     pf_results_count: (n) => `${n} résultat${n !== 1 ? "s" : ""}`,
@@ -526,9 +526,9 @@ const I18N = {
     pf_no_results_title: "Aucun résultat dans cet import",
     pf_no_results_sub: "Cet import existe mais ne contient pas de lignes affichables avec le filtre actuel.",
     pf_stop: "⏹ Arrêter",
-    pf_processing: (done, total) => `⏳ ${done} / ${total} lignes traitées`,
+    pf_processing: (done, total) => `${done} / ${total} lignes traitées`,
     pf_remaining: (pct, seconds) => `${pct}% · ~${seconds}s restantes`,
-    pf_connecting: "⏳ Connexion à Google Places…",
+    pf_connecting: "Connexion à Google Places…",
     pf_progress_label: (pct) => `${pct}%`,
     pf_review_title: "Choisir le bon résultat",
     pf_review_query: "Recherche :",
@@ -563,11 +563,11 @@ const I18N = {
     pf_err_network_batch: (n, m) => `Erreur réseau (lot ${n}): ${m}`,
     pf_err_network: (e) => `Erreur réseau: ${e}`,
     pf_err_generic: (e) => `Erreur: ${e}`,
-    pf_rerun_toast_found: "🔄 Relancé · numéro trouvé !",
-    pf_rerun_toast_not_found: "🔄 Relancé · toujours introuvable",
+    pf_rerun_toast_found: "Relancé · numéro trouvé !",
+    pf_rerun_toast_not_found: "Relancé · toujours introuvable",
     pf_rerun_none: "Aucun résultat non trouvé relançable (fichier non rechargé depuis la session courante).",
-    pf_rerun_summary: (done, found) => `🔄 ${done} relancés · ${found} nouveau${found !== 1 ? "x" : ""} numéro${found !== 1 ? "s" : ""} trouvé${found !== 1 ? "s" : ""}`,
-    pf_batch_ok: (done, found) => `✅ ${done} lignes traitées · ${found} numéros trouvés`,
+    pf_rerun_summary: (done, found) => `${done} relancés · ${found} nouveau${found !== 1 ? "x" : ""} numéro${found !== 1 ? "s" : ""} trouvé${found !== 1 ? "s" : ""}`,
+    pf_batch_ok: (done, found) => `${done} lignes traitées · ${found} numéros trouvés`,
     pf_sep_tab: "TAB",
     pf_run_default_manual: (stamp) => `Recherche manuelle · ${stamp}`,
     pf_run_default_csv: (stamp) => `Import CSV · ${stamp}`,
@@ -616,7 +616,7 @@ const I18N = {
     // OwnersManager extras (some FR-only literals)
     owner_unknown: "(Propriétaire inconnu)",
     om_fiche_props_count: (n) => `${n} × propriét${n === 1 ? "é" : "és"}`,
-    om_progress: (done, total, found) => `⏳ ${done} / ${total} · ${found}`,
+    om_progress: (done, total, found) => `${done} / ${total} · ${found}`,
     om_import_stats_properties: "propriétés",
     om_import_stats_unique: "propriétaires uniques",
     om_import_stats_with_phone: "avec numéro dans le rôle",
@@ -643,7 +643,7 @@ const I18N = {
     push_subscribing: "Activation…",
     push_test: "Envoyer un test",
     push_test_title: "SOCLE — Test",
-    push_test_body: "Les notifications push fonctionnent 🎉",
+    push_test_body: "Les notifications push fonctionnent !",
     push_flag_title: "Nouveau lead à revoir",
     push_flag_body: (user, label) => `${user} a signalé « ${label || "un lead"} » pour revue.`,
     push_not_configured: "Serveur push non configuré.",
@@ -682,7 +682,7 @@ const I18N = {
     topbar_phonefinder_sub: "Fills missing numbers via Google Places",
     topbar_workspace: "Workspace",
     topbar_workspace_empty: "Select a deal",
-    flag_banner: "🚩 Submit this lead to Anthony",
+    flag_banner: "Submit this lead to Anthony",
     flag_note_placeholder: "Note for Anthony (optional)…",
     flag_submit: "Submit",
     flag_submitted: "Lead submitted to Anthony.",
@@ -701,16 +701,16 @@ const I18N = {
     lang_switch: "FR",
 
     leads_label_proprio: "Owner",
-    leads_search_placeholder: "🔍 Search owner, company, phone… (⌘K)",
+    leads_search_placeholder: "Search owner, company, phone… (⌘K)",
     leads_filter_all_stages: "All statuses",
     leads_filter_all_sources: "All phone sources",
     leads_filter_missing_phone: "Missing phone",
     leads_sort_buildings: "Sort: most properties",
     leads_sort_phones: "Sort: most phones",
     leads_sort_name: "Sort: name A–Z",
-    leads_btn_import: "📥 Import a rôle",
+    leads_btn_import: "Import a rôle",
     leads_btn_import_busy: "Reading…",
-    leads_btn_enrich: "🔍 Enrich missing numbers",
+    leads_btn_enrich: "Enrich missing numbers",
     leads_btn_enrich_busy: "Searching…",
     leads_btn_test100: "▶︎ Test 100 first",
     leads_header_title: "Property owners",
@@ -719,7 +719,7 @@ const I18N = {
     leads_header_missing: (n) => ` · ${n} missing phone`,
     leads_hint: "One owner = one mailing address. Numbered companies roll up as aliases.",
     leads_empty_title: "No owners yet",
-    leads_empty_body: "Import a rôle to get started — use the « 📥 Import a rôle » button above.",
+    leads_empty_body: "Import a rôle to get started — use the « Import a rôle » button above.",
     leads_empty_search: (q) => `No owner matches « ${q} »`,
     leads_select_hint: "Select an owner on the left to view their fiche.",
     leads_loading: "Loading owners…",
@@ -787,17 +787,17 @@ const I18N = {
     import_filters_title: "Targeting filters (optional)",
     import_preview_title: "Preview — first 5 owners",
     import_done: (newN, updN, leadsN) =>
-      `📥 Import done · ${newN} new · ${updN} updated · ${leadsN} propert${leadsN === 1 ? "y" : "ies"} added.`,
+      `Import done · ${newN} new · ${updN} updated · ${leadsN} propert${leadsN === 1 ? "y" : "ies"} added.`,
 
     enrich_none_targeted: "No owner matches the enrichment criteria.",
     enrich_none_usable: "No targeted owner has a usable mailing address.",
     enrich_cap_hit: (cost) => `Daily cap hit (${cost}). Try again tomorrow.`,
     enrich_budget_hit: "Daily Google Places budget hit. Try again tomorrow.",
-    enrich_ok: (found, _foundS, total) => `✅ ${found} owner${found === 1 ? "" : "s"} enriched out of ${total}.`,
+    enrich_ok: (found, _foundS, total) => `${found} owner${found === 1 ? "" : "s"} enriched out of ${total}.`,
     enrich_nothing_found: (n) => `No new number found over ${n} search${n === 1 ? "" : "es"}.`,
 
     toast_saved: "Saved.",
-    toast_storage_full: "⚠️ Local storage full. Export and remove leads to free up space.",
+    toast_storage_full: "Local storage full. Export and remove leads to free up space.",
     loading_generic: "Loading…",
 
     // --- Sidebar ---
@@ -928,7 +928,7 @@ const I18N = {
     ws_contact_email: "Email",
     ws_contact_company: "Company",
     ws_contact_role: "Role",
-    ws_call_start: "📞 Call this contact",
+    ws_call_start: "Call this contact",
     ws_call_busy: "Calling...",
     ws_call_refresh: "Refresh calls",
     ws_call_loading: "Loading...",
@@ -940,7 +940,7 @@ const I18N = {
     ws_call_err_transcript: "Unable to restart the transcription.",
     ws_call_ok_launched: "Call started. Status and recording will update automatically.",
     ws_call_ok_transcript: "Transcription restarted. Refresh in a few seconds.",
-    ws_call_act_launched: (name) => `📞 Call started to ${name}`,
+    ws_call_act_launched: (name) => `Call started to ${name}`,
     ws_call_unknown: "unknown",
     ws_call_contact_fallback: "Contact",
     ws_call_transcript_prefix: "Transcript:",
@@ -995,7 +995,7 @@ const I18N = {
     ws_doc_drop_title: "Drag files here or click to pick",
     ws_doc_drop_sub: "PDF, images, Word, Excel — any format",
     ws_doc_empty: "No documents for this deal.",
-    ws_doc_added: (n, names) => `📎 ${n} document${n > 1 ? "s" : ""} added: ${names}`,
+    ws_doc_added: (n, names) => `${n} document${n > 1 ? "s" : ""} added: ${names}`,
 
     // Checklist tab
     ws_checklist_title: "Checklist per stage",
@@ -1030,7 +1030,7 @@ const I18N = {
     modal_event_select_placeholder: "— Select —",
     modal_event_submit: "Create",
     modal_event_err_no_deal: "Link the event to a deal.",
-    modal_event_act_created: (title, date) => `📅 Event: ${title} on ${date}`,
+    modal_event_act_created: (title, date) => `Event: ${title} on ${date}`,
 
     // Deal defaults
     deal_default_title: "New deal",
@@ -1051,12 +1051,12 @@ const I18N = {
     pf_export_busy: "Exporting…",
     pf_export_found_btn: (n) => `⇢ Found leads (${n})`,
     pf_view_results: "View results",
-    pf_export_csv: "⬇ Export CSV",
+    pf_export_csv: "Export CSV",
     pf_clear_all: "Clear",
-    pf_tab_search: "🔎 Search",
-    pf_tab_results: (n) => `📚 Results (${n})`,
-    pf_tab_manual: "🔍 Manual search",
-    pf_tab_csv: "📂 CSV / XLSX import",
+    pf_tab_search: "Search",
+    pf_tab_results: (n) => `Results (${n})`,
+    pf_tab_manual: "Manual search",
+    pf_tab_csv: "CSV / XLSX import",
     pf_manual_section: "Search details",
     pf_field_name: "Business name",
     pf_field_name_ph: "Ex: Dépanneur Bélanger",
@@ -1070,7 +1070,7 @@ const I18N = {
     pf_field_postal_ph: "Ex: J3B 6N5",
     pf_field_country: "Country",
     pf_field_country_ph: "Canada",
-    pf_btn_search: "🔍 Search",
+    pf_btn_search: "Search",
     pf_btn_searching: "Searching…",
     pf_csv_section: "CSV / XLSX import",
     pf_csv_stats: (rows, cols, sep) => `${rows} rows · ${cols} columns · separator: ${sep}`,
@@ -1078,7 +1078,7 @@ const I18N = {
     pf_csv_hint: "Useful columns: building address, company, full name, city, province, postal code",
     pf_csv_detected: (rows, mapped) => `${rows} rows • ${mapped} columns auto-detected`,
     pf_csv_advanced_mapping: "advanced mapping (optional)",
-    pf_csv_search_n: (n) => `🔍 Search ${n} rows`,
+    pf_csv_search_n: (n) => `Search ${n} rows`,
     pf_csv_running: "Search in progress…",
     pf_empty_saved_title: "No saved imports",
     pf_empty_saved_sub: "Run a manual search or a CSV import. Each import will be saved in the Results tab with a date.",
@@ -1095,7 +1095,7 @@ const I18N = {
     pf_rename_err_empty: "Title cannot be empty.",
     pf_export_no_phones: "No phone numbers to export.",
     pf_export_unavailable: "Export to Leads is unavailable.",
-    pf_export_leads_updated: (parts) => `✅ Leads updated: ${parts} · no data deleted`,
+    pf_export_leads_updated: (parts) => `Leads updated: ${parts} · no data deleted`,
     pf_export_part_new: (n) => `${n} new`,
     pf_export_part_updated: (n) => `${n} enriched`,
     pf_export_part_skipped: (n) => `${n} unchanged`,
@@ -1105,15 +1105,15 @@ const I18N = {
     pf_export_status_label_prefix: "Export to Leads:",
     pf_export_status_current: "Found only (current filter)",
     pf_export_found_leads: (n) => `⇢ Export ${n} found leads`,
-    pf_rename_btn: "✎ Rename",
-    pf_export_this_import: "⬇ Export this import",
+    pf_rename_btn: "Rename",
+    pf_export_this_import: "Export this import",
     pf_filter_ph: "Filter results… (⌘K)",
     pf_filter_status_all: "All statuses",
     pf_filter_status_found: "Found",
     pf_filter_status_review: "Needs review",
     pf_filter_status_multi: "Multiple matches",
     pf_filter_status_not_found: "Not found",
-    pf_rerun_not_found: "🔄 Retry not-found",
+    pf_rerun_not_found: "Retry not-found",
     pf_rerun_not_found_tt: "Rerun the Google Places search for every not-found row in this session",
     pf_shown_of: (shown, total) => `${shown} shown of ${total}`,
     pf_results_count: (n) => `${n} result${n !== 1 ? "s" : ""}`,
@@ -1130,9 +1130,9 @@ const I18N = {
     pf_no_results_title: "No results in this import",
     pf_no_results_sub: "This import exists but has no rows matching the current filter.",
     pf_stop: "⏹ Stop",
-    pf_processing: (done, total) => `⏳ ${done} / ${total} rows processed`,
+    pf_processing: (done, total) => `${done} / ${total} rows processed`,
     pf_remaining: (pct, seconds) => `${pct}% · ~${seconds}s remaining`,
-    pf_connecting: "⏳ Connecting to Google Places…",
+    pf_connecting: "Connecting to Google Places…",
     pf_progress_label: (pct) => `${pct}%`,
     pf_review_title: "Pick the right match",
     pf_review_query: "Query:",
@@ -1167,11 +1167,11 @@ const I18N = {
     pf_err_network_batch: (n, m) => `Network error (batch ${n}): ${m}`,
     pf_err_network: (e) => `Network error: ${e}`,
     pf_err_generic: (e) => `Error: ${e}`,
-    pf_rerun_toast_found: "🔄 Re-ran · number found!",
-    pf_rerun_toast_not_found: "🔄 Re-ran · still not found",
+    pf_rerun_toast_found: "Re-ran · number found!",
+    pf_rerun_toast_not_found: "Re-ran · still not found",
     pf_rerun_none: "No retryable not-found results (file not reloaded since this session started).",
-    pf_rerun_summary: (done, found) => `🔄 ${done} retried · ${found} new number${found !== 1 ? "s" : ""} found`,
-    pf_batch_ok: (done, found) => `✅ ${done} rows processed · ${found} numbers found`,
+    pf_rerun_summary: (done, found) => `${done} retried · ${found} new number${found !== 1 ? "s" : ""} found`,
+    pf_batch_ok: (done, found) => `${done} rows processed · ${found} numbers found`,
     pf_sep_tab: "TAB",
     pf_run_default_manual: (stamp) => `Manual search · ${stamp}`,
     pf_run_default_csv: (stamp) => `CSV import · ${stamp}`,
@@ -1220,7 +1220,7 @@ const I18N = {
     // OwnersManager extras
     owner_unknown: "(Unknown owner)",
     om_fiche_props_count: (n) => `${n} × propert${n === 1 ? "y" : "ies"}`,
-    om_progress: (done, total, found) => `⏳ ${done} / ${total} · ${found}`,
+    om_progress: (done, total, found) => `${done} / ${total} · ${found}`,
     om_import_stats_properties: "properties",
     om_import_stats_unique: "unique owners",
     om_import_stats_with_phone: "already with a phone",
@@ -1247,7 +1247,7 @@ const I18N = {
     push_subscribing: "Enabling…",
     push_test: "Send test",
     push_test_title: "SOCLE — Test",
-    push_test_body: "Push notifications are working 🎉",
+    push_test_body: "Push notifications are working!",
     push_flag_title: "New lead to review",
     push_flag_body: (user, label) => `${user} flagged "${label || "a lead"}" for review.`,
     push_not_configured: "Push server not configured.",
@@ -1355,11 +1355,12 @@ function PushToggle({ t, currentUser }) {
         opacity: busy ? 0.6 : 1,
       }}
     >
-      {state === "granted" ? "🔔" : "🔕"}
+      {state === "granted" ? <BellIcon size={14} /> : <BellOffIcon size={14} />}
     </button>
   );
 }
 
+import { BellIcon, BellOffIcon, CalendarIcon, WarningIcon, PaperclipIcon, FileIcon, FolderIcon, HomeIcon, ChatIcon, FlagIcon } from "./components/Icons.jsx";
 import NavIcon from "./components/NavIcon.jsx";
 import Topbar from "./components/Topbar.jsx";
 import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
@@ -1595,7 +1596,7 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
 .doc-drop:hover,.doc-drop.drag{background:#F8F0DD}
 .doc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
 .doc{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px;box-shadow:var(--shadow);position:relative;cursor:pointer}
-.doc-icon{font-size:28px;text-align:center;margin-bottom:8px}
+.doc-icon{font-size:10px;font-weight:700;letter-spacing:.04em;text-align:center;margin-bottom:8px;background:var(--border);color:var(--text2);border-radius:4px;padding:2px 4px;display:inline-block}
 .doc-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .doc-meta{font-size:10px;color:var(--text3);margin-top:3px}
 .doc-del{position:absolute;top:6px;right:6px;border:1px solid #F2C7BF;background:#FDF0ED;color:#A93425;border-radius:5px;padding:2px 6px;font-size:9px;cursor:pointer;opacity:0;transition:opacity .12s}
@@ -2401,12 +2402,12 @@ export default function App() {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${data.error || `HTTP ${r.status}`}` }]);
+        setChatMessages(prev => [...prev, { role: "assistant", content: `Erreur: ${data.error || `HTTP ${r.status}`}` }]);
         return;
       }
       setChatMessages(prev => [...prev, { role: "assistant", content: data.reply || "—" }]);
     } catch (err) {
-      setChatMessages(prev => [...prev, { role: "assistant", content: `❌ ${err?.message || t("ws_ai_err_network")}` }]);
+      setChatMessages(prev => [...prev, { role: "assistant", content: `Erreur: ${err?.message || t("ws_ai_err_network")}` }]);
     } finally {
       setChatBusy(false);
     }
@@ -2551,7 +2552,7 @@ export default function App() {
       for (const [, g] of grouped) {
         if (!g.phones.length && !g.buildings.length) { skipped++; continue; }
         const buildingsSummary = g.buildings
-          .map(b => `• ${b.address}${b.utilisation ? ` — ${b.utilisation}` : ""}${b.phone ? ` — 📞 ${b.phone}` : ""}`)
+          .map(b => `• ${b.address}${b.utilisation ? ` — ${b.utilisation}` : ""}${b.phone ? ` — Tél. ${b.phone}` : ""}`)
           .join("\n");
         const phoneSourceLines = g.phones
           .map(p => `${p} (${(g.phoneSources[p] || ["?"]).join(", ")})`)
@@ -2910,7 +2911,7 @@ export default function App() {
     if (!deal?.followUpDate || !token) return null;
     const date = deal.followUpDate;
     const time = (deal.followUpTime || "").trim();
-    const summary     = `🔔 ${deal.title || "Suivi"}`;
+    const summary     = `${deal.title || "Suivi"}`;
     const description = `Follow-up acquisition — ${deal.title || ""}`.trim();
     let body;
     if (time && /^\d{2}:\d{2}$/.test(time)) {
@@ -3091,7 +3092,7 @@ export default function App() {
   const allEvents = useMemo(() => {
     const evs = [];
     deals.forEach(d => {
-      if (d.followUpDate) evs.push({ id:`fu_${d.id}`, date:d.followUpDate, time:d.followUpTime || "", title:`🔔 ${d.title}`, type:"followup", dealId:d.id });
+      if (d.followUpDate) evs.push({ id:`fu_${d.id}`, date:d.followUpDate, time:d.followUpTime || "", title:`${d.title}`, type:"followup", dealId:d.id });
       (d.events || []).forEach(e => evs.push({ ...e, dealId:d.id }));
     });
     (gcalEvents || []).forEach(e => evs.push(e));
@@ -3423,7 +3424,7 @@ export default function App() {
                   >
                     <div className="sec-head">
                       <div className="sec-title" style={{color: "#8D6A15"}}>
-                        🚩 {t("admin_flags_title")} ({flaggedLeads.length})
+                        <FlagIcon size={13} style={{marginRight:5,verticalAlign:"middle"}} />{t("admin_flags_title")} ({flaggedLeads.length})
                       </div>
                     </div>
                     <div style={{display: "flex", flexDirection: "column", gap: 8}}>
@@ -3498,7 +3499,7 @@ export default function App() {
                 >
                   <div className="sec-head" style={{flexWrap: "wrap", gap: 8}}>
                     <div className="sec-title">
-                      🔔 {t("dashboard_today_title")}
+                      <BellIcon size={16} style={{marginRight:6,verticalAlign:"middle"}} />{t("dashboard_today_title")}
                     </div>
                     <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
                       {todaysAlerts.overdueCount > 0 && (
@@ -3526,9 +3527,9 @@ export default function App() {
                     <div style={{display: "flex", flexDirection: "column", gap: 6}}>
                       {todaysAlerts.items.slice(0, 8).map((item, idx) => {
                         const tone =
-                          item.kind === "event" ? {bg: "#EAF1FF", fg: "#2563EB", icon: "📅"} :
-                          item.isOverdue       ? {bg: "#FCE9E6", fg: "#C0392B", icon: "⚠️"} :
-                                                 {bg: "#FFF4D6", fg: "#8D6A15", icon: "🔔"};
+                          item.kind === "event" ? {bg: "#EAF1FF", fg: "#2563EB", icon: <CalendarIcon size={14} />} :
+                          item.isOverdue       ? {bg: "#FCE9E6", fg: "#C0392B", icon: <WarningIcon size={14} />} :
+                                                 {bg: "#FFF4D6", fg: "#8D6A15", icon: <BellIcon size={14} />};
                         const sub =
                           item.kind === "event"
                             ? (item.time ? `${item.time} · ${item.sub}` : item.sub)
@@ -3725,13 +3726,13 @@ export default function App() {
                                 <div className="k-title">{dealLabel(d)}</div>
                                 <div className="k-contact"><div className="k-c-av">{initials(d.contact?.name, "CT")}</div><span className="k-c-name">{d.contact?.name || t("pipeline_no_contact")}</span></div>
                                 <div className="k-price">{d.askingPrice ? `${Number(d.askingPrice).toLocaleString("en-CA")} $` : t("pipeline_price_tbd")}</div>
-                                {d.followUpDate && <div className="k-row"><span className="k-mk">{t("pipeline_followup_label")}</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?`⚠ ${Math.abs(diff)}j`:`${d.followUpDate}${d.followUpTime ? ` ${d.followUpTime}` : ""}`}</span></div>}
+                                {d.followUpDate && <div className="k-row"><span className="k-mk">{t("pipeline_followup_label")}</span><span className="k-mv" style={{color:isOD?"var(--red)":"var(--text2)"}}>{isOD?<><WarningIcon size={11} style={{marginRight:3}} />{Math.abs(diff)}j</>:`${d.followUpDate}${d.followUpTime ? ` ${d.followUpTime}` : ""}`}</span></div>}
                                 <div className="k-row"><span className="k-mk">{t("pipeline_documents_label")}</span><span className="k-mv">{(d.files||[]).length}</span></div>
                                 <div className="k-progress"><div className="k-bar" style={{width:`${clPct}%`}}/></div>
                                 <div className="k-foot">
                                   <span className={pr.cls}>{t("ws_priority_tag_" + (d.priority || "medium"))}</span>
                                   <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>{t("pipeline_checklist_label", clPct)}</span>
-                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}>📎 {(d.files||[]).length}</span>
+                                  <span className="pill" style={{background:"#F4F1E8",color:"#8A7A4D"}}><PaperclipIcon size={11} style={{marginRight:2}} />{(d.files||[]).length}</span>
                                 </div>
                               </div>
                             );
@@ -3800,7 +3801,7 @@ export default function App() {
               <div className="content">
                 {followUps.length===0 ? (
                   <div className="card empty">
-                    <div className="empty-ico">📅</div>
+                    <div className="empty-ico"><CalendarIcon size={36} /></div>
                     <div className="empty-title">{t("followups_empty_title")}</div>
                     <div className="empty-sub">{t("followups_empty_sub")}</div>
                   </div>
@@ -3925,7 +3926,7 @@ export default function App() {
                 <Topbar title={t("topbar_workspace")} subtitle={t("topbar_workspace_empty")} {...topbarCommon} />
                 <div className="content">
                   <div className="card empty">
-                    <div className="empty-ico">🏠</div>
+                    <div className="empty-ico"><HomeIcon size={36} /></div>
                     <div className="empty-title">{t("ws_empty_title")}</div>
                     <div className="empty-sub">{t("ws_empty_sub")}</div>
                     <button className="btn btn-gold" onClick={() => setModal("new")}>{t("ws_empty_cta")}</button>
@@ -4172,7 +4173,7 @@ export default function App() {
                       {viewing && (
                         <div className="doc-modal">
                           <div className="doc-modal-top">
-                            <div className="doc-modal-name">📄 {viewing.name}</div>
+                            <div className="doc-modal-name"><FileIcon size={14} style={{marginRight:5,verticalAlign:"middle"}} />{viewing.name}</div>
                             <div style={{display:"flex",gap:8,flexShrink:0}}>
                               <a href={viewing.dataUrl} download={viewing.name}><button className="btn btn-sm">{t("ws_doc_download")}</button></a>
                               <button className="btn btn-sm" onClick={() => setViewing(null)}>{t("ws_doc_close")}</button>
@@ -4200,7 +4201,7 @@ export default function App() {
                         onDragLeave={() => setDragging(false)}
                         onDrop={e => {e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}
                         onClick={() => fileRef.current?.click()}>
-                        <div style={{fontSize:30,marginBottom:8}}>📁</div>
+                        <FolderIcon size={30} style={{marginBottom:8,color:"var(--text3)"}} />
                         <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{t("ws_doc_drop_title")}</div>
                         <div style={{fontSize:11,color:"var(--text3)",marginTop:3}}>{t("ws_doc_drop_sub")}</div>
                         <input ref={fileRef} type="file" multiple style={{display:"none"}} onChange={e => handleFiles(e.target.files)} />
@@ -4439,7 +4440,7 @@ function ChatWidget({ open, setOpen, messages, input, setInput, busy, onSend, t 
           placeItems: "center",
         }}
       >
-        💬
+        <ChatIcon size={18} />
       </button>
     );
   }

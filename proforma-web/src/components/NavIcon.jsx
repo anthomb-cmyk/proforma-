@@ -1,10 +1,8 @@
-// Sidebar navigation icon. Picks an SVG based on the route id; renders a
-// pin emoji for "map" since Lucide doesn't ship a perfectly matching
-// outline icon at this size. Kept purely presentational.
+// Sidebar navigation icon. Picks an SVG based on the route id. Purely presentational.
 
 export default function NavIcon({ id }) {
-  if (id === "map") return <span style={{fontSize:14,lineHeight:1}}>📍</span>;
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (id === "map") return <svg {...common}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>;
   if (id === "dashboard") return <svg {...common}><path d="M3 13h8V3H3zM13 21h8v-8h-8zM13 3h8v6h-8zM3 21h8v-4H3z"/></svg>;
   if (id === "pipeline") return <svg {...common}><path d="M4 6h7v5H4zM13 13h7v5h-7zM4 13h7v5H4zM13 6h7v5h-7z"/></svg>;
   if (id === "followups") return <svg {...common}><path d="M12 8v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>;

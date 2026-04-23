@@ -6,6 +6,7 @@
 // file into context.
 
 import VoiceDictation from "./VoiceDictation.jsx";
+import { BuildingIcon, MapPinIcon, GlobeIcon, PhoneIcon, ClipboardIcon, MailIcon, CloseIcon } from "./Icons.jsx";
 
 export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onRemove, onCreateDeal, onMarkCall, toDateTimeLocal, getPhones }) {
   const leadPhones = getPhones(lead);
@@ -22,18 +23,18 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,flexWrap:"wrap"}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:14,fontWeight:800,color:"var(--text)",lineHeight:1.3}}>
-              🏢 {lead.buildingAddress || lead.address || <span style={{color:"var(--text3)"}}>Adresse non renseignée</span>}
+              <BuildingIcon size={13} style={{marginRight:5}} />{lead.buildingAddress || lead.address || <span style={{color:"var(--text3)"}}>Adresse non renseignée</span>}
             </div>
             {(lead.city || lead.province || lead.postalCode) && (
               <div style={{fontSize:11,color:"var(--text2)",marginTop:3}}>
-                📍 {[lead.city, lead.province, lead.postalCode].filter(Boolean).join("  ·  ")}
+                <MapPinIcon size={10} style={{marginRight:3}} />{[lead.city, lead.province, lead.postalCode].filter(Boolean).join("  ·  ")}
               </div>
             )}
           </div>
           <div style={{display:"flex",gap:5,flexShrink:0}}>
             {!lead.linkedDealId && <button className="btn btn-sm btn-gold" onClick={() => onCreateDeal?.(lead)}>Créer deal</button>}
             {lead.linkedDealId && <span className="pill" style={{background:"#E9F7EF",color:"#1A7A3F",fontSize:10}}>Deal lié</span>}
-            <button className="btn btn-sm btn-danger" onClick={() => onRemove(lead.id)}>✕</button>
+            <button className="btn btn-sm btn-danger" onClick={() => onRemove(lead.id)}><CloseIcon size={11} /></button>
           </div>
         </div>
 
@@ -50,7 +51,7 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
         <div style={{marginTop:8,borderTop:"1px solid var(--border)",paddingTop:6,display:"flex",gap:12,flexWrap:"wrap"}}>
           {lead.companyName && <div style={{fontSize:12}}><span style={{color:"var(--text3)"}}>Propriétaire: </span><strong>{lead.companyName}</strong></div>}
           {lead.contactName && <div style={{fontSize:12}}><span style={{color:"var(--text3)"}}>Contact: </span><strong>{lead.contactName}</strong></div>}
-          {lead.website && <a href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`} target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--blue)"}}>🌐 {lead.website.replace(/^https?:\/\//, "").split("/")[0]}</a>}
+          {lead.website && <a href={lead.website.startsWith("http") ? lead.website : `https://${lead.website}`} target="_blank" rel="noreferrer" style={{fontSize:12,color:"var(--blue)"}}><GlobeIcon size={11} style={{marginRight:3}} />{lead.website.replace(/^https?:\/\//, "").split("/")[0]}</a>}
           {lead.matchedName && lead.matchedName !== lead.companyName && <div style={{fontSize:11,color:"var(--text3)"}}>Google: {lead.matchedName}{lead.confidence > 0 ? ` · ${Math.round(lead.confidence * 100)}%` : ""}</div>}
         </div>
 
@@ -61,14 +62,14 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
               <div style={{display:"flex",gap:6,flexWrap:"wrap",flex:1}}>
                 {leadPhones.map((ph, idx) => (
                   <span key={idx} style={{background:idx===0?"var(--gold,#C9A84C)":"#F5F0E8",color:idx===0?"#fff":"var(--text)",fontWeight:700,fontSize:13,borderRadius:7,padding:"4px 10px",letterSpacing:"0.5px"}}>
-                    📞 {ph}
+                    <PhoneIcon size={11} style={{marginRight:3}} />{ph}
                   </span>
                 ))}
               </div>
-              <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))}>📋</button>
+              <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))} title="Copier"><ClipboardIcon size={12} /></button>
             </>
           ) : <span style={{color:"var(--text3)",fontSize:12}}>Aucun numéro</span>}
-          {lead.email && <span style={{fontSize:12,color:"var(--text2)"}}>✉ {lead.email}</span>}
+          {lead.email && <span style={{fontSize:12,color:"var(--text2)"}}><MailIcon size={11} style={{marginRight:3}} />{lead.email}</span>}
         </div>
       </div>
 
@@ -93,7 +94,7 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
       </div>
 
       <div style={{marginBottom:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-        <button className="btn btn-sm btn-gold" onClick={() => onMarkCall(lead)}>📞 Marquer appel maintenant</button>
+        <button className="btn btn-sm btn-gold" onClick={() => onMarkCall(lead)}><PhoneIcon size={12} style={{marginRight:4}} />Marquer appel maintenant</button>
         {lead.lastCallAt && <span style={{fontSize:11,color:"var(--text2)"}}>Dernier appel: {new Date(lead.lastCallAt).toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}</span>}
       </div>
 

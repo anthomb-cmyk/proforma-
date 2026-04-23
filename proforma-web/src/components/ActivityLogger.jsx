@@ -6,12 +6,23 @@
 // what onLog actually does with the text.
 
 import { useState } from "react";
+import { PhoneIcon, MailIcon, UsersIcon, DollarIcon, ClipboardIcon, SearchIcon, BriefcaseIcon, CheckIcon } from "./Icons.jsx";
+
+const QUICK = [
+  { log: "Appel effectué",            icon: <PhoneIcon size={12} /> },
+  { log: "Email envoyé",              icon: <MailIcon size={12} /> },
+  { log: "Rencontre faite",           icon: <UsersIcon size={12} /> },
+  { log: "Offre déposée",             icon: <DollarIcon size={12} /> },
+  { log: "Documents reçus",           icon: <ClipboardIcon size={12} /> },
+  { log: "Inspection faite",          icon: <SearchIcon size={12} /> },
+  { log: "Dossier financier soumis",  icon: <BriefcaseIcon size={12} /> },
+  { log: "Condition levée",           icon: <CheckIcon size={12} /> },
+];
 
 export default function ActivityLogger({ dealId, onLog }) {
   const [text, setText] = useState("");
   const [formatLoading, setFormatLoading] = useState(false);
   const [formatError, setFormatError] = useState("");
-  const QUICK = ["📞 Appel effectué","📧 Email envoyé","🤝 Rencontre faite","💰 Offre déposée","📋 Documents reçus","🔍 Inspection faite","🏦 Dossier financier soumis","✅ Condition levée"];
 
   function splitActivityLines(value) {
     return String(value || "")
@@ -53,7 +64,11 @@ export default function ActivityLogger({ dealId, onLog }) {
   return (
     <div>
       <div className="qa-wrap">
-        {QUICK.map(q => <button key={q} className="qa-btn" onClick={() => onLog(dealId, q)}>{q}</button>)}
+        {QUICK.map(q => (
+          <button key={q.log} className="qa-btn" onClick={() => onLog(dealId, q.log)}>
+            <span style={{marginRight:4,verticalAlign:"middle"}}>{q.icon}</span>{q.log}
+          </button>
+        ))}
       </div>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8}}>
         <button className={`ai-btn${formatLoading ? " loading" : ""}`} onClick={formatActivityText}>
