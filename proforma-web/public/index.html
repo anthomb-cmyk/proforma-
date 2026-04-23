@@ -18,6 +18,27 @@
     <meta name="apple-mobile-web-app-title" content="SOCLE" />
 
     <title>SOCLE Acquisitions</title>
+    <!-- Prevent browser back/forward swipe gesture and rubber-band bounce.
+         Applied early (before React CSS) so it takes effect on first paint.
+         overscroll-behavior-x:none is the key property — overflow-x:hidden
+         alone does not suppress the horizontal navigation gesture on iOS/Chrome. -->
+    <style>
+      html, body {
+        overscroll-behavior: none;
+        -webkit-overflow-scrolling: touch;
+        overflow-x: hidden;
+      }
+      #root {
+        touch-action: pan-y;
+        overscroll-behavior: none;
+      }
+      /* No text-selection flash on UI chrome; textarea/input are unaffected. */
+      button, a, nav, [role="tab"] {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+    </style>
     <!--
       Leaflet is only loaded on non-phone devices (viewport > 760px OR
       coarse-pointer-free). On phones it's skipped entirely — saves ~150 KB

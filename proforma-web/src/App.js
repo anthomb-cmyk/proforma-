@@ -1528,7 +1528,7 @@ a{color:inherit}
 .badge-cold{background:#EAF1FF;color:var(--blue)}
 
 /* Pipeline */
-.kanban-wrap{overflow-x:auto;padding-bottom:3px}
+.kanban-wrap{overflow-x:auto;padding-bottom:3px;touch-action:pan-x pan-y}
 .kanban{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
 .k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);overflow-y:auto}
 .k-col{border-left:3px solid transparent}
@@ -1562,7 +1562,7 @@ a{color:inherit}
 .stage-crumb{font-size:11px;color:var(--text3)}
 
 .stage-wrap{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px 12px;box-shadow:var(--shadow)}
-.stage-track{display:flex;gap:8px;overflow-x:auto}
+.stage-track{display:flex;gap:8px;overflow-x:auto;touch-action:pan-x pan-y}
 .stage-btn{border:1px solid var(--border);background:#fff;border-radius:999px;padding:7px 11px;font-size:11px;color:var(--text2);font-weight:700;cursor:pointer;white-space:nowrap}
 .stage-btn.active{background:var(--gold-light);color:var(--gold);border-color:#E1CC94}
 
@@ -1860,6 +1860,16 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
   touch-action:manipulation;
   -webkit-tap-highlight-color:transparent;
 }
+
+/* Prevent browser-level horizontal swipe (back/forward navigation gesture).
+   overscroll-behavior-x:none is the operative property — it tells the browser
+   not to translate horizontal edge-overscroll into a history navigation.
+   touch-action:pan-y on the root ensures only vertical panning is handled
+   at the app level; intentional overflow-x:auto containers (.kanban-wrap,
+   .stage-track) keep their own scrollability because touch-action is
+   inherited per-element and those containers reset it as needed. */
+html,body{overscroll-behavior:none}
+#root{overscroll-behavior:none;touch-action:pan-y}
 
 /* iOS Safari: use dynamic viewport height so 100vh doesn't hide behind the
    URL bar. The 100vh fallback stays for non-supporting browsers. */
