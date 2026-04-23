@@ -1870,6 +1870,33 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
   -webkit-tap-highlight-color:transparent;
 }
 
+/* ── Leads two-panel layout (LeadsManager) ───────────────────────────── */
+.leads-card{display:flex;flex-direction:column}
+.leads-body{display:flex;height:600px;min-height:300px}
+.leads-list-panel{width:320px;min-width:240px;flex-shrink:0;border-right:1px solid var(--border);background:var(--bg,#FAF6EF);overflow:hidden;min-height:0}
+.leads-fiche-panel{flex:1;overflow-y:auto;padding:16px 18px;min-width:0}
+.leads-filter-primary{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.leads-search{width:200px;min-width:140px}
+.leads-count{margin-left:auto;font-size:11px;color:var(--text3);white-space:nowrap}
+.leads-actions{display:flex;gap:5px}
+.leads-filter-secondary{padding:8px 12px;border-bottom:1px solid var(--border);background:#FAF8F4;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.back-btn{min-height:44px;padding:0 4px;font-size:15px;background:none;border:none;color:var(--gold,#C9A84C);cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:6px;margin-bottom:12px}
+.back-btn:active{opacity:.7}
+@media (max-width:768px){
+  .leads-card{flex:1;min-height:0}
+  .leads-body{height:auto;flex:1;min-height:0;flex-direction:column}
+  .leads-list-panel{width:100%;min-width:0;flex:1;border-right:none;border-bottom:1px solid var(--border)}
+  .leads-fiche-panel{padding:12px 16px}
+  .leads-filter-primary{flex-wrap:wrap}
+  .leads-search{width:100%;flex:1 1 100%;height:44px;font-size:16px;order:0}
+  .leads-stage-select{flex:1;height:44px;font-size:16px;order:1}
+  .leads-filter-toggle{height:44px;padding:0 14px;flex-shrink:0;order:1}
+  .leads-count{order:3;flex:1 1 100%;font-size:12px;margin-left:0;text-align:center}
+  .leads-actions{order:4}
+  .leads-filter-secondary{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .leads-filter-secondary select{flex-shrink:0;height:40px;font-size:15px}
+}
+
 /* Prevent browser-level horizontal swipe (back/forward navigation gesture).
    overscroll-behavior-x:none is the operative property — it tells the browser
    not to translate horizontal edge-overscroll into a history navigation.

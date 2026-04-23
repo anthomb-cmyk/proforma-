@@ -153,6 +153,8 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
   const [enrichNotice, setEnrichNotice] = useState("");
   const [enrichProgress, setEnrichProgress] = useState(null); // { done, total, newlyFound }
   const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
+  const isMobile = window.innerWidth <= 768;
+  const [mobileView, setMobileView] = useState('list');
 
   // IA button busy flag — loads the /api/ai/summarize response for the
   // currently selected owner's callNotes.
@@ -630,47 +632,62 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
         </div>
       ) : (
         <div className="om-grid">
-          <section className="om-list">
-            {filteredOwners.length === 0 ? (
-              <div className="om-empty-small">{tr("leads_empty_search", debouncedSearch)}</div>
-            ) : filteredOwners.map(o => {
-              const s = stageCfg(o.stage || "new");
-              const active = selected && selected.id === o.id;
-              return (
-                <button
-                  key={o.id}
-                  className={`om-row${active ? " active" : ""}`}
-                  onClick={() => setSelectedId(o.id)}
-                >
-                  <div className="om-row-main">
-                    <div className="om-row-name">{o.displayName || "(Propriétaire inconnu)"}</div>
-                    <div className="om-row-sub">{formatPostalAddressFallback(o) || describeOwnerKey(o.ownerKey)}</div>
-                  </div>
-                  <div className="om-row-meta">
-                    <span className="om-badge">{tr("leads_count_buildings", o.buildings?.length || 0, (o.buildings?.length || 0) !== 1 ? "s" : "")}</span>
-                    <span className="om-badge">{tr("leads_count_phones", o.phones?.length || 0)}</span>
-                    <span className="om-pill" style={{ background: s.bg, color: s.color }}>{tr(s.tkey)}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </section>
+          {(!isMobile || mobileView === 'list') && (
+            <section className="om-list">
+              {filteredOwners.length === 0 ? (
+                <div className="om-empty-small">{tr("leads_empty_search", debouncedSearch)}</div>
+              ) : filteredOwners.map(o => {
+                const s = stageCfg(o.stage || "new");
+                const active = selected && selected.id === o.id;
+                return (
+                  <button
+                    key={o.id}
+                    className={`om-row${active ? " active" : ""}`}
+                    onClick={() => { setSelectedId(o.id); if (isMobile) setMobileView('fiche'); }}
+                  >
+                    <div className="om-row-main">
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:6 }}>
+                        <div className="om-row-name">{o.displayName || "(Propriétaire inconnu)"}</div>
+                        <span className="om-pill" style={{ background:s.bg, color:s.color, flexShrink:0, fontSize:12 }}>{tr(s.tkey)}</span>
+                      </div>
+                      <div className="om-row-sub">
+                        {formatPostalAddressFallback(o) || describeOwnerKey(o.ownerKey)}
+                        {(o.buildings?.length || 0) > 0 && <span style={{ marginLeft:6, opacity:.7 }}>· {o.buildings.length} imm.</span>}
+                      </div>
+                    </div>
+                    <div className="om-row-phone">
+                      {(o.phones?.length || 0) > 0
+                        ? <span style={{ fontSize:12, fontWeight:600, color:"#2E7D32" }}><PhoneIcon size={10} style={{marginRight:2}} />{o.phones[0]}</span>
+                        : <span style={{ fontSize:11, color:"#cc0000" }}>sans tél.</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </section>
+          )}
 
-          <section className="om-fiche">
-            {selected ? (
-              <OwnerFiche
-                owner={selected}
-                onUpdate={patch => updateOwner(selected.id, patch)}
-                onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
-                onRunAI={runAI}
-                onClearAI={clearAI}
-                aiBusy={aiBusy}
-                tr={tr}
-              />
-            ) : (
-              <div className="om-empty-small">{tr("leads_select_hint")}</div>
-            )}
-          </section>
+          {(!isMobile || mobileView === 'fiche') && (
+            <section className="om-fiche">
+              {isMobile && (
+                <button className="back-btn" onClick={() => setMobileView('list')} style={{margin:"8px 12px 4px"}}>
+                  ← Retour
+                </button>
+              )}
+              {selected ? (
+                <OwnerFiche
+                  owner={selected}
+                  onUpdate={patch => updateOwner(selected.id, patch)}
+                  onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
+                  onRunAI={runAI}
+                  onClearAI={clearAI}
+                  aiBusy={aiBusy}
+                  tr={tr}
+                />
+              ) : (
+                <div className="om-empty-small">{tr("leads_select_hint")}</div>
+              )}
+            </section>
+          )}
         </div>
       )}
     </div>
@@ -961,6 +978,7 @@ const CSS = `
 .om-row-name{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .om-row-sub{font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .om-row-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+.om-row-phone{display:flex;align-items:center;flex-shrink:0;margin-left:4px}
 .om-badge{font-size:10px;padding:2px 6px;border-radius:6px;background:#F0EDE3;color:var(--text2);font-weight:600}
 .om-pill{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 .om-src-badge{font-size:10px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}

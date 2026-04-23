@@ -35,10 +35,10 @@ export const PRIORITY = {
 // virtualized row renderer (which lives outside the component) can read it.
 // Keep in sync with LeadsManager's local STAGE_CFG when lead stages change.
 export const LEAD_STAGE_CFG = {
-  new: { label: "Nouveau", cls: "multiple_matches" },
-  to_call: { label: "À appeler", cls: "needs_review" },
-  contacted: { label: "Contacté", cls: "found" },
-  qualified: { label: "Qualifié", cls: "found" },
-  converted: { label: "Converti", cls: "found" },
-  lost: { label: "Fermé", cls: "not_found" },
+  new:       { label: "Nouveau",   cls: "multiple_matches", borderColor: "#9CA3AF" },
+  to_call:   { label: "À appeler", cls: "needs_review",    borderColor: "#C9A84C" },
+  contacted: { label: "Contacté",  cls: "found",           borderColor: "#2563EB" },
+  qualified: { label: "Qualifié",  cls: "found",           borderColor: "#2D8C4E" },
+  converted: { label: "Converti",  cls: "found",           borderColor: "#2D8C4E" },
+  lost:      { label: "Fermé",     cls: "not_found",       borderColor: "#D1D5DB" },
 };

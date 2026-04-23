@@ -62,6 +62,11 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   // + statut are visible by default because those are the two filters
   // users touch on every session.
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const isMobile = window.innerWidth <= 768;
+  const [mobileView, setMobileView] = useState('list');
+  const listPanelRef = useRef(null);
+  const [listHeight, setListHeight] = useState(600);
+  const [listWidth, setListWidth] = useState(isMobile ? window.innerWidth : 320);
 
   // Esc dismisses whichever modal is on top. Order matters: column
   // mapping sits above the import modal, so its Esc handler runs
@@ -562,12 +567,31 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     }
   }, [filteredLeads, selectedLeadId]);
 
+  useEffect(() => {
+    const el = listPanelRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { height, width } = entry.contentRect;
+      if (height > 0) setListHeight(height);
+      if (width > 0) setListWidth(width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Memoize the itemData object we pass to FixedSizeList. Without this, the
   // object identity changes on every parent render, so react-window marks
   // every row "dirty" even when filteredLeads and selectedLeadId are
   // unchanged (e.g. typing in an unrelated input elsewhere on the page).
   const leadListItemData = useMemo(
-    () => ({ leads: filteredLeads, selectedLeadId, onSelect: setSelectedLeadId }),
+    () => ({
+      leads: filteredLeads,
+      selectedLeadId,
+      onSelect: (id) => {
+        setSelectedLeadId(id);
+        if (isMobile) setMobileView('fiche');
+      },
+    }),
     [filteredLeads, selectedLeadId],
   );
 
@@ -708,7 +732,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         </div>
       )}
 
-      <div className="card" style={{padding:0,overflow:"hidden"}}>
+      <div className="card leads-card" style={{padding:0,overflow:"hidden"}}>
         {/* ── Compact filter bar ──
             Primary row: search + statut + "+ Filtres" toggle + count +
             export/delete. Secondary filters (téléphone, unités, ville,
@@ -724,15 +748,20 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           const anyFilterActive = activeSecondary > 0 || filter.status !== "all" || searchInput;
           return (
             <>
-              <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <input ref={searchRef} className="tb-search" style={{width:200,minWidth:140}} placeholder="Rechercher… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
-                <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.status} onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}>
+              <div className="leads-filter-primary">
+                <input ref={searchRef} className="leads-search tb-search" placeholder="Rechercher… (⌘K)" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+                <select
+                  className="leads-stage-select"
+                  style={{padding:"6px 9px",fontSize:12}}
+                  value={filter.status}
+                  onChange={e => setFilter(prev => ({ ...prev, status:e.target.value }))}
+                >
                   <option value="all">Tous les statuts</option>
                   {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
                 </select>
                 <button
-                  className="btn btn-sm"
-                  style={{fontSize:12,padding:"6px 10px",background:showAdvancedFilters||activeSecondary?"var(--gold-light)":undefined,borderColor:showAdvancedFilters||activeSecondary?"#E9D9AA":undefined}}
+                  className="btn btn-sm leads-filter-toggle"
+                  style={{fontSize:12,background:showAdvancedFilters||activeSecondary?"var(--gold-light)":undefined,borderColor:showAdvancedFilters||activeSecondary?"#E9D9AA":undefined}}
                   onClick={() => setShowAdvancedFilters(v => !v)}
                 >
                   {showAdvancedFilters ? "▾" : "▸"} Filtres{activeSecondary > 0 ? ` (${activeSecondary})` : ""}
@@ -742,23 +771,23 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                     ✕ Réinitialiser
                   </button>
                 )}
-                <span style={{marginLeft:"auto",fontSize:11,color:"var(--text3)",whiteSpace:"nowrap"}}>
+                <span className="leads-count">
                   {filteredLeads.length} lead{filteredLeads.length !== 1 ? "s" : ""}
                   {leads.length !== filteredLeads.length ? " / " + leads.length : ""}
                 </span>
-                <div style={{display:"flex",gap:5}}>
+                <div className="leads-actions">
                   <button className="btn btn-sm" onClick={exportLeads} title="Exporter"><DownloadIcon size={13} /></button>
                   <button className="btn btn-sm btn-danger" onClick={clearLeads} title="Vider tout"><TrashIcon size={13} /></button>
                 </div>
               </div>
               {showAdvancedFilters && (
-                <div style={{padding:"8px 12px",borderBottom:"1px solid var(--border)",background:"#FAF8F4",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
+                <div className="leads-filter-secondary allow-horizontal-scroll">
+                  <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.phone} onChange={e => setFilter(prev => ({ ...prev, phone:e.target.value }))}>
                     <option value="all">Téléphone: tous</option>
                     <option value="with">Avec tél.</option>
                     <option value="without">Sans tél.</option>
                   </select>
-                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
+                  <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.units} onChange={e => setFilter(prev => ({ ...prev, units:e.target.value }))}>
                     <option value="all">Toutes tailles</option>
                     <option value="1">1–2 unités</option>
                     <option value="3">3–5 unités</option>
@@ -768,12 +797,12 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
                     <option value="50">50+ unités</option>
                   </select>
                   {cityOptions.length > 0 && (
-                    <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
+                    <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
                       <option value="all">Toutes villes</option>
                       {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   )}
-                  <select style={{padding:"6px 9px",fontSize:12,width:"auto"}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
+                  <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
                     <option value="all">Appel: tous</option>
                     <option value="due">Rappel dû</option>
                     {Object.entries(CALL_STATUS_CFG).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
@@ -784,57 +813,66 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           );
         })()}
 
-        {/* ── Two-column body: list LEFT · fiche RIGHT ── */}
-        <div style={{display:"flex",height:600,minHeight:400}}>
+        {/* ── Two-panel body: list LEFT (or full on mobile) · fiche RIGHT ── */}
+        <div className="leads-body">
 
-          {/* LEFT: lead list (virtualized so thousands of imported leads render in O(viewport)) */}
-          <div style={{width:320,minWidth:240,flexShrink:0,borderRight:"1px solid var(--border)",background:"var(--bg,#FAF6EF)"}}>
-            {filteredLeads.length === 0 ? (
-              <div style={{padding:32,textAlign:"center",color:"var(--text3)"}}>
-                <TargetIcon size={28} style={{marginBottom:8,color:"var(--text3)"}} />
-                <div style={{fontWeight:700,marginBottom:4}}>{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
-                <div style={{fontSize:12,marginBottom:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
-                {leads.length === 0 && (
-                  <button className="btn btn-gold btn-sm" onClick={() => setShowImportModal(true)}>
-                    <FolderIcon size={12} style={{marginRight:4}} />Importer un fichier
-                  </button>
-                )}
-              </div>
-            ) : (
-              <VirtualList
-                height={600}
-                width={320}
-                itemCount={filteredLeads.length}
-                itemSize={LEAD_ROW_HEIGHT}
-                itemData={leadListItemData}
-              >
-                {LeadListRow}
-              </VirtualList>
-            )}
-          </div>
+          {/* LIST panel — full-screen on mobile when mobileView==='list' */}
+          {(!isMobile || mobileView === 'list') && (
+            <div ref={listPanelRef} className="leads-list-panel">
+              {filteredLeads.length === 0 ? (
+                <div style={{padding:32,textAlign:"center",color:"var(--text3)"}}>
+                  <TargetIcon size={28} style={{marginBottom:8,color:"var(--text3)"}} />
+                  <div style={{fontWeight:700,marginBottom:4}}>{leads.length === 0 ? "Aucun lead" : "Aucun résultat"}</div>
+                  <div style={{fontSize:12,marginBottom:12}}>{leads.length === 0 ? "Importez un fichier pour commencer." : "Modifiez les filtres."}</div>
+                  {leads.length === 0 && (
+                    <button className="btn btn-gold btn-sm" onClick={() => setShowImportModal(true)}>
+                      <FolderIcon size={12} style={{marginRight:4}} />Importer un fichier
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <VirtualList
+                  height={listHeight}
+                  width={listWidth}
+                  itemCount={filteredLeads.length}
+                  itemSize={LEAD_ROW_HEIGHT}
+                  itemData={leadListItemData}
+                >
+                  {LeadListRow}
+                </VirtualList>
+              )}
+            </div>
+          )}
 
-          {/* RIGHT: fiche */}
-          <div style={{flex:1,overflowY:"auto",padding:"16px 18px",minWidth:0}}>
-            {!selectedLead ? (
-              <div style={{padding:40,textAlign:"center",color:"var(--text3)"}}>
-                <div style={{fontSize:24,marginBottom:8,color:"var(--text3)"}}>←</div>
-                <div style={{fontWeight:700}}>Sélectionnez un lead</div>
-                <div style={{fontSize:12,marginTop:4}}>Cliquez sur un lead dans la liste pour voir sa fiche.</div>
-              </div>
-            ) : (
-              <LeadFiche
-                lead={selectedLead}
-                stageCfg={STAGE_CFG}
-                callStatusCfg={CALL_STATUS_CFG}
-                onUpdate={updateLead}
-                onRemove={removeLead}
-                onCreateDeal={onCreateDealFromLead}
-                onMarkCall={markCallNow}
-                toDateTimeLocal={toDateTimeLocal}
-                getPhones={getLeadPhones}
-              />
-            )}
-          </div>
+          {/* FICHE panel — full-screen on mobile when mobileView==='fiche' */}
+          {(!isMobile || mobileView === 'fiche') && (
+            <div className="leads-fiche-panel">
+              {isMobile && (
+                <button className="back-btn" onClick={() => setMobileView('list')}>
+                  ← Retour
+                </button>
+              )}
+              {!selectedLead ? (
+                <div style={{padding:40,textAlign:"center",color:"var(--text3)"}}>
+                  <div style={{fontSize:24,marginBottom:8,color:"var(--text3)"}}>←</div>
+                  <div style={{fontWeight:700}}>Sélectionnez un lead</div>
+                  <div style={{fontSize:12,marginTop:4}}>Cliquez sur un lead dans la liste pour voir sa fiche.</div>
+                </div>
+              ) : (
+                <LeadFiche
+                  lead={selectedLead}
+                  stageCfg={STAGE_CFG}
+                  callStatusCfg={CALL_STATUS_CFG}
+                  onUpdate={updateLead}
+                  onRemove={removeLead}
+                  onCreateDeal={onCreateDealFromLead}
+                  onMarkCall={markCallNow}
+                  toDateTimeLocal={toDateTimeLocal}
+                  getPhones={getLeadPhones}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
 
