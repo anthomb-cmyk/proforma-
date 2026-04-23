@@ -30,6 +30,7 @@ import { normalizePhoneKey } from "../lib/phoneUtils.js";
 import { parseRoleXlsx, buildOwnersAndLeadsFromRole } from "../lib/roleImport.js";
 import { estimateLookupCost, formatCost } from "../lib/phoneLookupCost.js";
 import { loadTodaySpend, recordBatch } from "../lib/dailySpendTracker.js";
+import VoiceDictation from "../components/VoiceDictation.jsx";
 
 // Batch size for the POST /api/phone-lookup call — matches PhoneFinder's
 // BATCH_SIZE (keeps each request under the proxy/timeout ceiling).
@@ -876,7 +877,13 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
           header so it's discoverable without taking up its own section. */}
       <div className="fiche-notes">
         <div className="fiche-notes-head">
-          <div className="fiche-section-lbl">{tr("leads_call_notes")}</div>
+          <div className="fiche-section-lbl" style={{display:"flex",alignItems:"center",gap:6}}>
+            {tr("leads_call_notes")}
+            <VoiceDictation onTranscript={text => {
+              const cur = owner.callNotes || "";
+              onUpdate({ callNotes: cur + (cur && !cur.endsWith("\n") ? "\n" : "") + text });
+            }} />
+          </div>
           <button
             type="button"
             className={`ai-btn${aiBusy ? " loading" : ""}`}

@@ -5,6 +5,8 @@
 // lets us ship LeadFiche changes without reloading the full ~4 k-line
 // file into context.
 
+import VoiceDictation from "./VoiceDictation.jsx";
+
 export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onRemove, onCreateDeal, onMarkCall, toDateTimeLocal, getPhones }) {
   const leadPhones = getPhones(lead);
   const fmtAssessment = (v) => {
@@ -98,11 +100,23 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
       {/* Notes */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:8}}>
         <div className="f-row" style={{marginBottom:0}}>
-          <div className="f-lbl">Notes générales</div>
+          <div className="f-lbl" style={{display:"flex",alignItems:"center",gap:6}}>
+            Notes générales
+            <VoiceDictation onTranscript={text => {
+              const cur = lead.notes || "";
+              onUpdate(lead.id, { notes: cur + (cur && !cur.endsWith("\n") ? "\n" : "") + text });
+            }} />
+          </div>
           <textarea style={{minHeight:90}} placeholder="Infos utiles sur ce lead…" value={lead.notes || ""} onChange={e => onUpdate(lead.id, { notes: e.target.value })} />
         </div>
         <div className="f-row" style={{marginBottom:0}}>
-          <div className="f-lbl">Notes d'appel</div>
+          <div className="f-lbl" style={{display:"flex",alignItems:"center",gap:6}}>
+            Notes d'appel
+            <VoiceDictation onTranscript={text => {
+              const cur = lead.callNotes || "";
+              onUpdate(lead.id, { callNotes: cur + (cur && !cur.endsWith("\n") ? "\n" : "") + text });
+            }} />
+          </div>
           <textarea style={{minHeight:90}} placeholder="Script, suivi d'appel, réponse obtenue…" value={lead.callNotes || ""} onChange={e => onUpdate(lead.id, { callNotes: e.target.value })} />
         </div>
       </div>

@@ -13,6 +13,7 @@ import OpenAI, { toFile } from "openai";
 import { Resend } from "resend";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
+import multer from "multer";
 import { createChatRouter } from "./routes/chat.js";
 import { createListingsRouter } from "./routes/listings.js";
 import { createOpenAIService } from "./services/openaiService.js";
@@ -4016,6 +4017,38 @@ app.post("/api/ai/summarize", async (req, res) => {
   } catch (err) {
     res.status(502).json({ ok: false, error: err?.message || "Erreur API OpenAI." });
   }
+});
+
+// ─── Voice dictation transcription ──────────────────────────────────────────
+// Accepts a raw audio blob from the browser's MediaRecorder (webm/ogg/mp4)
+// and returns the Whisper-1 transcript. Used by the VoiceDictation component
+// on note textareas in LeadFiche and OwnersManager.
+const _dictationUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB — Whisper API hard limit
+}).single("audio");
+
+app.post("/api/transcribe", (req, res) => {
+  _dictationUpload(req, res, async (err) => {
+    if (err) return res.status(400).json({ ok: false, error: err.message });
+    if (!openai) return res.status(503).json({ ok: false, error: "OPENAI_API_KEY non configurée." });
+    if (!req.file) return res.status(400).json({ ok: false, error: "No audio file." });
+    try {
+      const ext = (req.file.mimetype || "").includes("mp4") ? "mp4"
+                : (req.file.mimetype || "").includes("ogg")  ? "ogg"
+                : "webm";
+      const file = await toFile(req.file.buffer, `recording.${ext}`, { type: req.file.mimetype || "audio/webm" });
+      const transcription = await openai.audio.transcriptions.create({
+        file,
+        model: OPENAI_TRANSCRIPTION_MODEL,
+        language: "fr",
+      });
+      res.json({ ok: true, text: String(transcription?.text || "").trim() });
+    } catch (e) {
+      console.error("[transcribe]", e?.message);
+      res.status(500).json({ ok: false, error: "Transcription failed." });
+    }
+  });
 });
 
 // ─── SOCLE Assistant chatbox ────────────────────────────────────────────────
