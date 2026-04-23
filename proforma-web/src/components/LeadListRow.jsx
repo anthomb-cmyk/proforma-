@@ -2,7 +2,7 @@ import { LEAD_STAGE_CFG } from "../lib/stages.js";
 import { mergePhoneLists } from "../lib/phoneUtils.js";
 import { BuildingIcon, MapPinIcon, PhoneIcon } from "./Icons.jsx";
 
-export const LEAD_ROW_HEIGHT = 88;
+export const LEAD_ROW_HEIGHT = 80;
 
 export default function LeadListRow({ index, style, data }) {
   const lead = data.leads[index];
@@ -20,7 +20,7 @@ export default function LeadListRow({ index, style, data }) {
         borderBottom: "1px solid var(--border)",
         cursor: "pointer",
         background: isSel ? "#FFFBF1" : "transparent",
-        borderLeft: `3px solid ${isSel ? "var(--gold,#C9A84C)" : (stage.borderColor || "#E0D9CC")}`,
+        borderLeft: `4px solid ${isSel ? "var(--gold,#C9A84C)" : (stage.borderColor || "#E0D9CC")}`,
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",

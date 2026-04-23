@@ -1872,7 +1872,7 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
 
 /* ── Leads two-panel layout (LeadsManager) ───────────────────────────── */
 .leads-card{display:flex;flex-direction:column}
-.leads-body{display:flex;height:600px;min-height:300px}
+.leads-body{display:flex;flex:1;min-height:0}
 .leads-list-panel{width:320px;min-width:240px;flex-shrink:0;border-right:1px solid var(--border);background:var(--bg,#FAF6EF);overflow:hidden;min-height:0}
 .leads-fiche-panel{flex:1;overflow-y:auto;padding:16px 18px;min-width:0}
 .leads-filter-primary{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap}

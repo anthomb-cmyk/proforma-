@@ -4,15 +4,12 @@
 // has been retired. See App.js: view === "leads" → <OwnersManager />.
 //
 // Layout:
-//   • Left column: owner list with search + sort + source filter
-//   • Right column: owner fiche (aliases, phones with source badges, emails,
-//     buildings w/ optional Finances accordion, call notes + ✦ IA organizer)
-//   • Header: "Importer un rôle" (XLSX) + "Enrichir numéros manquants" +
-//     "Tester 100 d'abord" preset.
-//
-// Owners come from App state — populated by migrateLeadsToOwners (one-time
-// on boot), the rôle-import flow, or the Leads importer. Call notes,
-// finances and stage persist per-owner (not per-building).
+//   • Thin top bar: title + ⋯ overflow menu (Import rôle, Enrichir, Test 100)
+//   • Search + Stage filter always visible below top bar
+//   • Filtres link expands: Source, Tri (secondary)
+//   • Left column: owner list (fills remaining height)
+//   • Right column: owner fiche (full-screen overlay on mobile)
+//   • FAB bottom-right for role import
 
 import { useMemo, useState, useRef, useCallback } from "react";
 import useFocusHotkey from "../lib/useFocusHotkey.js";
@@ -33,21 +30,10 @@ import { loadTodaySpend, recordBatch } from "../lib/dailySpendTracker.js";
 import VoiceDictation from "../components/VoiceDictation.jsx";
 import { WarningIcon, HourglassIcon, PhoneIcon, MapPinIcon } from "../components/Icons.jsx";
 
-// Batch size for the POST /api/phone-lookup call — matches PhoneFinder's
-// BATCH_SIZE (keeps each request under the proxy/timeout ceiling).
 const BATCH_SIZE = 10;
-
-// Hard daily cap on phone-lookup spend. Mirrors the backend-side budget
-// check so the client refuses to start a batch that would obviously blow
-// past the cap — surfaces the 402 error from the server proactively.
 const DAILY_SPEND_CAP_USD = 50;
-
-// Preset for "Tester 100 d'abord" — lets the user measure Places hit rate
-// before committing the full batch.
 const TEST_BATCH_SIZE = 100;
 
-// Stage catalog. Labels are resolved through t() at render time so
-// switching FR↔EN updates the dropdown + pill text without remounts.
 const STAGES = [
   { id: "new",       tkey: "stage_new",       color: "#6B6B6B", bg: "#ECECEC" },
   { id: "to_call",   tkey: "stage_to_call",   color: "#C9A84C", bg: "#F5EDD6" },
@@ -61,7 +47,6 @@ function stageCfg(id) {
   return STAGES.find(s => s.id === id) || STAGES[0];
 }
 
-// Source badge palette. Labels are pulled from i18n (src_*) at render time.
 const SOURCE_CFG = {
   Excel:    { tkey: "src_excel",    bg: "#ECECEC", color: "#6B6B6B" },
   Places:   { tkey: "src_places",   bg: "#F5EDD6", color: "#8D742D" },
@@ -75,16 +60,12 @@ function sourceFor(owner, phone) {
   return owner?.phoneSources?.[k] || "Migrated";
 }
 
-// Case-insensitive accent-less substring match — lets "tremblay" find
-// "Trèmblay" regardless of accent typing.
 function matches(haystack, needle) {
   if (!needle) return true;
   const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   return norm(haystack).includes(norm(needle));
 }
 
-// "Ville (Province) · H1A 1A1" — compact one-liner used in the declutterd
-// fiche (replaces the three stacked city/province/postal rows).
 function formatCityLine(owner) {
   if (!owner) return "";
   const p = owner.postalAddress || {};
@@ -99,8 +80,6 @@ function formatCityLine(owner) {
   return bits.join(" · ");
 }
 
-// Mailing street — separate from city/postal so the fiche can show it on
-// its own line.
 function formatStreetLine(owner) {
   if (!owner) return "";
   const p = owner.postalAddress || {};
@@ -115,13 +94,8 @@ function formatPostalAddressFallback(owner) {
   return describeOwnerKey(owner.ownerKey);
 }
 
-// Fallback i18n function in case the App didn't pass one (e.g. when this
-// module is rendered directly from a test harness). Always returns the
-// French key value if available.
 function makeDefaultT() {
   return (key, ...args) => {
-    // Minimal default labels — only what's essential for the page to not
-    // crash if `t` is absent. Real strings flow through App's I18N.
     const fallback = {
       leads_label_proprio: "Propriétaire",
       leads_loading: "Chargement…",
@@ -142,26 +116,34 @@ function makeDefaultT() {
   };
 }
 
+const MENU_ITEM = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  textAlign: "left",
+  padding: "13px 16px",
+  border: "none",
+  background: "none",
+  fontSize: 14,
+  cursor: "pointer",
+  color: "var(--text)",
+  borderBottom: "1px solid var(--border)",
+};
+
 export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, lang = "fr" }) {
   const tr = typeof t === "function" ? t : makeDefaultT();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(owners[0]?.id || null);
   const [stageFilter, setStageFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("all"); // all | missing | Excel | Places | Manual
-  const [sortBy, setSortBy] = useState("buildings"); // buildings | name | phones
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("buildings");
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichNotice, setEnrichNotice] = useState("");
-  const [enrichProgress, setEnrichProgress] = useState(null); // { done, total, newlyFound }
+  const [enrichProgress, setEnrichProgress] = useState(null);
   const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
   const isMobile = window.innerWidth <= 768;
-  const [mobileView, setMobileView] = useState('list');
-
-  // IA button busy flag — loads the /api/ai/summarize response for the
-  // currently selected owner's callNotes.
+  const [mobileView, setMobileView] = useState("list");
   const [aiBusy, setAiBusy] = useState(false);
-
-  // Rôle import modal state. rolePreview holds the parsed structure while
-  // the user reviews stats + filters; null means no modal open.
   const [rolePreview, setRolePreview] = useState(null);
   const [roleBusy, setRoleBusy] = useState(false);
   const [roleError, setRoleError] = useState("");
@@ -171,11 +153,28 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
   const [rfUnitsMin, setRfUnitsMin] = useState("");
   const [rfUnitsMax, setRfUnitsMax] = useState("");
 
+  // ⋯ overflow menu
+  const [showOverflowMenu, setShowOverflowMenu] = useState(false);
+  const menuBtnRef = useRef(null);
+  const [menuTop, setMenuTop] = useState(48);
+
+  // Secondary filters toggle
+  const [showSecondaryFilters, setShowSecondaryFilters] = useState(false);
+
   const searchRef = useRef(null);
   useFocusHotkey(searchRef);
   useEscapeKey(() => setRolePreview(null), Boolean(rolePreview) && !roleBusy);
+  useEscapeKey(() => setShowOverflowMenu(false), showOverflowMenu);
 
   const debouncedSearch = useDebouncedValue(search, 150);
+
+  function openOverflowMenu() {
+    if (menuBtnRef.current) {
+      const rect = menuBtnRef.current.getBoundingClientRect();
+      setMenuTop(rect.bottom + 4);
+    }
+    setShowOverflowMenu(v => !v);
+  }
 
   const filteredOwners = useMemo(() => {
     let list = Array.isArray(owners) ? [...owners] : [];
@@ -213,16 +212,11 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     [owners, selectedId, filteredOwners],
   );
 
-  // Patch an owner in App state. Also touches updatedAt so the persist
-  // debounce picks the change up.
   const updateOwner = useCallback((id, patch) => {
     if (typeof setOwners !== "function") return;
     setOwners(prev => prev.map(o => o.id === id ? { ...o, ...patch, updatedAt: Date.now() } : o));
   }, [setOwners]);
 
-  // Patch a specific building's finances on the selected owner. Uses a
-  // functional update so concurrent edits (e.g. typing in two fields at
-  // once) don't clobber each other.
   const updateBuildingFinances = useCallback((ownerId, buildingId, patch) => {
     if (typeof setOwners !== "function") return;
     setOwners(prev => prev.map(o => {
@@ -251,7 +245,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     return { owners: owns.length, buildings, phones, missing };
   }, [owners]);
 
-  // ── Rôle import ──────────────────────────────────────────────────────────
+  // ── Rôle import ──
 
   function pickRoleFile() {
     const inp = document.createElement("input");
@@ -335,7 +329,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     setRfUnitsMax("");
   }
 
-  // ── Places enrichment ────────────────────────────────────────────────────
+  // ── Places enrichment ──
 
   async function runEnrichment(targets, seedOwners) {
     if (typeof setOwners !== "function") return;
@@ -421,6 +415,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     );
     await runEnrichment(targets, owners);
   }
+
   async function enrichTest100() {
     const targets = (owners || []).filter(o =>
       (!o.phones || o.phones.length === 0) && (o.postalAddress?.street || o.postalAddress?.postalCode)
@@ -428,7 +423,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     await runEnrichment(targets.slice(0, TEST_BATCH_SIZE), owners);
   }
 
-  // ── AI note organizer ────────────────────────────────────────────────────
+  // ── AI note organizer ──
 
   async function runAI() {
     if (!selected) return;
@@ -460,91 +455,45 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     updateOwner(selected.id, { aiLead: "" });
   }
 
-  // ── Rendering ────────────────────────────────────────────────────────────
+  // ── Rendering ──
 
-  const bCount = totals.buildings;
-  const pCount = totals.phones;
-  const bS = bCount !== 1 ? "s" : "";
-  const pS = pCount !== 1 ? "s" : "";
+  const activeSecondaryCount = (sourceFilter !== "all" ? 1 : 0) + (sortBy !== "buildings" ? 1 : 0);
 
   return (
     <div className="om-shell">
       <style>{CSS}</style>
 
-      <header className="om-head">
-        <div>
-          <div className="om-title">{tr("leads_header_title")} · {totals.owners}</div>
-          <div className="om-sub">
-            {tr("leads_header_counts", bCount, bS, pCount, pS)}
-            {totals.missing > 0 ? tr("leads_header_missing", totals.missing) : ""}
+      {/* ⋯ overflow menu */}
+      {showOverflowMenu && (
+        <>
+          <div style={{position:"fixed",inset:0,zIndex:200}} onClick={() => setShowOverflowMenu(false)} />
+          <div style={{position:"fixed",right:12,top:menuTop,zIndex:201,background:"#fff",border:"1px solid var(--border)",borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,.14)",minWidth:240,overflow:"hidden"}}>
+            <button
+              style={MENU_ITEM}
+              onClick={() => { pickRoleFile(); setShowOverflowMenu(false); }}
+              disabled={roleBusy}
+            >
+              {roleBusy ? tr("leads_btn_import_busy") : tr("leads_btn_import")}
+            </button>
+            <button
+              style={{...MENU_ITEM, opacity: (enrichBusy || totals.missing === 0) ? 0.4 : 1}}
+              onClick={() => { enrichAll(); setShowOverflowMenu(false); }}
+              disabled={enrichBusy || totals.missing === 0}
+            >
+              {enrichBusy ? tr("leads_btn_enrich_busy") : tr("leads_btn_enrich")}
+            </button>
+            <button
+              style={{...MENU_ITEM, borderBottom:"none", opacity: (enrichBusy || totals.missing === 0) ? 0.4 : 1}}
+              onClick={() => { enrichTest100(); setShowOverflowMenu(false); }}
+              disabled={enrichBusy || totals.missing === 0}
+            >
+              {tr("leads_btn_test100")}
+            </button>
           </div>
-        </div>
-        <div className="om-hint">{tr("leads_hint")}</div>
-      </header>
-
-      <div className="om-toolbar">
-        <input
-          ref={searchRef}
-          className="om-search"
-          placeholder={tr("leads_search_placeholder")}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <select className="om-select" value={stageFilter} onChange={e => setStageFilter(e.target.value)}>
-          <option value="all">{tr("leads_filter_all_stages")}</option>
-          {STAGES.map(s => <option key={s.id} value={s.id}>{tr(s.tkey)}</option>)}
-        </select>
-        <select className="om-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
-          <option value="all">{tr("leads_filter_all_sources")}</option>
-          <option value="missing">{tr("leads_filter_missing_phone")}</option>
-          <option value="Excel">{tr("src_excel")}</option>
-          <option value="Places">{tr("src_places")}</option>
-          <option value="Manual">{tr("src_manual")}</option>
-        </select>
-        <select className="om-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          <option value="buildings">{tr("leads_sort_buildings")}</option>
-          <option value="phones">{tr("leads_sort_phones")}</option>
-          <option value="name">{tr("leads_sort_name")}</option>
-        </select>
-      </div>
-      <div className="om-actions">
-        <button
-          className="om-import-btn"
-          onClick={pickRoleFile}
-          disabled={roleBusy}
-        >
-          {roleBusy ? tr("leads_btn_import_busy") : tr("leads_btn_import")}
-        </button>
-        <button
-          className="om-enrich-btn"
-          onClick={enrichAll}
-          disabled={enrichBusy || totals.missing === 0}
-        >
-          {enrichBusy ? tr("leads_btn_enrich_busy") : tr("leads_btn_enrich")}
-        </button>
-        <button
-          className="om-test-btn"
-          onClick={enrichTest100}
-          disabled={enrichBusy || totals.missing === 0}
-        >
-          {tr("leads_btn_test100")}
-        </button>
-      </div>
-      {enrichNotice && <div className="om-notice">{enrichNotice}</div>}
-      {roleError && <div className="om-notice om-notice-err"><WarningIcon size={12} style={{marginRight:4}} />{roleError}</div>}
-      {enrichProgress && (
-        <div className="om-progress">
-          <div className="om-progress-row">
-            <span><HourglassIcon size={12} style={{marginRight:4}} />{enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound}</span>
-            <span className="om-progress-spend">~{formatCost(dailySpend.estCost)}</span>
-          </div>
-          <div className="om-progress-bar">
-            <div style={{ width: `${Math.round((enrichProgress.done / Math.max(1, enrichProgress.total)) * 100)}%` }} />
-          </div>
-        </div>
+        </>
       )}
 
-      {/* ── Rôle preview modal ──────────────────────────────────────────── */}
+      {/* Rôle preview modal */}
       {rolePreview && (() => {
         const stats = rolePreview.parsed.stats;
         const needLookup = stats.needLookup;
@@ -625,6 +574,80 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
         );
       })()}
 
+      {/* ── Top bar ── */}
+      <div className="om-topbar">
+        <div>
+          <div className="om-title">{tr("leads_header_title")} · {totals.owners}</div>
+          <div className="om-sub">
+            {tr("leads_header_counts", totals.buildings, totals.buildings !== 1 ? "s" : "", totals.phones, totals.phones !== 1 ? "s" : "")}
+            {totals.missing > 0 ? tr("leads_header_missing", totals.missing) : ""}
+          </div>
+        </div>
+        <button
+          ref={menuBtnRef}
+          onClick={openOverflowMenu}
+          className="om-menu-btn"
+          aria-label="Plus d'actions"
+          disabled={roleBusy}
+        >
+          ⋯
+        </button>
+      </div>
+
+      {/* ── Search + Stage filter bar ── */}
+      <div className="om-toolbar">
+        <input
+          ref={searchRef}
+          className="om-search"
+          placeholder={tr("leads_search_placeholder")}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <select className="om-select" value={stageFilter} onChange={e => setStageFilter(e.target.value)}>
+          <option value="all">{tr("leads_filter_all_stages")}</option>
+          {STAGES.map(s => <option key={s.id} value={s.id}>{tr(s.tkey)}</option>)}
+        </select>
+        <button
+          className="om-filters-toggle"
+          style={{background:showSecondaryFilters||activeSecondaryCount?"var(--gold-light)":undefined,borderColor:showSecondaryFilters||activeSecondaryCount?"#E9D9AA":undefined}}
+          onClick={() => setShowSecondaryFilters(v => !v)}
+        >
+          {showSecondaryFilters ? "▾" : "▸"} Filtres{activeSecondaryCount > 0 ? ` (${activeSecondaryCount})` : ""}
+        </button>
+      </div>
+
+      {/* ── Secondary filters (collapsible) ── */}
+      {showSecondaryFilters && (
+        <div className="om-toolbar om-toolbar-secondary">
+          <select className="om-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+            <option value="all">{tr("leads_filter_all_sources")}</option>
+            <option value="missing">{tr("leads_filter_missing_phone")}</option>
+            <option value="Excel">{tr("src_excel")}</option>
+            <option value="Places">{tr("src_places")}</option>
+            <option value="Manual">{tr("src_manual")}</option>
+          </select>
+          <select className="om-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="buildings">{tr("leads_sort_buildings")}</option>
+            <option value="phones">{tr("leads_sort_phones")}</option>
+            <option value="name">{tr("leads_sort_name")}</option>
+          </select>
+        </div>
+      )}
+
+      {enrichNotice && <div className="om-notice">{enrichNotice}</div>}
+      {roleError && <div className="om-notice om-notice-err"><WarningIcon size={12} style={{marginRight:4}} />{roleError}</div>}
+      {enrichProgress && (
+        <div className="om-progress">
+          <div className="om-progress-row">
+            <span><HourglassIcon size={12} style={{marginRight:4}} />{enrichProgress.done} / {enrichProgress.total} · {enrichProgress.newlyFound}</span>
+            <span className="om-progress-spend">~{formatCost(dailySpend.estCost)}</span>
+          </div>
+          <div className="om-progress-bar">
+            <div style={{ width: `${Math.round((enrichProgress.done / Math.max(1, enrichProgress.total)) * 100)}%` }} />
+          </div>
+        </div>
+      )}
+
       {totals.owners === 0 ? (
         <div className="om-empty">
           <div style={{fontSize:15, fontWeight:600, marginBottom:6}}>{tr("leads_empty_title")}</div>
@@ -632,8 +655,9 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
         </div>
       ) : (
         <div className="om-grid">
-          {(!isMobile || mobileView === 'list') && (
-            <section className="om-list">
+          {/* Owner list */}
+          {(!isMobile || mobileView === "list") && (
+            <section className="om-list" style={{touchAction:"pan-y",overscrollBehavior:"none"}}>
               {filteredOwners.length === 0 ? (
                 <div className="om-empty-small">{tr("leads_empty_search", debouncedSearch)}</div>
               ) : filteredOwners.map(o => {
@@ -643,7 +667,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                   <button
                     key={o.id}
                     className={`om-row${active ? " active" : ""}`}
-                    onClick={() => { setSelectedId(o.id); if (isMobile) setMobileView('fiche'); }}
+                    onClick={() => { setSelectedId(o.id); if (isMobile) setMobileView("fiche"); }}
                   >
                     <div className="om-row-main">
                       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:6 }}>
@@ -666,42 +690,91 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
             </section>
           )}
 
-          {(!isMobile || mobileView === 'fiche') && (
-            <section className="om-fiche">
+          {/* Owner fiche — full-screen overlay on mobile */}
+          {(!isMobile || mobileView === "fiche") && (
+            <section
+              className={isMobile ? "" : "om-fiche"}
+              style={isMobile ? {
+                position:"fixed",
+                inset:0,
+                background:"#fff",
+                zIndex:100,
+                display:"flex",
+                flexDirection:"column",
+                paddingBottom:"env(safe-area-inset-bottom)",
+              } : {}}
+            >
               {isMobile && (
-                <button className="back-btn" onClick={() => setMobileView('list')} style={{margin:"8px 12px 4px"}}>
-                  ← Retour
-                </button>
+                <div style={{display:"flex",alignItems:"center",height:44,borderBottom:"1px solid var(--border)",padding:"0 12px",flexShrink:0,background:"#fff"}}>
+                  <button className="back-btn" style={{margin:0,marginRight:"auto"}} onClick={() => setMobileView("list")}>
+                    ← Retour
+                  </button>
+                  {selected && (
+                    <div style={{fontWeight:600,fontSize:15,textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,padding:"0 8px"}}>
+                      {selected.displayName || "(Propriétaire inconnu)"}
+                    </div>
+                  )}
+                  <div style={{width:70}} />
+                </div>
               )}
-              {selected ? (
-                <OwnerFiche
-                  owner={selected}
-                  onUpdate={patch => updateOwner(selected.id, patch)}
-                  onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
-                  onRunAI={runAI}
-                  onClearAI={clearAI}
-                  aiBusy={aiBusy}
-                  tr={tr}
-                />
-              ) : (
-                <div className="om-empty-small">{tr("leads_select_hint")}</div>
-              )}
+              <div style={isMobile ? {overflowY:"auto",flex:1} : {}}>
+                {selected ? (
+                  <OwnerFiche
+                    owner={selected}
+                    onUpdate={patch => updateOwner(selected.id, patch)}
+                    onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
+                    onRunAI={runAI}
+                    onClearAI={clearAI}
+                    aiBusy={aiBusy}
+                    tr={tr}
+                  />
+                ) : (
+                  <div className="om-empty-small">{tr("leads_select_hint")}</div>
+                )}
+              </div>
             </section>
           )}
         </div>
+      )}
+
+      {/* FAB — open role import */}
+      {(!isMobile || mobileView === "list") && (
+        <button
+          onClick={pickRoleFile}
+          aria-label={tr("leads_btn_import")}
+          disabled={roleBusy}
+          style={{
+            position:"fixed",
+            bottom:"calc(16px + env(safe-area-inset-bottom))",
+            right:16,
+            zIndex:90,
+            width:56,
+            height:56,
+            borderRadius:"50%",
+            background:"var(--gold,#C9A84C)",
+            color:"#fff",
+            border:"none",
+            fontSize:28,
+            cursor:roleBusy ? "not-allowed" : "pointer",
+            opacity:roleBusy ? 0.6 : 1,
+            boxShadow:"0 4px 16px rgba(0,0,0,.22)",
+            display:"flex",
+            alignItems:"center",
+            justifyContent:"center",
+            lineHeight:1,
+          }}
+        >
+          +
+        </button>
       )}
     </div>
   );
 }
 
-// Per-building Finances block. Always expanded (no collapse) — Anthony
-// explicitly wanted these visible without a click. Three numeric inputs
-// for revenue / expenses, a 5-cell grid for the unit mix, and a read-only
-// footer with NOI + total units.
+// Per-building Finances block.
 function BuildingFinances({ building, onChange, tr }) {
   const withFin = ensureBuildingFinances(building);
   const fin = withFin.finances;
-
   const noi = computeBuildingNOI(withFin);
   const totalUnits = computeBuildingTotalUnits(withFin);
 
@@ -773,24 +846,16 @@ function BuildingFinances({ building, onChange, tr }) {
   );
 }
 
-// Owner fiche — decluttered single-card layout. Previously had four
-// bordered sub-sections + inner horizontal rules; now one outer card with
-// internal padding + gap, and the only visible divider is the stage/header
-// line.
 function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, aiBusy, tr }) {
   const s = stageCfg(owner.stage || "new");
   const contactNames = Array.isArray(owner.contactNames) ? owner.contactNames : [];
   const primary = owner.displayName || "(Propriétaire inconnu)";
-  // "Also:" subtitle for any contact name that isn't the primary display
-  // name (spouses, co-owners). Dedupes + drops the primary.
   const alsoNames = contactNames.filter(n => n && n !== primary);
-
   const street = formatStreetLine(owner);
   const cityLine = formatCityLine(owner);
 
   return (
     <div className="fiche-body">
-      {/* Header: "Propriétaire" eyebrow, then name, then stage control. */}
       <header className="fiche-head">
         <div style={{minWidth:0,flex:1}}>
           <div className="fiche-eyebrow">{tr("leads_label_proprio")}</div>
@@ -823,9 +888,6 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
         </div>
       </header>
 
-      {/* Inline phones + companies + emails row — decluttered (no stacked
-          sub-cards with inner borders). Each group is a flex row with
-          wrap; badges are inline on the same baseline as the number. */}
       {(owner.phones?.length > 0) && (
         <div className="fiche-phones">
           {owner.phones.map((p, i) => {
@@ -845,7 +907,6 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
         <div className="fiche-inline">
           {owner.aliases?.length > 0 && (
             <div className="fiche-inline-grp">
-              <span className="fiche-inline-lbl">{tr("leads_companies_tt") ? "" : ""}</span>
               {owner.aliases.map((a, i) => (
                 <span key={i} className="fiche-chip">{a}</span>
               ))}
@@ -861,8 +922,6 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
         </div>
       )}
 
-      {/* Buildings + finances: each building is a row with a compact
-          summary line and an expandable Finances block. */}
       <div className="fiche-buildings">
         <div className="fiche-section-lbl">
           {(owner.buildings?.length || 0)} × propriét{(owner.buildings?.length || 0) === 1 ? "é" : "és"}
@@ -891,8 +950,6 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
         ) : <div className="fiche-empty">{tr("leads_no_buildings")}</div>}
       </div>
 
-      {/* Call notes + IA organizer — the IA button sits on the notes
-          header so it's discoverable without taking up its own section. */}
       <div className="fiche-notes">
         <div className="fiche-notes-head">
           <div className="fiche-section-lbl" style={{display:"flex",alignItems:"center",gap:6}}>
@@ -933,58 +990,54 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
 }
 
 const CSS = `
-.om-shell{display:flex;flex-direction:column;gap:14px;min-height:0;flex:1}
-.om-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
-.om-title{font-size:20px;font-weight:700;color:var(--text)}
-.om-sub{font-size:12px;color:var(--text3);margin-top:3px}
-.om-hint{font-size:12px;color:var(--text2);max-width:440px;line-height:1.4;text-align:right}
+.om-shell{display:flex;flex-direction:column;gap:0;min-height:0;flex:1}
 
-/* Tight filter row — all four controls live on one line, no wrap on desktop. */
-.om-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
-.om-search{flex:1;min-width:0;border:1px solid var(--border);background:#fff;border-radius:7px;padding:6px 10px;font-size:12px;height:32px;outline:none}
+/* Top bar */
+.om-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 14px;height:44px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card,#fff)}
+.om-title{font-size:17px;font-weight:700;color:var(--text)}
+.om-sub{font-size:11px;color:var(--text3);margin-top:1px}
+.om-menu-btn{background:none;border:1px solid var(--border);border-radius:8px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--text2);letter-spacing:3px;line-height:1;flex-shrink:0}
+.om-menu-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* Search + filter bar */
+.om-toolbar{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--card,#fff);flex-shrink:0}
+.om-toolbar-secondary{background:#FAF8F4}
+.om-search{flex:1;min-width:0;border:1px solid var(--border);background:#fff;border-radius:7px;padding:6px 10px;font-size:16px;height:44px;outline:none}
 .om-search:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
-.om-select{flex:0 0 auto;border:1px solid var(--border);background:#fff;border-radius:7px;padding:5px 8px;font-size:11px;height:32px;outline:none;cursor:pointer;max-width:160px}
-.om-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
-.om-import-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:7px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
-.om-import-btn:hover:not(:disabled){background:#FAF8F4}
-.om-import-btn:disabled{opacity:.5;cursor:not-allowed}
-.om-enrich-btn{border:none;background:var(--gold);color:#fff;border-radius:7px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
-.om-enrich-btn:hover:not(:disabled){filter:brightness(1.06)}
-.om-enrich-btn:disabled{background:#D6D0BD;cursor:not-allowed}
-.om-test-btn{border:1px solid var(--border);background:#fff;color:var(--text);border-radius:7px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;height:30px}
-.om-test-btn:hover:not(:disabled){background:#FAF8F4}
-.om-test-btn:disabled{opacity:.5;cursor:not-allowed}
-@media (max-width: 720px){ .om-toolbar{flex-wrap:wrap} }
-.om-notice{background:#F5EDD6;border:1px solid #E9D9AA;border-radius:8px;padding:9px 12px;font-size:12px;color:#8D742D;font-weight:600}
+.om-select{flex:0 0 auto;border:1px solid var(--border);background:#fff;border-radius:7px;padding:5px 8px;font-size:14px;height:44px;outline:none;cursor:pointer;max-width:180px}
+.om-filters-toggle{flex:0 0 auto;border:1px solid var(--border);background:#fff;border-radius:7px;padding:0 12px;font-size:13px;height:44px;cursor:pointer;white-space:nowrap;color:var(--text)}
+.om-filters-toggle:hover{background:#FAF8F4}
+
+.om-notice{background:#F5EDD6;border:1px solid #E9D9AA;border-radius:8px;padding:9px 12px;font-size:12px;color:#8D742D;font-weight:600;margin:8px 12px 0}
 .om-notice-err{background:#FCE9E6;border-color:#F5C9C2;color:#A93425}
 
-.om-progress{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.om-progress{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;margin:8px 12px 0}
 .om-progress-row{display:flex;justify-content:space-between;font-size:12px;color:var(--text2);font-weight:600}
 .om-progress-spend{color:var(--text3);font-weight:500}
 .om-progress-bar{height:6px;background:#F0EDE3;border-radius:999px;overflow:hidden}
 .om-progress-bar > div{height:100%;background:var(--gold);border-radius:999px;transition:width .2s}
 
-.om-empty{background:var(--card);border:1px dashed var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--text2);line-height:1.5}
+.om-empty{background:var(--card);border:1px dashed var(--border);border-radius:12px;padding:40px;text-align:center;color:var(--text2);line-height:1.5;margin:12px}
 .om-empty-small{padding:24px;text-align:center;color:var(--text3);font-size:13px}
 
-.om-grid{display:grid;grid-template-columns:minmax(340px, 380px) 1fr;gap:14px;min-height:0;flex:1}
+/* Grid: list left, fiche right */
+.om-grid{display:grid;grid-template-columns:minmax(320px, 370px) 1fr;gap:0;min-height:0;flex:1;overflow:hidden}
 
-.om-list{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-y:auto;min-height:0;max-height:calc(100vh - 240px)}
-.om-row{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:none;background:transparent;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s}
+.om-list{overflow-y:auto;min-height:0;border-right:1px solid var(--border);background:var(--bg,#FAF6EF)}
+.om-row{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:none;background:transparent;padding:14px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s;min-height:72px}
 .om-row:last-child{border-bottom:none}
 .om-row:hover{background:#FAF8F4}
 .om-row.active{background:var(--gold-light)}
 .om-row-main{min-width:0;flex:1}
-.om-row-name{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.om-row-name{font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .om-row-sub{font-size:11px;color:var(--text3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.om-row-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
 .om-row-phone{display:flex;align-items:center;flex-shrink:0;margin-left:4px}
 .om-badge{font-size:10px;padding:2px 6px;border-radius:6px;background:#F0EDE3;color:var(--text2);font-weight:600}
 .om-pill{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 .om-src-badge{font-size:10px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 
-/* ── Fiche (decluttered) ──────────────────────────────────────────────── */
-.om-fiche{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow-y:auto;min-height:0;max-height:calc(100vh - 240px)}
+/* Fiche */
+.om-fiche{overflow-y:auto;min-height:0;background:var(--card)}
 .fiche-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
 .fiche-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .fiche-eyebrow{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--text3);margin-bottom:4px}
@@ -1008,7 +1061,6 @@ const CSS = `
 
 .fiche-section-lbl{font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.3px;text-transform:uppercase;margin-bottom:6px}
 .fiche-empty{font-size:12px;color:var(--text3);font-style:italic}
-
 .fiche-buildings{display:flex;flex-direction:column}
 
 .bld-stack{display:flex;flex-direction:column;gap:8px}
@@ -1017,9 +1069,6 @@ const CSS = `
 .bld-addr{font-size:13px;font-weight:700;color:var(--text)}
 .bld-meta{font-size:11px;color:var(--text3)}
 
-/* Building finances — the primary content under each property. Always
-   open, bigger inputs, subtle gold frame so it reads as THE thing to
-   fill in (revenue + dépenses + unit mix). */
 .bld-fin{background:#fff;border:1px solid #E9D9AA;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:14px}
 .bld-fin-header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .bld-fin-title{font-size:11px;font-weight:700;color:#8D742D;letter-spacing:.6px;text-transform:uppercase}
@@ -1056,27 +1105,23 @@ const CSS = `
 .mo-filters input:focus{border-color:#D9C07A;box-shadow:0 0 0 2px #F5EDD6}
 .mo-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
 
-@media (max-width: 1100px){
-  .om-grid{grid-template-columns:1fr}
-}
-@media (max-width: 768px){
-  /* Owner list rows — larger touch targets */
+@media (max-width:768px){
+  .om-grid{display:flex;flex-direction:column;flex:1;min-height:0}
+  .om-list{flex:1;min-height:0;border-right:none;border-bottom:1px solid var(--border)}
   .om-row{min-height:72px;padding:14px 16px}
-  .om-row-name{font-size:16px;font-weight:600}
-  .om-row-sub{font-size:13px;margin-top:4px}
-  /* Status pill — taller tap area */
-  .om-pill{font-size:13px;padding:6px 12px;min-height:32px;display:inline-flex;align-items:center}
-  .om-badge{font-size:12px;padding:4px 8px}
-  /* Select/dropdowns */
-  .om-select{height:44px;font-size:16px}
-  .om-import-btn,.om-enrich-btn,.om-test-btn{height:44px;font-size:14px;padding:0 14px}
-  /* Fiche stage select full-width */
+  .om-row-name{font-size:15px}
+  .om-row-sub{font-size:12px;margin-top:4px}
+  .om-pill{font-size:12px;padding:5px 10px;min-height:30px;display:inline-flex;align-items:center}
+  .om-select{height:44px;font-size:16px;max-width:none;flex:1}
+  .om-search{font-size:16px;height:44px}
+  .om-filters-toggle{height:44px}
   .fiche-stage{width:100%;font-size:16px}
-  /* List max-height: full remaining viewport */
-  .om-list,.om-fiche{max-height:none}
 }
-@media (max-width: 720px){
+@media (max-width:720px){
   .bld-fin-row{grid-template-columns:1fr}
   .bld-fin-mix-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:1100px){
+  .om-grid{grid-template-columns:1fr}
 }
 `;
