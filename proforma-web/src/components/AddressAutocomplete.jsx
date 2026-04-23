@@ -7,8 +7,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 
 export default function AddressAutocomplete({ value, onChange, onSelect, placeholder, style }) {
   const [suggestions, setSuggestions] = useState([]);
-  const [dropRect, setDropRect] = useState(null);
-  const inputRef = useRef(null);
   const debounceRef = useRef(null);
   // AbortController lets us cancel the in-flight Photon request when the user
   // keeps typing. Without it, a slow response to an early keystroke can
@@ -51,10 +49,6 @@ export default function AddressAutocomplete({ value, onChange, onSelect, placeho
         })
         .filter(r => r.label && Number.isFinite(r.lat));
       setSuggestions(results);
-      if (inputRef.current && results.length > 0) {
-        const rect = inputRef.current.getBoundingClientRect();
-        setDropRect({ top: rect.bottom, left: rect.left, width: rect.width });
-      }
     } catch (err) {
       // Aborts are expected when the user keeps typing — ignore those.
       if (err?.name !== "AbortError") setSuggestions([]);
@@ -69,9 +63,8 @@ export default function AddressAutocomplete({ value, onChange, onSelect, placeho
   }, []);
 
   return (
-    <>
+    <div style={{ position: "relative", display: "block" }}>
       <input
-        ref={inputRef}
         value={value}
         onChange={e => {
           onChange(e.target.value);
@@ -80,18 +73,18 @@ export default function AddressAutocomplete({ value, onChange, onSelect, placeho
         }}
         onBlur={() => setTimeout(() => setSuggestions([]), 200)}
         placeholder={placeholder}
-        style={style}
+        style={{ ...style, width: "100%", boxSizing: "border-box" }}
       />
-      {suggestions.length > 0 && dropRect && (
+      {suggestions.length > 0 && (
         <div style={{
-          position:"fixed", top:dropRect.top, left:dropRect.left, width:dropRect.width,
-          background:"#fff", border:"1px solid #e0d9cc", borderRadius:6,
-          boxShadow:"0 4px 16px rgba(0,0,0,0.13)", zIndex:9999,
-          maxHeight:220, overflowY:"auto"
+          position: "absolute", top: "100%", left: 0, right: 0,
+          background: "#fff", border: "1px solid #e0d9cc", borderRadius: 6,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.13)", zIndex: 9999,
+          maxHeight: "max(150px, 40vh)", overflowY: "auto"
         }}>
           {suggestions.map((s, i) => (
             <div key={i}
-              style={{padding:"9px 12px",cursor:"pointer",fontSize:13,color:"#3a2e1e",borderBottom:"1px solid #f0ede8",lineHeight:1.4}}
+              style={{ padding: "9px 12px", cursor: "pointer", fontSize: 13, color: "#3a2e1e", borderBottom: "1px solid #f0ede8", lineHeight: 1.4 }}
               onMouseDown={() => { onSelect(s); setSuggestions([]); }}
             >
               {s.label}
@@ -99,6 +92,6 @@ export default function AddressAutocomplete({ value, onChange, onSelect, placeho
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }

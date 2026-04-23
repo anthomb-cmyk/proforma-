@@ -10,8 +10,9 @@ import { mergePhoneLists } from "../lib/phoneUtils.js";
 import { BuildingIcon, MapPinIcon, PhoneIcon } from "./Icons.jsx";
 
 // Fixed row height for the virtualized leads list. Must stay in sync
-// with the row layout below (padding + three text lines).
-export const LEAD_ROW_HEIGHT = 68;
+// with the row layout below (padding + three text lines). 80px gives
+// comfortable 44px+ tap area on mobile while fitting desktop well too.
+export const LEAD_ROW_HEIGHT = 80;
 
 export default function LeadListRow({ index, style, data }) {
   const lead = data.leads[index];
@@ -23,7 +24,7 @@ export default function LeadListRow({ index, style, data }) {
     <div
       style={{
         ...style,
-        padding: "9px 12px",
+        padding: "12px 14px",
         borderBottom: "1px solid var(--border)",
         cursor: "pointer",
         background: isSel ? "#FFFBF1" : "transparent",
@@ -33,12 +34,12 @@ export default function LeadListRow({ index, style, data }) {
       onClick={() => data.onSelect(lead.id)}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
           {lead.companyName || lead.contactName || "—"}
         </div>
         <span className={"pf-status " + stage.cls} style={{ fontSize: 10, flexShrink: 0 }}>{stage.label}</span>
       </div>
-      <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         <BuildingIcon size={11} style={{marginRight:4}} />{lead.buildingAddress || "—"}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 3, alignItems: "center" }}>

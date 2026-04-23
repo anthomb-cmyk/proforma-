@@ -1041,6 +1041,22 @@ const CSS = `
 @media (max-width: 1100px){
   .om-grid{grid-template-columns:1fr}
 }
+@media (max-width: 768px){
+  /* Owner list rows — larger touch targets */
+  .om-row{min-height:72px;padding:14px 16px}
+  .om-row-name{font-size:16px;font-weight:600}
+  .om-row-sub{font-size:13px;margin-top:4px}
+  /* Status pill — taller tap area */
+  .om-pill{font-size:13px;padding:6px 12px;min-height:32px;display:inline-flex;align-items:center}
+  .om-badge{font-size:12px;padding:4px 8px}
+  /* Select/dropdowns */
+  .om-select{height:44px;font-size:16px}
+  .om-import-btn,.om-enrich-btn,.om-test-btn{height:44px;font-size:14px;padding:0 14px}
+  /* Fiche stage select full-width */
+  .fiche-stage{width:100%;font-size:16px}
+  /* List max-height: full remaining viewport */
+  .om-list,.om-fiche{max-height:none}
+}
 @media (max-width: 720px){
   .bld-fin-row{grid-template-columns:1fr}
   .bld-fin-mix-grid{grid-template-columns:repeat(3,minmax(0,1fr))}

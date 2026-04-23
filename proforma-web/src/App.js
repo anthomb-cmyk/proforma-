@@ -1422,7 +1422,7 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
 button,input,select,textarea{font-family:inherit}
 a{color:inherit}
 
-.app-shell{display:grid;grid-template-columns:260px 1fr;height:100vh;overflow:hidden}
+.app-shell{display:grid;grid-template-columns:260px 1fr;height:100vh;height:100dvh;overflow:hidden}
 
 /* Sidebar */
 .sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
@@ -1446,7 +1446,7 @@ a{color:inherit}
 .deal-main{min-width:0;flex:1}
 .deal-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
 .deal-meta{display:flex;align-items:center;gap:6px;margin-top:4px}
-.stage-pill-mini{font-size:9px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
+.stage-pill-mini{font-size:11px;padding:2px 7px;border-radius:999px;font-weight:700;letter-spacing:.2px}
 
 .new-btn{margin:10px 12px 12px;border:none;background:var(--gold);color:#fff;border-radius:10px;padding:11px 12px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:var(--shadow)}
 .new-btn:hover{filter:brightness(1.04)}
@@ -1515,7 +1515,7 @@ a{color:inherit}
 .task-main{min-width:0;flex:1}
 .task-title{font-size:12px;font-weight:700;color:var(--text)}
 .task-sub{font-size:11px;color:var(--text2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.date-badge{font-size:10px;padding:3px 8px;border-radius:999px;font-weight:700}
+.date-badge{font-size:12px;padding:3px 8px;border-radius:999px;font-weight:700}
 
 .opp-list{display:flex;flex-direction:column;gap:8px}
 .opp{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:#fff;cursor:pointer}
@@ -1529,9 +1529,9 @@ a{color:inherit}
 .badge-cold{background:#EAF1FF;color:var(--blue)}
 
 /* Pipeline */
-.kanban-wrap{overflow-x:auto;padding-bottom:3px;touch-action:pan-x pan-y}
+.kanban-wrap{overflow-x:auto;padding-bottom:3px;touch-action:pan-x}
 .kanban{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
-.k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);overflow-y:auto}
+.k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);max-height:calc(100dvh - 170px);overflow-y:auto;touch-action:pan-y}
 .k-col{border-left:3px solid transparent}
 .k-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .k-name{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
@@ -1782,7 +1782,7 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .sidebar-scrim.open{opacity:1;pointer-events:auto}
   .mobile-hamburger{
     display:inline-flex;align-items:center;justify-content:center;
-    width:40px;height:40px;border:1px solid var(--border);
+    width:44px;height:44px;border:1px solid var(--border);
     background:#fff;border-radius:10px;cursor:pointer;
     font-size:20px;line-height:1;flex-shrink:0;
   }
@@ -1797,6 +1797,11 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
    phone-sized content: stacked rows, single-column grids, larger tap
    targets, form input font-size ≥ 16px (prevents iOS Safari auto-zoom on
    focus), and full-screen modals. */
+/* iOS zoom prevention: inputs <16px trigger Safari auto-zoom on focus.
+   Apply at 1024px so tablets and landscape phones are covered too. */
+@media (max-width:1024px){
+  input,textarea,select{font-size:16px !important}
+}
 @media (max-width:768px){
   body,html,#root{overflow-x:hidden}
   /* Topbar: stack title + actions, reduce padding */
@@ -1812,12 +1817,14 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .kanban{gap:8px}
   .kanban-col{min-width:220px;max-width:240px}
   /* Modals go full-screen */
-  .mo-box{width:100vw;max-width:100vw;min-height:100vh;border-radius:0;
+  .mo-box{width:100%;max-width:100%;box-sizing:border-box;min-height:100vh;min-height:100dvh;border-radius:0;
     padding:16px;box-shadow:none;border:none}
+  .mo-foot{padding-bottom:env(safe-area-inset-bottom,20px)}
   /* Forms: bump input font to prevent iOS zoom */
   input,select,textarea,button{font-size:16px}
-  /* Tap targets */
-  button,.btn,.nav-item{min-height:40px}
+  /* Tap targets — iOS HIG minimum 44×44px */
+  button,.btn,.nav-item{min-height:44px}
+  select{min-height:44px}
   /* Table horizontal scroll instead of overflow cut-off */
   table{min-width:0}
   /* Owner/Leads toolbar: wrap filters, full-width search */
@@ -1828,7 +1835,8 @@ textarea{resize:vertical;line-height:1.55;min-height:150px}
   .om-fiche-grid,.om-split{grid-template-columns:1fr !important}
   /* Chatbox: full-screen on mobile */
   .chat-root{bottom:0 !important;right:0 !important;left:0 !important;top:auto !important;width:100% !important;max-width:100% !important;border-radius:0 !important}
-  .chat-window{width:100vw !important;height:80vh !important;max-height:80vh !important;border-radius:0 !important}
+  /* 60dvh: shrinks with keyboard so the send button stays on screen */
+  .chat-window{width:100% !important;height:60dvh !important;max-height:60dvh !important;border-radius:0 !important;padding-bottom:env(safe-area-inset-bottom,0px) !important}
   /* Sidebar profile area: stack logout + push toggle below user info */
   .sb-profile{padding:10px;gap:4px}
   .p-name{font-size:14px}
@@ -1872,18 +1880,21 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
 html,body{overscroll-behavior:none}
 #root{overscroll-behavior:none;touch-action:pan-y}
 
-/* iOS Safari: use dynamic viewport height so 100vh doesn't hide behind the
-   URL bar. The 100vh fallback stays for non-supporting browsers. */
-@supports (height:100dvh){
-  .app-shell{min-height:100dvh}
-}
-
 /* iPhone notch safe area */
 @supports (padding:env(safe-area-inset-top)){
-  .topbar{padding-top:calc(14px + env(safe-area-inset-top))}
+  /* Topbar: top notch + landscape left/right insets */
+  .topbar{
+    padding-top:calc(14px + env(safe-area-inset-top));
+    padding-left:max(22px, calc(16px + env(safe-area-inset-left)));
+    padding-right:max(22px, calc(16px + env(safe-area-inset-right)));
+  }
   .sidebar{padding-top:env(safe-area-inset-top)}
-  .content{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
+  /* Content + list bottom: clear home indicator (M7 + M10) */
+  .content{padding-bottom:calc(32px + env(safe-area-inset-bottom))}
+  .om-list,.om-fiche{padding-bottom:env(safe-area-inset-bottom,16px)}
   .chat-window{padding-bottom:env(safe-area-inset-bottom)}
+  /* Mobile hamburger: keep clear of left notch */
+  .mobile-hamburger{margin-left:env(safe-area-inset-left,0px)}
 }
 `;
 
@@ -1910,6 +1921,39 @@ export default function App() {
   });
   useEffect(() => { try { localStorage.setItem("socle_lang", lang); } catch {} }, [lang]);
   const t = useCallback((key, ...args) => tr(lang, key, ...args), [lang]);
+
+  // Block iOS swipe-back gesture across the whole PWA. When the touch is
+  // clearly horizontal (|dx| > |dy| by 8px), we preventDefault() so the
+  // browser doesn't interpret it as a history-navigation swipe. Elements
+  // with class `allow-horizontal-scroll` (kanban, stage-track) are exempt.
+  useEffect(() => {
+    let startX = 0, startY = 0, tracking = false;
+    function onTouchStart(e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+    }
+    function onTouchMove(e) {
+      if (!tracking || e.touches.length !== 1) return;
+      const dx = Math.abs(e.touches[0].clientX - startX);
+      const dy = Math.abs(e.touches[0].clientY - startY);
+      if (dx > dy && dx > 8) {
+        if (!e.target.closest(".allow-horizontal-scroll")) {
+          e.preventDefault();
+        }
+      }
+    }
+    function onTouchEnd() { tracking = false; }
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove",  onTouchMove,  { passive: false });
+    document.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove",  onTouchMove);
+      document.removeEventListener("touchend",   onTouchEnd);
+    };
+  }, []);
 
   // Chat state (in-memory — conversation doesn't persist across reloads).
   const [chatOpen, setChatOpen]         = useState(false);
@@ -3703,7 +3747,7 @@ export default function App() {
             <>
               <Topbar title={t("topbar_pipeline")} subtitle={t("topbar_pipeline_sub")} {...topbarCommon} />
               <div className="content">
-                <div className="kanban-wrap">
+                <div className="kanban-wrap allow-horizontal-scroll">
                   <div className="kanban">
                     {STAGES.map(s => {
                       const col = pipeline[s.id] || [];
@@ -3956,7 +4000,7 @@ export default function App() {
                   </div>
 
                   <div className="stage-wrap">
-                    <div className="stage-track">
+                    <div className="stage-track allow-horizontal-scroll">
                       {STAGES.map(s => {
                         const cl = current.checklists?.[s.id] || [];
                         const pct = cl.length ? Math.round(cl.filter(i=>i.done).length/cl.length*100) : null;
