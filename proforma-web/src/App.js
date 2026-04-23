@@ -1366,6 +1366,7 @@ import AddressAutocomplete from "./components/AddressAutocomplete.jsx";
 import ActivityLogger from "./components/ActivityLogger.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import AgentPanel from "./components/AgentPanel.jsx";
+import VoiceDictation from "./components/VoiceDictation.jsx";
 // Heavy pages/viewers — code-split with React.lazy so their deps
 // (Leaflet via window.L, SheetJS via window.XLSX, react-window, and each
 // page's local helpers) only load when the corresponding view/modal is
@@ -4126,7 +4127,13 @@ export default function App() {
                     <div className="ws-grid">
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_deal")}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_deal")}</div>
+                            <VoiceDictation onTranscript={text => {
+                              const cur = current.notesDeal || "";
+                              upd(current.id, d => ({ ...d, notesDeal: cur + (cur && !cur.endsWith("\n") ? "\n" : "") + text }));
+                            }} />
+                          </div>
                           <button className={`ai-btn${aiLoadD?" loading":""}`} onClick={() => aiSummarize("deal")}>{aiLoadD?t("ws_ai_btn_busy"):t("ws_ai_btn")}</button>
                         </div>
                         <textarea value={current.notesDeal || ""} onChange={e => upd(current.id,d => ({ ...d, notesDeal:e.target.value }))} placeholder={t("ws_notes_deal_ph")} />
@@ -4135,7 +4142,13 @@ export default function App() {
 
                       <div className="card f-card">
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                          <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_vendor")}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <div className="f-title" style={{marginBottom:0}}>{t("ws_notes_vendor")}</div>
+                            <VoiceDictation onTranscript={text => {
+                              const cur = current.notesVendeur || "";
+                              upd(current.id, d => ({ ...d, notesVendeur: cur + (cur && !cur.endsWith("\n") ? "\n" : "") + text }));
+                            }} />
+                          </div>
                           <button className={`ai-btn${aiLoadV?" loading":""}`} onClick={() => aiSummarize("vendeur")}>{aiLoadV?t("ws_ai_btn_busy"):t("ws_ai_btn")}</button>
                         </div>
                         <textarea value={current.notesVendeur || ""} onChange={e => upd(current.id,d => ({ ...d, notesVendeur:e.target.value }))} placeholder={t("ws_notes_vendor_ph")} />
