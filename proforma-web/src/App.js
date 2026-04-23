@@ -1922,39 +1922,6 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("socle_lang", lang); } catch {} }, [lang]);
   const t = useCallback((key, ...args) => tr(lang, key, ...args), [lang]);
 
-  // Block iOS swipe-back gesture across the whole PWA. When the touch is
-  // clearly horizontal (|dx| > |dy| by 8px), we preventDefault() so the
-  // browser doesn't interpret it as a history-navigation swipe. Elements
-  // with class `allow-horizontal-scroll` (kanban, stage-track) are exempt.
-  useEffect(() => {
-    let startX = 0, startY = 0, tracking = false;
-    function onTouchStart(e) {
-      if (e.touches.length !== 1) { tracking = false; return; }
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-      tracking = true;
-    }
-    function onTouchMove(e) {
-      if (!tracking || e.touches.length !== 1) return;
-      const dx = Math.abs(e.touches[0].clientX - startX);
-      const dy = Math.abs(e.touches[0].clientY - startY);
-      if (dx > dy && dx > 8) {
-        if (!e.target.closest(".allow-horizontal-scroll")) {
-          e.preventDefault();
-        }
-      }
-    }
-    function onTouchEnd() { tracking = false; }
-    document.addEventListener("touchstart", onTouchStart, { passive: true });
-    document.addEventListener("touchmove",  onTouchMove,  { passive: false });
-    document.addEventListener("touchend",   onTouchEnd,   { passive: true });
-    return () => {
-      document.removeEventListener("touchstart", onTouchStart);
-      document.removeEventListener("touchmove",  onTouchMove);
-      document.removeEventListener("touchend",   onTouchEnd);
-    };
-  }, []);
-
   // Chat state (in-memory — conversation doesn't persist across reloads).
   const [chatOpen, setChatOpen]         = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
