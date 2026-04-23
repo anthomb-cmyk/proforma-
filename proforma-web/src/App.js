@@ -2096,9 +2096,10 @@ export default function App() {
         if (Array.isArray(srv.flaggedLeads)) setFlaggedLeads(srv.flaggedLeads);
         if (typeof srv.currentId !== "undefined") setCurrentId(srv.currentId || null);
         if (typeof srv.gcalOk === "boolean")      setGcalOk(srv.gcalOk);
-      } else {
-        // Server is empty (first boot after deploy or brand-new workspace).
-        // If this browser has data, seed the server so the other user sees it.
+      } else if (res?.ok) {
+        // Server responded ok but is genuinely empty (first boot / new workspace).
+        // Do NOT seed if the fetch failed (res.ok false) — that's a server error,
+        // not an empty state, and seeding would overwrite real data on recovery.
         const localHasData =
           (Array.isArray(owners) && owners.length > 0) ||
           (Array.isArray(deals)  && deals.length  > 0) ||
@@ -2141,9 +2142,12 @@ export default function App() {
         });
       }
       // Don't push to server until after the initial hydrate has landed —
-      // otherwise we'd clobber the shared state with stale local data.
+      // and never push an empty payload — a device with no localStorage data
+      // on a failed hydration must not overwrite real server state.
       if (hydratedRef.current) {
-        pushServerState(payload);
+        const nonEmpty = owners.length > 0 || deals.length > 0 || leads.length > 0;
+        if (nonEmpty) pushServerState(payload);
+        else console.warn("[sync] refusing pushServerState — local state is empty");
       }
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
