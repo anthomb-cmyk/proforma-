@@ -27,6 +27,44 @@ const USERS = [
   { id: "gaylord", name: "Gaylord",        role: "employee", pin: "3815", initials: "G",  roleLabel: { fr: "Acquisitions",  en: "Acquisitions" } },
 ];
 
+function inferOwnerNameFromRawRow(rawRow) {
+  if (!rawRow || typeof rawRow !== "object") return "";
+  const normalize = (k) =>
+    String(k || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[_\-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const entries = Object.entries(rawRow);
+  const preferred = [
+    /\bproprietaire\d*\s*nom\b/,
+    /\bowner\s*name\b/,
+    /\bnom\s*proprio\b/,
+    /\bproprietaire\d*\b/,
+  ];
+  for (const rx of preferred) {
+    for (const [k, v] of entries) {
+      const key = normalize(k);
+      const value = String(v || "").trim();
+      if (!value) continue;
+      if (!rx.test(key)) continue;
+      if (/\b(adresse|address|statut|status|telephone|phone|courriel|email)\b/.test(key)) continue;
+      return value;
+    }
+  }
+  for (const [k, v] of entries) {
+    const key = normalize(k);
+    const value = String(v || "").trim();
+    if (!value) continue;
+    if (!/\b(proprietaire|owner)\b/.test(key)) continue;
+    if (/\b(adresse|address|statut|status|telephone|phone|courriel|email)\b/.test(key)) continue;
+    return value;
+  }
+  return "";
+}
+
 // Tiny i18n dictionary. Deliberately narrow: covers the NEW strings this
 // commit adds (auth, flag workflow, chatbox, top-level nav, topbar titles)
 // plus a handful of high-traffic buttons. Deep-internal French strings
@@ -343,6 +381,12 @@ const I18N = {
     ws_call_listen: "Écouter",
     ws_call_retry_transcript: "Relancer transcript",
     ws_call_show_transcript: "Voir la transcription",
+    ws_call_organize_btn: "✦ Organiser en note",
+    ws_call_organize_busy: "Organisation...",
+    ws_call_organize_box: "✦ Note CRM formatée",
+    ws_call_organize_append: "Ajouter aux notes deal",
+    ws_call_organize_clear: "Effacer",
+    ws_call_organize_appended: "Ajouté aux notes deal.",
     err_status: (s) => `Erreur ${s}`,
 
     // Suivi & priorité card
@@ -947,6 +991,12 @@ const I18N = {
     ws_call_listen: "Listen",
     ws_call_retry_transcript: "Retry transcript",
     ws_call_show_transcript: "Show transcription",
+    ws_call_organize_btn: "✦ Organize into note",
+    ws_call_organize_busy: "Organizing...",
+    ws_call_organize_box: "✦ Formatted CRM note",
+    ws_call_organize_append: "Add to deal notes",
+    ws_call_organize_clear: "Clear",
+    ws_call_organize_appended: "Added to deal notes.",
     err_status: (s) => `Error ${s}`,
 
     // Suivi & priorité card
@@ -2002,6 +2052,11 @@ export default function App() {
   const [newEv, setNewEv]         = useState({ title:"", date:"", time:"", dealId:"" });
   const [aiLoadD, setAiLoadD]     = useState(false);
   const [aiLoadV, setAiLoadV]     = useState(false);
+  // Per-call transient state for the "✦ Organize into note" button on call
+  // transcripts. Keyed by call.id. Not persisted — if the user refreshes,
+  // they re-run the format (cheap) or append to notesDeal first (persisted).
+  const [aiCallOut, setAiCallOut]   = useState({});
+  const [aiCallBusy, setAiCallBusy] = useState({});
   const [callsByDeal, setCallsByDeal] = useState({});
   const [callsLoading, setCallsLoading] = useState(false);
   const [calling, setCalling] = useState(false);
@@ -2529,7 +2584,14 @@ export default function App() {
         let g = grouped.get(synthKey);
         if (!g) {
           const planOwner = row?.planOwner || {};
-          const ownerDisplayName = String(planOwner.displayName || row?.companyName || row?.leadContact || row?.inputName || "").trim();
+          const ownerDisplayName = String(
+            planOwner.displayName ||
+            row?.leadContact ||
+            inferOwnerNameFromRawRow(row?.rawRow) ||
+            row?.companyName ||
+            row?.inputName ||
+            "",
+          ).trim();
           const postalAddress = String(planOwner.postalRaw || "").trim();
           g = {
             ownerKey: rawOwnerKey,
@@ -2683,8 +2745,10 @@ export default function App() {
     for (const row of Array.isArray(rows) ? rows : []) {
       const phones = mergePhoneLists(row?.phone, row?.inputPhones, extractPhonesFromRow(row?.rawRow));
       if (!phones.length) { skipped++; continue; }
-      const companyName = String(row?.companyName || row?.inputName || row?.matchedName || "").trim();
-      const contactName = String(row?.leadContact || "").trim();
+      const ownerName = String(row?.leadContact || inferOwnerNameFromRawRow(row?.rawRow) || "").trim();
+      const companyFallback = String(row?.companyName || row?.inputName || row?.matchedName || "").trim();
+      const companyName = ownerName || companyFallback;
+      const contactName = ownerName || String(row?.leadContact || "").trim();
       const buildingAddress = String(row?.buildingAddress || row?.inputAddress || row?.matchedAddress || "").trim();
       const key = buildLeadIdentityKey({ companyName, contactName, buildingAddress, inputName: row?.inputName, matchedName: row?.matchedName, inputAddress: row?.inputAddress, matchedAddress: row?.matchedAddress, phones });
       const createdAt = String(row?.searchedAt || new Date().toISOString());
@@ -2895,6 +2959,52 @@ export default function App() {
     } finally {
       type === "deal" ? setAiLoadD(false) : setAiLoadV(false);
     }
+  };
+
+  // Organize a call transcript into structured CRM notes via the backend
+  // /api/ai/summarize endpoint (type: "call"). Result is stored per-call
+  // in aiCallOut so multiple calls can have outputs open at once. User
+  // can then click "Add to deal notes" to append the formatted block into
+  // the deal's notesDeal field with a dated header.
+  const organizeCallIntoNotes = async (call) => {
+    if (!call?.transcript?.trim()) return;
+    const callId = call.id;
+    setAiCallBusy(prev => ({ ...prev, [callId]: true }));
+    try {
+      const res = await fetch("/api/ai/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "call", text: call.transcript })
+      });
+      const data = await res.json();
+      const output = data.ok ? data.summary : (data.error || t("ws_ai_err_api"));
+      setAiCallOut(prev => ({ ...prev, [callId]: output }));
+    } catch {
+      setAiCallOut(prev => ({ ...prev, [callId]: t("ws_ai_err_server") }));
+    } finally {
+      setAiCallBusy(prev => ({ ...prev, [callId]: false }));
+    }
+  };
+
+  // Append a formatted call note to the current deal's notesDeal, prefixed
+  // with a header identifying the source call + its timestamp. Preserves
+  // any existing notes by concatenating with a blank-line separator.
+  const appendCallNoteToDeal = (call, formatted) => {
+    if (!current || !formatted?.trim()) return;
+    const dateLabel = call.created_at ? fmtCallDateTime(call.created_at) : "";
+    const contactLabel = call.lead_name || call.to || t("ws_call_contact_fallback");
+    const header = `— ✦ ${t("ws_call_organize_box")} · ${contactLabel}${dateLabel ? ` · ${dateLabel}` : ""} —`;
+    const block = `${header}\n${formatted.trim()}`;
+    upd(current.id, d => {
+      const existing = (d.notesDeal || "").trim();
+      const next = existing ? `${existing}\n\n${block}` : block;
+      return { ...d, notesDeal: next };
+    });
+    // Clear the inline preview — the note is now persisted in the deal.
+    setAiCallOut(prev => {
+      const { [call.id]: _removed, ...rest } = prev;
+      return rest;
+    });
   };
 
   // Fetch upcoming events from Google Calendar using a given access token.
@@ -4104,6 +4214,40 @@ export default function App() {
                                           <summary>{t("ws_call_show_transcript")}</summary>
                                           <div className="call-transcript-text">{call.transcript}</div>
                                         </details>
+                                      )}
+                                      {call.transcript && (
+                                        <div style={{ marginTop: 8 }}>
+                                          <button
+                                            className={`ai-btn${aiCallBusy[call.id] ? " loading" : ""}`}
+                                            onClick={() => organizeCallIntoNotes(call)}
+                                            disabled={!!aiCallBusy[call.id]}
+                                          >
+                                            {aiCallBusy[call.id] ? t("ws_call_organize_busy") : t("ws_call_organize_btn")}
+                                          </button>
+                                        </div>
+                                      )}
+                                      {aiCallOut[call.id] && (
+                                        <div className="ai-box" style={{ marginTop: 8 }}>
+                                          <div className="ai-box-lbl">{t("ws_call_organize_box")}</div>
+                                          <div style={{ whiteSpace: "pre-wrap" }}>{aiCallOut[call.id]}</div>
+                                          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                                            <button
+                                              className="btn btn-sm"
+                                              onClick={() => appendCallNoteToDeal(call, aiCallOut[call.id])}
+                                            >
+                                              {t("ws_call_organize_append")}
+                                            </button>
+                                            <button
+                                              className="btn btn-sm"
+                                              onClick={() => setAiCallOut(prev => {
+                                                const { [call.id]: _, ...rest } = prev;
+                                                return rest;
+                                              })}
+                                            >
+                                              {t("ws_call_organize_clear")}
+                                            </button>
+                                          </div>
+                                        </div>
                                       )}
                                       {!call.transcript && call.transcript_error && (
                                         <div className="status-note error" style={{ marginTop: 8 }}>{call.transcript_error}</div>

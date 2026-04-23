@@ -1178,10 +1178,19 @@ async function transcribeTwilioRecording(callLogId, recordingUrl, recordingSid) 
   const file = await toFile(buffer, `${recordingSid || callLogId || "call-recording"}.mp3`, {
     type: "audio/mpeg"
   });
+  // Quebec acquisition calls frequently code-switch between French and
+  // English within the same sentence. Forcing `language: "fr"` was causing
+  // Whisper to shoehorn English words into French phonemes (e.g. "wrap"
+  // becoming "rap", "deal" becoming "dil"). We do two things instead:
+  //   1) Drop the `language` hint — Whisper auto-detects. We'd rather it
+  //      pick the wrong global language than mis-transcribe half the words.
+  //   2) Pass a `prompt` with bilingual Québécois context and proper nouns
+  //      likely to appear. Whisper uses the prompt to bias token choice at
+  //      language boundaries and to spell proper nouns consistently.
   const transcription = await openai.audio.transcriptions.create({
     file,
     model: OPENAI_TRANSCRIPTION_MODEL,
-    language: "fr"
+    prompt: "Conversation téléphonique bilingue (français québécois et anglais) entre un acquéreur immobilier et un propriétaire. Transcrire chaque mot dans sa langue d'origine. Exemples de termes fréquents: SOCLE Acquisitions, Longueuil, Montréal, Laval, triplex, plex, condo, cap rate, deal, closing, walk-through, offre d'achat, promesse d'achat, hypothèque, bail, chauffage, rénovation."
   });
 
   const transcriptText = String(transcription?.text || "").trim();
@@ -3996,6 +4005,39 @@ app.post("/api/ai/summarize", async (req, res) => {
     ].join("\n");
     modelMaxTokens = 400;
     temperature = 0.2;
+  } else if (type === "call") {
+    // Transcripts come from Whisper and aren't speaker-labelled. Prompt
+    // instructs the model to summarize key info without inventing
+    // attribution. IMPORTANT: personal/rapport details (hobbies, kids,
+    // vacations, health, sports team, anecdotes) MUST be preserved — an
+    // acquisition broker uses these on the callback to build warmth.
+    // Output shares the `lead` section scheme so pasting into notesDeal
+    // looks consistent with other IA-formatted entries.
+    contextLabel = "Transcription d'appel (acquisition immobilière)";
+    systemPrompt = [
+      "Tu es un assistant administratif qui organise la transcription brute d'un appel téléphonique entre un acquéreur immobilier (SOCLE Acquisitions, équipe au Québec) et un propriétaire-cible.",
+      "La transcription est automatique (Whisper), non segmentée par locuteur, et contient des hésitations, répétitions et fautes de reconnaissance vocale.",
+      "Tu NE FAIS PAS d'analyse stratégique, tu NE DONNES PAS de recommandations et tu N'INVENTES PAS d'information absente de la transcription.",
+      "Objectif unique: produire des notes CRM internes claires à partir de ce qui a été réellement dit.",
+      "IMPORTANT: les détails personnels (famille, enfants, vacances, hobbies, sports, anecdotes, santé, voiture, région d'origine, blagues, surnoms, références culturelles, etc.) SONT UTILES et DOIVENT être conservés. L'acquéreur s'en sert au prochain appel pour créer un lien de confiance ('Comment s'est passé le voyage en Floride?', 'Votre fils a fini ses examens?'). Ce n'est PAS du bruit à éliminer — c'est un actif de relation.",
+      "Structure la sortie en sections courtes, dans cet ordre, en ne gardant que celles pour lesquelles il y a de l'info:",
+      "- Statut d'appel (rejoint / VM / raccroché / refuse de parler)",
+      "- Ce que le propriétaire a dit sur le deal (objections, intérêt, disponibilité, ton général)",
+      "- Info sur l'immeuble (unités, loyers, hypothèque, rénovations, prix évoqué, financement)",
+      "- Détails personnels pour le rapport (famille, travail, hobbies, projets, anecdotes, santé, préférences — tout ce qui humanise le prochain appel)",
+      "- Contexte de vie pertinent (délai, motivation, situation familiale, raison de vendre/ne pas vendre)",
+      "- Prochaine étape (une phrase d'action concrète, si mentionnée)",
+      "Règles strictes:",
+      "- Chaque section = titre court en gras suivi d'un saut de ligne, puis bullets '- '",
+      "- Une idée par bullet, jamais de paragraphe long",
+      "- Conserver les nuances (semble, peut-être, à confirmer) — ne pas trancher",
+      "- Enlever uniquement les fillers/hésitations/répétitions mot-à-mot — JAMAIS le contenu",
+      "- Interdiction d'attribuer des propos à un locuteur précis sauf si c'est clairement identifiable dans le texte",
+      "- Interdiction d'analyse psychologique ou de conseils de négociation",
+      "- Interdiction d'inventer chiffres, dates, noms ou intentions non présents",
+    ].join("\n");
+    modelMaxTokens = 600;
+    temperature = 0.2;
   } else {
     contextLabel = type === "vendeur" ? "Notes vendeur" : "Notes deal acquisition";
     systemPrompt = [
@@ -4029,7 +4071,10 @@ app.post("/api/ai/summarize", async (req, res) => {
     // `lead` output has its own mini-sections + bullets; the generic bullet
     // formatter would flatten them. Return the raw model output for `lead`
     // and keep the CRM-bullet normalization for `deal` / `vendeur`.
-    const summary = type === "lead" ? rawSummary : formatAsCrmBulletNotes(rawSummary, text);
+    // `lead` and `call` both emit titled sections + bullets. The generic
+    // bullet formatter would flatten those sections — return the raw model
+    // output for both and keep CRM-bullet normalization for `deal`/`vendeur`.
+    const summary = (type === "lead" || type === "call") ? rawSummary : formatAsCrmBulletNotes(rawSummary, text);
     res.json({ ok: true, summary });
   } catch (err) {
     res.status(502).json({ ok: false, error: err?.message || "Erreur API OpenAI." });
@@ -4055,10 +4100,13 @@ app.post("/api/transcribe", (req, res) => {
                 : (req.file.mimetype || "").includes("ogg")  ? "ogg"
                 : "webm";
       const file = await toFile(req.file.buffer, `recording.${ext}`, { type: req.file.mimetype || "audio/webm" });
+      // Same bilingual-Québec handling as transcribeTwilioRecording — no
+      // hard language hint; a prompt gives Whisper context and spelling
+      // cues so FR/EN code-switching is preserved instead of garbled.
       const transcription = await openai.audio.transcriptions.create({
         file,
         model: OPENAI_TRANSCRIPTION_MODEL,
-        language: "fr",
+        prompt: "Dictée vocale bilingue (français québécois et anglais) pour un CRM d'acquisition immobilière SOCLE. Transcrire chaque mot dans sa langue d'origine. Termes fréquents: triplex, plex, cap rate, closing, walk-through, offre d'achat, hypothèque, Longueuil, Montréal, Laval.",
       });
       res.json({ ok: true, text: String(transcription?.text || "").trim() });
     } catch (e) {
@@ -4761,6 +4809,165 @@ app.post("/api/phone-lookup/plan", async (req, res) => {
       error: String(err?.message || err),
       gptAvailable: Boolean(openai),
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Optional GPT-assisted column mapping for PhoneFinder CSV/XLSX imports.
+// Input:
+//   {
+//     headers: string[],
+//     sampleRows?: object[]   // first few parsed rows for disambiguation
+//   }
+// Output:
+//   {
+//     ok: true,
+//     mapping: { address, city, province, postalCode, country, company, leadContact, phone, name },
+//     source: "gpt" | "deterministic"
+//   }
+//
+// The UI remains fully editable; this endpoint only proposes a starting map.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeImportHeaderKey(key) {
+  return String(key || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[_\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function autoDetectImportColumns(headers = []) {
+  const out = {};
+  const normalized = headers.map((h) => ({ raw: String(h || ""), norm: normalizeImportHeaderKey(h) }));
+  const used = new Set();
+  const findHeader = (patterns) => {
+    const match = normalized.find(({ raw, norm }) => !used.has(raw) && patterns.some((rx) => rx.test(norm)));
+    if (!match) return "";
+    used.add(match.raw);
+    return match.raw;
+  };
+  const patterns = {
+    address: [
+      /\badresses? immeubles? clean\b/,
+      /\badresses? immeubles?\b/,
+      /\badresse immeuble\b/,
+      /\badresse\b(?!.*postale)/,
+      /\baddress\b(?!.*postal)/,
+      /\brue\b/,
+      /\bstreet\b/,
+    ],
+    city: [
+      /\bville immeuble\b/,
+      /\bville\b/,
+      /\bcity\b/,
+    ],
+    province: [
+      /\bprovince\b/,
+      /\betat\b/,
+      /\bstate\b/,
+    ],
+    postalCode: [
+      /\bcode postal immeuble\b/,
+      /\bcode postal\b/,
+      /\bpostal\b/,
+      /\bzip\b/,
+    ],
+    country: [
+      /\bpays\b/,
+      /\bcountry\b/,
+    ],
+    company: [
+      /\bcompany\b/,
+      /\bcompagnie\b/,
+      /\bentreprise\b/,
+      /\braison sociale\b/,
+      /\borganisation\b/,
+    ],
+    leadContact: [
+      /\bproprietaire\d*\s*nom\b/,
+      /\bowner\s*name\b/,
+      /\bnom\s*proprio\b/,
+      /\bnom complet\b/,
+      /\bproprietaire\b/,
+      /\bcontact\b/,
+      /\bprenom\b/,
+      /\bnom\b/,
+      /\bowner\b/,
+    ],
+    phone: [
+      /\btelephone\b/,
+      /\bphone\b/,
+      /\bcell\b/,
+      /\bmobile\b/,
+      /\btel\b/,
+    ],
+    name: [
+      /\bnom entreprise\b/,
+      /\bbusiness name\b/,
+      /\bname\b/,
+      /\bnom\b/,
+      /\bcompany\b/,
+      /\bentreprise\b/,
+    ],
+  };
+  for (const key of ["address", "city", "province", "postalCode", "country", "company", "leadContact", "phone", "name"]) {
+    const found = findHeader(patterns[key]);
+    if (found) out[key] = found;
+  }
+  return out;
+}
+
+app.post("/api/phone-lookup/map-columns", async (req, res) => {
+  const headers = Array.isArray(req.body?.headers) ? req.body.headers.map((h) => String(h || "").trim()).filter(Boolean) : [];
+  const sampleRows = Array.isArray(req.body?.sampleRows) ? req.body.sampleRows.slice(0, 6) : [];
+  if (!headers.length) {
+    return res.status(400).json({ ok: false, error: "headers[] requis." });
+  }
+
+  const deterministic = autoDetectImportColumns(headers);
+  if (!openai) {
+    return res.json({ ok: true, mapping: deterministic, source: "deterministic", gptAvailable: false });
+  }
+
+  const system = [
+    "You map spreadsheet headers to CRM import fields for Quebec real-estate prospecting.",
+    "Return strict JSON with this shape only:",
+    "{ \"mapping\": { \"address\": \"\", \"city\": \"\", \"province\": \"\", \"postalCode\": \"\", \"country\": \"\", \"company\": \"\", \"leadContact\": \"\", \"phone\": \"\", \"name\": \"\" } }",
+    "Rules:",
+    "- Each value must be exactly one header from headers[] or empty string.",
+    "- Prefer owner contact name for leadContact (e.g., Propriétaire*_Nom, owner name).",
+    "- Prefer business/company column for company when present.",
+    "- Prefer building address columns for address (not mailing address).",
+    "- Never invent headers."
+  ].join("\n");
+
+  const userPayload = JSON.stringify({ headers, sampleRows, deterministic }, null, 2);
+  try {
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_TRANSLATOR_MODEL || "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userPayload },
+      ],
+    });
+    const raw = response?.choices?.[0]?.message?.content || "";
+    const parsed = JSON.parse(raw || "{}");
+    const modelMap = parsed?.mapping && typeof parsed.mapping === "object" ? parsed.mapping : {};
+    const allowed = new Set(headers);
+    const finalMap = {};
+    for (const key of ["address", "city", "province", "postalCode", "country", "company", "leadContact", "phone", "name"]) {
+      const candidate = String(modelMap[key] || "").trim();
+      if (candidate && allowed.has(candidate)) finalMap[key] = candidate;
+      else if (deterministic[key]) finalMap[key] = deterministic[key];
+    }
+    return res.json({ ok: true, mapping: finalMap, source: "gpt", gptAvailable: true });
+  } catch (err) {
+    console.error("[phone-lookup/map-columns] GPT failed:", err);
+    return res.json({ ok: true, mapping: deterministic, source: "deterministic", gptAvailable: true });
   }
 });
 
