@@ -919,21 +919,90 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         ...(pending.rows || []),
         ...(pending.skippedWithPhone || []),
       ];
-      const resp = await fetch("/api/phone-lookup/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: allRows.map((r) => r.rawRow || r) }),
-      });
-      const data = await resp.json();
-      if (!data.ok) {
-        setApiError(data.error || t("pf_err_server"));
-        return;
+      const rawRows = allRows.map((r) => r.rawRow || r);
+
+      // Chunk the planner calls so no single HTTP request exceeds Railway's
+      // ~30s "first byte" proxy timeout. At ~10-15s per chunk of 100 rows we
+      // stay safely under that even in the worst case (all rows need GPT).
+      // Chunks are POSTed two-at-a-time to shrink total wall time without
+      // torching the OpenAI rate limit (planner internally runs concurrency 3
+      // → 2 × 3 = 6 concurrent completions max).
+      const CHUNK_SIZE = 100;
+      const PARALLEL = 2;
+
+      const chunks = [];
+      for (let i = 0; i < rawRows.length; i += CHUNK_SIZE) {
+        chunks.push({ offset: i, rows: rawRows.slice(i, i + CHUNK_SIZE) });
       }
+
+      async function planChunk(chunk) {
+        const resp = await fetch("/api/phone-lookup/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: chunk.rows }),
+        });
+        // If Railway's proxy (or anything upstream) returns non-JSON — e.g.
+        // the "first byte timeout" HTML page — surface a readable error
+        // instead of letting JSON.parse throw its cryptic token error.
+        const raw = await resp.text();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          throw new Error(
+            `Planner returned non-JSON (${resp.status}). First 120 chars: ${raw.slice(0, 120)}`
+          );
+        }
+        if (!data.ok) {
+          throw new Error(data.error || t("pf_err_server"));
+        }
+        // Re-base the planner's per-chunk rowIdx into the global row space.
+        const plans = (Array.isArray(data.plans) ? data.plans : []).map((p) => ({
+          ...p,
+          rowIdx: chunk.offset + (Number.isInteger(p?.rowIdx) ? p.rowIdx : 0),
+        }));
+        return {
+          plans,
+          stats: data.stats || {},
+          gptAvailable: Boolean(data.gptAvailable),
+        };
+      }
+
+      const mergedPlans = new Array(rawRows.length);
+      const mergedStats = {
+        total: 0,
+        useFilePhone: 0,
+        enrichOwnerPostal: 0,
+        skipNoLead: 0,
+        gptCallCount: 0,
+        gptTokensIn: 0,
+        gptTokensOut: 0,
+      };
+      let gptAvailable = true;
+
+      for (let i = 0; i < chunks.length; i += PARALLEL) {
+        const slice = chunks.slice(i, i + PARALLEL);
+        const results = await Promise.all(slice.map(planChunk));
+        for (const r of results) {
+          for (const p of r.plans) {
+            if (Number.isInteger(p.rowIdx)) mergedPlans[p.rowIdx] = p;
+          }
+          mergedStats.total += r.stats.total || 0;
+          mergedStats.useFilePhone += r.stats.useFilePhone || 0;
+          mergedStats.enrichOwnerPostal += r.stats.enrichOwnerPostal || 0;
+          mergedStats.skipNoLead += r.stats.skipNoLead || 0;
+          mergedStats.gptCallCount += r.stats.gptCallCount || 0;
+          mergedStats.gptTokensIn += r.stats.gptTokensIn || 0;
+          mergedStats.gptTokensOut += r.stats.gptTokensOut || 0;
+          if (!r.gptAvailable) gptAvailable = false;
+        }
+      }
+
       setPlanResult({
-        plans: Array.isArray(data.plans) ? data.plans : [],
-        stats: data.stats || {},
+        plans: mergedPlans,
+        stats: mergedStats,
         allRows,
-        gptAvailable: Boolean(data.gptAvailable),
+        gptAvailable,
       });
     } catch (err) {
       setApiError(String(err?.message || err));
