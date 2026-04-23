@@ -1103,13 +1103,30 @@ async function callTwilioApi(endpoint, payload) {
     throw createHttpError(500, "Les identifiants Twilio ne sont pas configurés.");
   }
 
+  // Build the form body so that array values become repeated fields:
+  //   { StatusCallbackEvent: ["initiated", "ringing"] }
+  //     → "StatusCallbackEvent=initiated&StatusCallbackEvent=ringing"
+  // Twilio's REST API rejects the space-joined single-field form for
+  // StatusCallbackEvent with error 21626 ("Invalid events").
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) {
+        if (v != null) form.append(key, String(v));
+      }
+    } else {
+      form.append(key, String(value));
+    }
+  }
+
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}${endpoint}`, {
     method: "POST",
     headers: {
       Authorization: authHeader,
       "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: new URLSearchParams(payload).toString()
+    body: form.toString()
   });
 
   const responseText = await response.text();
@@ -4713,6 +4730,12 @@ app.post("/api/phone-lookup/plan", async (req, res) => {
   if (!Array.isArray(rows) || !rows.length) {
     return res.status(400).json({ ok: false, error: "rows[] requis." });
   }
+  // Workflow toggle: by default we DO NOT skip no-phone rows as "no lead" at
+  // planner stage. We still short-circuit rows that already have owner phones
+  // (use_file_phone), but every unresolved row gets an enrich_owner_postal
+  // plan so it can proceed to Google Places. Callers can opt back into skip
+  // behavior with allowSkipNoLead=true.
+  const allowSkipNoLead = req.body?.allowSkipNoLead === true;
   try {
     const { plans, stats } = await planPhoneLookups({
       rows,
@@ -4720,6 +4743,7 @@ app.post("/api/phone-lookup/plan", async (req, res) => {
       // planner falls back to deterministic plans per row — still useful for
       // routing use_file_phone / skip_no_lead decisions.
       openaiClient: openai,
+      allowSkipNoLead,
     });
     return res.json({
       ok: true,
@@ -4884,7 +4908,10 @@ app.post("/api/twilio/calls/start", async (req, res) => {
       Method: "POST",
       StatusCallback: statusCallback,
       StatusCallbackMethod: "POST",
-      StatusCallbackEvent: "initiated ringing answered completed"
+      // Array → repeated form fields. Twilio rejects a single space-joined
+      // value here with error 21626 and then never fires anything beyond
+      // the default "completed" event.
+      StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"]
     });
 
     callLog.call_sid = createdCall.sid || null;
@@ -4921,12 +4948,14 @@ app.post("/api/twilio/voice/outbound-bridge", express.urlencoded({ extended: fal
 
   const statusCallbackUrl = `${toPublicUrl("/api/twilio/voice/status")}?callLogId=${encodeURIComponent(callLogId)}&dealId=${encodeURIComponent(dealId)}`;
   const recordingCallbackUrl = `${toPublicUrl("/api/twilio/voice/recording")}?callLogId=${encodeURIComponent(callLogId)}&dealId=${encodeURIComponent(dealId)}`;
+
+  // <Dial> attributes: answerOnBridge, timeout, record, recordingStatusCallback*
+  // are valid here. But statusCallback/Method/Event are NOT valid <Dial>
+  // attributes — they trigger XML validation warning 12200 and are silently
+  // ignored. They belong on the <Number> child noun.
   const dialAttributes = [
     "answerOnBridge=\"true\"",
-    "timeout=\"20\"",
-    `statusCallback=\"${escapeXml(statusCallbackUrl)}\"`,
-    "statusCallbackMethod=\"POST\"",
-    "statusCallbackEvent=\"initiated ringing answered completed\""
+    "timeout=\"20\""
   ];
 
   if (TWILIO_RECORD_CALLS) {
@@ -4935,7 +4964,13 @@ app.post("/api/twilio/voice/outbound-bridge", express.urlencoded({ extended: fal
     dialAttributes.push("recordingStatusCallbackMethod=\"POST\"");
   }
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(leadPhone)}</Dial>\n</Response>`;
+  const numberAttributes = [
+    `statusCallback=\"${escapeXml(statusCallbackUrl)}\"`,
+    "statusCallbackMethod=\"POST\"",
+    "statusCallbackEvent=\"initiated ringing answered completed\""
+  ];
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>\n    <Number ${numberAttributes.join(" ")}>${escapeXml(leadPhone)}</Number>\n  </Dial>\n</Response>`;
   return sendTwiml(res, twiml);
 });
 
@@ -4966,17 +5001,13 @@ app.post("/api/twilio/voice/inbound", express.urlencoded({ extended: false }), a
 
     const statusCallbackUrl = `${toPublicUrl("/api/twilio/voice/status")}?callLogId=${encodeURIComponent(callLog.id)}`;
     const recordingCallbackUrl = `${toPublicUrl("/api/twilio/voice/recording")}?callLogId=${encodeURIComponent(callLog.id)}`;
+
+    // statusCallback* attributes go on <Number>, not <Dial>. record and
+    // recordingStatusCallback* stay on <Dial> — those ARE valid there.
     const dialAttributes = [
       "answerOnBridge=\"true\"",
       "timeout=\"20\""
     ];
-
-    if (statusCallbackUrl) {
-      dialAttributes.push(`statusCallback=\"${escapeXml(statusCallbackUrl)}\"`);
-      dialAttributes.push("statusCallbackMethod=\"POST\"");
-      dialAttributes.push("statusCallbackEvent=\"initiated ringing answered completed\"");
-    }
-
     if (TWILIO_RECORD_CALLS) {
       dialAttributes.push("record=\"record-from-answer-dual\"");
       if (recordingCallbackUrl) {
@@ -4985,7 +5016,18 @@ app.post("/api/twilio/voice/inbound", express.urlencoded({ extended: false }), a
       }
     }
 
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>${escapeXml(TWILIO_FORWARD_TO)}</Dial>\n</Response>`;
+    const numberAttributes = [];
+    if (statusCallbackUrl) {
+      numberAttributes.push(`statusCallback=\"${escapeXml(statusCallbackUrl)}\"`);
+      numberAttributes.push("statusCallbackMethod=\"POST\"");
+      numberAttributes.push("statusCallbackEvent=\"initiated ringing answered completed\"");
+    }
+
+    const numberXml = numberAttributes.length
+      ? `<Number ${numberAttributes.join(" ")}>${escapeXml(TWILIO_FORWARD_TO)}</Number>`
+      : escapeXml(TWILIO_FORWARD_TO);
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Dial ${dialAttributes.join(" ")}>\n    ${numberXml}\n  </Dial>\n</Response>`;
     return sendTwiml(res, twiml);
   } catch (error) {
     return sendTwiml(
