@@ -475,8 +475,16 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
   }
 
   function exportLeads() {
+    // Export ALL leads regardless of active filters. Filters are for the
+    // display list only — exporting filtered leads caused data loss when users
+    // had an accidental filter active.
+    const source = leads;
+    if (!source.length) {
+      showToast("Aucun lead à exporter.", 3000);
+      return;
+    }
     const headers = ["Entreprise", "Contact", "Adresse Immeuble", "Ville", "Unités", "Téléphone", "Email", "Statut", "Source", "Nom trouvé", "Adresse trouvée", "Confiance", "Site", "Date import"];
-    const rows = filteredLeads.map(lead => [
+    const rows = source.map(lead => [
       lead.companyName || "",
       lead.contactName || "",
       lead.buildingAddress || "",
@@ -498,8 +506,11 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
     const a = document.createElement("a");
     a.href = url;
     a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    showToast(`${source.length} leads exportés.`, 3000);
   }
 
   const cityOptions = useMemo(() => {

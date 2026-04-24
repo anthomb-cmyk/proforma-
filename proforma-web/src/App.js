@@ -2168,6 +2168,9 @@ export default function App() {
   // localStorage writes for acq_crm_v4 become redundant (Supabase is canonical).
   // Stays false on network failure so offline cold-start still works.
   const supabaseActiveRef = useRef(false);
+  // Tracks how many leads the server reported on last hydration. Used to
+  // detect stale pushes that would silently delete leads another session wrote.
+  const serverLeadCountRef = useRef(0);
 
   // ─── Shared backend state sync ─────────────────────────────────────────────
   // Hydrate from the Supabase-backed server state on mount so teammates see
@@ -2196,7 +2199,13 @@ export default function App() {
 
       if (serverHasData) {
         if (Array.isArray(srv.deals))        setDeals(srv.deals.map(normalizeDeal));
-        if (Array.isArray(srv.leads))        setLeads(srv.leads);
+        if (Array.isArray(srv.leads)) {
+          serverLeadCountRef.current = srv.leads.length;
+          // Guard against a race where the user imported leads while
+          // fetchServerState() was in-flight: if local state already has
+          // more leads than the server, keep the local version.
+          setLeads(prev => prev.length > srv.leads.length ? prev : srv.leads);
+        }
         if (Array.isArray(srv.owners))       setOwners(srv.owners);
         if (Array.isArray(srv.flaggedLeads)) setFlaggedLeads(srv.flaggedLeads);
         if (typeof srv.currentId !== "undefined") setCurrentId(srv.currentId || null);
@@ -2251,8 +2260,18 @@ export default function App() {
       // on a failed hydration must not overwrite real server state.
       if (hydratedRef.current) {
         const nonEmpty = owners.length > 0 || deals.length > 0 || leads.length > 0;
-        if (nonEmpty) pushServerState(payload);
-        else console.warn("[sync] refusing pushServerState — local state is empty");
+        if (!nonEmpty) {
+          console.warn("[sync] refusing pushServerState — local state is empty");
+        } else if (leads.length < serverLeadCountRef.current) {
+          // This device has fewer leads than the server last reported — likely a
+          // stale session (phone tab opened before the latest import). Abort the
+          // push to avoid silently deleting leads another session wrote.
+          console.warn(
+            `[sync] refusing pushServerState — would shrink leads from ${serverLeadCountRef.current} to ${leads.length}`
+          );
+        } else {
+          pushServerState(payload);
+        }
       }
     }, 500);
     return () => clearTimeout(persistTimerRef.current);
