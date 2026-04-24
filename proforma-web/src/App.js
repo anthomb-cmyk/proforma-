@@ -1983,6 +1983,11 @@ export default function App() {
   // Leads flagged by Gaylord for Anthony's review. Lives in the main persist
   // payload so it survives reloads.
   const [flaggedLeads, setFlaggedLeads] = useState(Array.isArray(stored?.flaggedLeads) ? stored.flaggedLeads : []);
+  const [userPhones, setUserPhones] = useState(stored?.userPhones && typeof stored.userPhones === "object" ? stored.userPhones : {});
+
+  // Phone edit modal state (sidebar profile click)
+  const [phoneModal, setPhoneModal] = useState(false);
+  const [phoneEdit, setPhoneEdit]   = useState("");
 
   // Auth session — stored in its own localStorage key (not the main payload)
   // so signing out doesn't wipe CRM data. The session holds only id/name/role/
@@ -2201,6 +2206,7 @@ export default function App() {
         if (Array.isArray(srv.flaggedLeads)) setFlaggedLeads(srv.flaggedLeads);
         if (typeof srv.currentId !== "undefined") setCurrentId(srv.currentId || null);
         if (typeof srv.gcalOk === "boolean")      setGcalOk(srv.gcalOk);
+        if (srv.userPhones && typeof srv.userPhones === "object") setUserPhones(srv.userPhones);
       } else if (res?.ok) {
         // Server responded ok but is genuinely empty (first boot / new workspace).
         // Do NOT seed if the fetch failed (res.ok false) — that's a server error,
@@ -2210,7 +2216,7 @@ export default function App() {
           (Array.isArray(deals)  && deals.length  > 0) ||
           (Array.isArray(leads)  && leads.length  > 0);
         if (localHasData) {
-          await pushServerState({ deals, leads, owners, flaggedLeads, currentId, gcalOk });
+          await pushServerState({ deals, leads, owners, flaggedLeads, currentId, gcalOk, userPhones });
         }
       }
       if (!cancelled) {
@@ -2237,7 +2243,7 @@ export default function App() {
   useEffect(() => {
     clearTimeout(persistTimerRef.current);
     persistTimerRef.current = setTimeout(() => {
-      const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
+      const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk, userPhones };
       if (!supabaseActiveRef.current) {
         persist(payload, (err) => {
           if (isQuotaError(err)) {
@@ -2260,7 +2266,7 @@ export default function App() {
     // dep would rerun this debounced persist every language switch which is
     // noisy and wasteful. Acceptable stale-closure on purpose.
     // eslint-disable-next-line
-  }, [deals, leads, owners, flaggedLeads, currentId, gcalOk]);
+  }, [deals, leads, owners, flaggedLeads, currentId, gcalOk, userPhones]);
 
   // Make sure a pending write is flushed before the tab closes.
   useEffect(() => {
@@ -2268,7 +2274,7 @@ export default function App() {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
         persistTimerRef.current = null;
-        const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk };
+        const payload = { deals, leads, owners, flaggedLeads, currentId, gcalOk, userPhones };
         if (!supabaseActiveRef.current) persist(payload);
         // Best-effort: fire the PUT but don't await. beforeunload handlers
         // can't block — the browser may or may not finish the request.
@@ -3449,6 +3455,47 @@ export default function App() {
   return (
     <>
       <style>{CSS}</style>
+      {phoneModal && (
+        <div
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}}
+          onClick={() => setPhoneModal(false)}
+        >
+          <div
+            style={{background:"#fff",borderRadius:12,padding:"24px 28px",minWidth:280,boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{fontWeight:600,fontSize:15,marginBottom:16}}>{currentUser.name} — {lang==="fr" ? "Mon numéro" : "My phone"}</div>
+            <input
+              autoFocus
+              type="tel"
+              value={phoneEdit}
+              onChange={e => setPhoneEdit(e.target.value)}
+              placeholder={lang==="fr" ? "ex. 514-555-0100" : "e.g. 514-555-0100"}
+              style={{width:"100%",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",fontSize:14,boxSizing:"border-box"}}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  setUserPhones(prev => ({...prev, [currentUser.id]: phoneEdit.trim()}));
+                  setPhoneModal(false);
+                }
+                if (e.key === "Escape") setPhoneModal(false);
+              }}
+            />
+            <div style={{display:"flex",gap:8,marginTop:14,justifyContent:"flex-end"}}>
+              <button
+                onClick={() => setPhoneModal(false)}
+                style={{border:"1px solid var(--border)",background:"#fff",borderRadius:8,padding:"6px 16px",cursor:"pointer",fontSize:13}}
+              >{lang==="fr" ? "Annuler" : "Cancel"}</button>
+              <button
+                onClick={() => {
+                  setUserPhones(prev => ({...prev, [currentUser.id]: phoneEdit.trim()}));
+                  setPhoneModal(false);
+                }}
+                style={{border:"none",background:"var(--accent)",color:"#fff",borderRadius:8,padding:"6px 16px",cursor:"pointer",fontSize:13,fontWeight:600}}
+              >{lang==="fr" ? "Enregistrer" : "Save"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="app-shell">
         <div
           className={`sidebar-scrim${mobileNavOpen ? " open" : ""}`}
@@ -3530,10 +3577,16 @@ export default function App() {
 
           <div className="sb-profile">
             <div className="p-avatar">{currentUser.initials || "?"}</div>
-            <div style={{flex:1,minWidth:0}}>
+            <div
+              style={{flex:1,minWidth:0,cursor:"pointer"}}
+              onClick={() => { setPhoneEdit(userPhones[currentUser.id] || ""); setPhoneModal(true); }}
+              title={lang==="fr" ? "Modifier mon numéro" : "Edit my phone number"}
+            >
               <div className="p-name">{currentUser.name}</div>
               <div className="p-role">
-                {(currentUser.roleLabel && currentUser.roleLabel[lang]) || currentUser.role}
+                {userPhones[currentUser.id]
+                  ? userPhones[currentUser.id]
+                  : (currentUser.roleLabel && currentUser.roleLabel[lang]) || currentUser.role}
               </div>
             </div>
             <PushToggle t={t} currentUser={currentUser} />
