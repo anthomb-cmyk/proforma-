@@ -455,6 +455,18 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     updateOwner(selected.id, { aiLead: "" });
   }
 
+  function markOwnerCallNow(owner) {
+    if (!owner?.id) return;
+    const now = new Date();
+    const stamp = now.toISOString();
+    const line = `[${now.toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" })}] Appel effectué.`;
+    const existing = String(owner.callNotes || "").trim();
+    updateOwner(owner.id, {
+      lastCallAt: stamp,
+      callNotes: existing ? `${existing}\n${line}` : line,
+    });
+  }
+
   // ── Rendering ──
 
   const activeSecondaryCount = (sourceFilter !== "all" ? 1 : 0) + (sortBy !== "buildings" ? 1 : 0);
@@ -725,6 +737,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                     onUpdateBuildingFinances={(bid, patch) => updateBuildingFinances(selected.id, bid, patch)}
                     onRunAI={runAI}
                     onClearAI={clearAI}
+                    onMarkCall={markOwnerCallNow}
                     aiBusy={aiBusy}
                     tr={tr}
                   />
@@ -846,7 +859,7 @@ function BuildingFinances({ building, onChange, tr }) {
   );
 }
 
-function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, aiBusy, tr }) {
+function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, onMarkCall, aiBusy, tr }) {
   const s = stageCfg(owner.stage || "new");
   const contactNames = Array.isArray(owner.contactNames) ? owner.contactNames : [];
   const primary = owner.displayName || "(Propriétaire inconnu)";
@@ -895,11 +908,15 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
             const cfg = SOURCE_CFG[src] || SOURCE_CFG.Migrated;
             return (
               <span key={i} className="fiche-phone-chip">
-                <a href={`tel:${String(p).replace(/\D+/g, "")}`}>{p}</a>
+                <a href={`tel:${String(p).replace(/\D+/g, "")}`} onClick={() => onMarkCall?.(owner)}>{p}</a>
                 <span className="om-src-badge" style={{background: cfg.bg, color: cfg.color}} title={tr(cfg.tkey)}>{tr(cfg.tkey)}</span>
               </span>
             );
           })}
+          <button className="btn btn-sm btn-gold" style={{marginLeft:4}} onClick={() => onMarkCall?.(owner)}>
+            <PhoneIcon size={12} style={{marginRight:4}} />Marquer appel maintenant
+          </button>
+          {owner.lastCallAt && <span style={{fontSize:11,color:"var(--text2)",marginLeft:6}}>Dernier: {new Date(owner.lastCallAt).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</span>}
         </div>
       )}
 

@@ -61,9 +61,9 @@ export default function LeadFiche({ lead, stageCfg, callStatusCfg, onUpdate, onR
             <>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",flex:1}}>
                 {leadPhones.map((ph, idx) => (
-                  <span key={idx} style={{background:idx===0?"var(--gold,#C9A84C)":"#F5F0E8",color:idx===0?"#fff":"var(--text)",fontWeight:700,fontSize:13,borderRadius:7,padding:"4px 10px",letterSpacing:"0.5px"}}>
+                  <a key={idx} href={`tel:${String(ph).replace(/\D+/g, "")}`} style={{background:idx===0?"var(--gold,#C9A84C)":"#F5F0E8",color:idx===0?"#fff":"var(--text)",fontWeight:700,fontSize:13,borderRadius:7,padding:"4px 10px",letterSpacing:"0.5px",textDecoration:"none",display:"inline-flex",alignItems:"center"}} onClick={() => onMarkCall?.(lead)}>
                     <PhoneIcon size={11} style={{marginRight:3}} />{ph}
-                  </span>
+                  </a>
                 ))}
               </div>
               <button className="btn btn-sm" onClick={() => navigator.clipboard?.writeText(leadPhones.join(" / "))} title="Copier"><ClipboardIcon size={12} /></button>

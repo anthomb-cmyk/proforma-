@@ -4144,7 +4144,19 @@ export default function App() {
                             </div>
                           </div>
                           {[ ["name",t("ws_contact_name")], ["phone",t("ws_contact_phone")], ["email",t("ws_contact_email")], ["company",t("ws_contact_company")], ["role",t("ws_contact_role")] ].map(([k,lbl]) => (
-                            <div key={k} className="f-row"><div className="f-lbl">{lbl}</div><input value={current.contact?.[k] || ""} onChange={e => upd(current.id,d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} /></div>
+                            <div key={k} className="f-row">
+                              <div className="f-lbl">{lbl}</div>
+                              <div style={{display:"flex",gap:6,alignItems:"center",flex:1}}>
+                                <input style={{flex:1}} value={current.contact?.[k] || ""} onChange={e => upd(current.id,d => ({ ...d, contact:{ ...d.contact, [k]:e.target.value } }))} />
+                                {k === "phone" && current.contact?.phone && (
+                                  <a
+                                    href={`tel:${String(current.contact.phone).replace(/\D+/g,"")}`}
+                                    style={{flexShrink:0,padding:"4px 10px",background:"var(--gold,#C9A84C)",color:"#fff",borderRadius:6,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}
+                                    onClick={() => addAct(current.id, t("ws_call_act_launched", { name: current.contact?.name || current.contact?.phone || "" }))}
+                                  >Appeler</a>
+                                )}
+                              </div>
+                            </div>
                           ))}
 
                           <div className="call-actions">
