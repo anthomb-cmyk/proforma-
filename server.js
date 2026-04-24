@@ -1205,7 +1205,11 @@ async function transcribeTwilioRecording(callLogId, recordingUrl, recordingSid) 
     prompt: "Conversation téléphonique bilingue (français québécois et anglais) entre un acquéreur immobilier et un propriétaire. Transcrire chaque mot dans sa langue d'origine. Exemples de termes fréquents: SOCLE Acquisitions, Longueuil, Montréal, Laval, triplex, plex, condo, cap rate, deal, closing, walk-through, offre d'achat, promesse d'achat, hypothèque, bail, chauffage, rénovation."
   });
 
-  const transcriptText = String(transcription?.text || "").trim();
+  // Strip Whisper hallucinations before persisting. Silent or near-silent
+  // call recordings otherwise show up in notes as "Sous-titres réalisés par
+  // la communauté d'Amara.org" (YouTube subtitle boilerplate memorized by
+  // the model).
+  const transcriptText = stripWhisperHallucinations(String(transcription?.text || ""));
   const callLogs = await loadCallLogs();
   const callLog = callLogs.find((log) => String(log.id) === String(callLogId));
 
@@ -4093,6 +4097,64 @@ app.post("/api/ai/summarize", async (req, res) => {
   }
 });
 
+// ─── Whisper hallucination filter ───────────────────────────────────────────
+//
+// Whisper's training data is soaked in YouTube/subtitle boilerplate, so when
+// it receives silent, near-silent, or unintelligible audio it confidently
+// returns strings like "Sous-titres réalisés par la communauté d'Amara.org"
+// or "Thanks for watching, please subscribe!". These aren't transcription
+// errors — they're memorized patterns. Filter them out before they end up
+// in CRM notes or call transcripts.
+//
+// Strategy: if the ENTIRE output is a hallucination (minus punctuation),
+// return empty so the UI can show "no speech detected" instead of pasting
+// nonsense. Otherwise strip the hallucination substring and return the rest.
+const WHISPER_HALLUCINATION_PATTERNS = [
+  // Amara.org subtitle credits — the biggest offender, many spelling drifts
+  // ("par"/"para", "réalisés"/"réalisées"/"créés", apostrophe variants).
+  /sous[-\s]?titres?\s+(?:réalis[eé]e?s?|cr[eé]{1,2}e?s?|effectu[eé]s?)\s+(?:par|para)\s+(?:la\s+)?(?:communaut[eé]\s+)?d[''`´]?amara\.?\s*\.?\s*org\.?/gi,
+  /\bamara\.?\s*\.?\s*org\b/gi,
+  // French broadcaster captioning stamps
+  /sous[-\s]?titrage\s+(?:soci[eé]t[eé]\s+)?radio[-\s]?canada/gi,
+  /sous[-\s]?titrage\s+st['']?\s*\d+/gi,
+  /sous[-\s]?titr(?:age|es?)\s*[:\-]\s*[^\n]{0,40}$/gi,
+  // YouTube end-screen boilerplate (EN + FR)
+  /thanks?\s+for\s+watching/gi,
+  /(?:please\s+)?(?:like\s+(?:and|&)\s+)?subscribe(?:\s+to\s+(?:my|our|the)\s+channel)?/gi,
+  /don'?t\s+forget\s+to\s+(?:like\s+(?:and|&)\s+)?subscribe/gi,
+  /merci\s+d'avoir\s+(?:regard[eé]|visionn[eé]|[eé]cout[eé])(?:\s+(?:cette|ma|notre|la|ce|mon|mes|nos|leur)\s+(?:vid[eé]o|cha[iî]ne|contenu|[eé]pisode|podcast))?(?:\s+jusqu[''`´]au\s+bout)?/gi,
+  /abonnez[-\s]vous\s+(?:[aà]\s+(?:ma|notre)\s+cha[iî]ne)?/gi,
+  // Music / silence bracketed markers
+  /\[?\s*(?:music|musique|applause|applaudissements|silence|background\s+noise)\s*\]?/gi,
+];
+
+function stripWhisperHallucinations(rawText) {
+  if (!rawText) return "";
+  const original = String(rawText).trim();
+  if (!original) return "";
+
+  let out = original;
+  for (const pat of WHISPER_HALLUCINATION_PATTERNS) {
+    out = out.replace(pat, " ");
+  }
+  // Collapse whitespace created by the removals.
+  out = out.replace(/\s+/g, " ").trim();
+  // Remove orphan punctuation left mid-sentence or at edges after stripping
+  // (e.g. "duplex. ! for watching" → "duplex.", "cette vidéo." → "").
+  out = out.replace(/\s+([.!?…])/g, "$1");
+  out = out.replace(/([.!?…])\s*([.!?…])+/g, "$1");
+  out = out.replace(/^[\s,;:.\-!?…]+/, "").replace(/[\s,;:\-]+$/, "").trim();
+
+  // If we stripped almost everything, or what's left is one or two tokens
+  // of leftover punctuation/noise, treat the whole clip as empty.
+  if (!out || out.length < 3) return "";
+  // If the original was basically ONE hallucination + minor punctuation,
+  // also return empty (length heuristic: we lost >80% of chars).
+  if (out.length < original.length * 0.2) return "";
+
+  return out;
+}
+
 // ─── Voice dictation transcription ──────────────────────────────────────────
 // Accepts a raw audio blob from the browser's MediaRecorder (webm/ogg/mp4)
 // and returns the Whisper-1 transcript. Used by the VoiceDictation component
@@ -4120,7 +4182,11 @@ app.post("/api/transcribe", (req, res) => {
         model: OPENAI_TRANSCRIPTION_MODEL,
         prompt: "Dictée vocale bilingue (français québécois et anglais) pour un CRM d'acquisition immobilière SOCLE. Transcrire chaque mot dans sa langue d'origine. Termes fréquents: triplex, plex, cap rate, closing, walk-through, offre d'achat, hypothèque, Longueuil, Montréal, Laval.",
       });
-      res.json({ ok: true, text: String(transcription?.text || "").trim() });
+      // Strip Whisper hallucinations (Amara.org subtitle credits, YouTube
+      // end cards, etc.) before returning. If nothing real was said, the
+      // response text is "" and the UI can show a "no speech" message.
+      const cleaned = stripWhisperHallucinations(String(transcription?.text || ""));
+      res.json({ ok: true, text: cleaned });
     } catch (e) {
       console.error("[transcribe]", e?.message);
       res.status(500).json({ ok: false, error: "Transcription failed." });
