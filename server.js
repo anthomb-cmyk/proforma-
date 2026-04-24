@@ -21,6 +21,13 @@ import { createListingsService } from "./services/listingsService.js";
 import { createQualificationService } from "./services/qualificationService.js";
 import { runPhoneLookupBatch } from "./services/phoneEnrichment.js";
 import { planPhoneLookups } from "./services/phoneLookupPlanner.js";
+import {
+  configureCallLogsStore,
+  loadCallLogs as loadCallLogsFromStore,
+  saveCallLogs as saveCallLogsToStore,
+  seedFromLegacyFile as seedCallLogsFromLegacyFile,
+  isCallLogsStoreBacked,
+} from "./services/callLogsStore.js";
 import { dispatch as agentDispatch } from "./agent/chiefOfStaff.js";
 import { startPushNotifier } from "./agent/pushNotifier.js";
 
@@ -306,12 +313,17 @@ function getTwilioBasicAuthHeader() {
   return `Basic ${Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64")}`;
 }
 
+// Thin passthroughs — delegate to services/callLogsStore.js which persists
+// to Supabase when configured. The legacy JSON file at CALL_LOGS_PATH is
+// only consulted once at boot to seed any existing records into Supabase
+// (see bootstrapCallLogsStore below). After that the file is never read or
+// written; Railway's ephemeral disk would lose it on every redeploy.
 async function loadCallLogs() {
-  return readJsonFile(CALL_LOGS_PATH, []);
+  return loadCallLogsFromStore();
 }
 
 async function saveCallLogs(callLogs) {
-  await writeJsonFile(CALL_LOGS_PATH, callLogs);
+  return saveCallLogsToStore(callLogs);
 }
 
 function createTranslatorFieldState() {
@@ -6892,6 +6904,34 @@ app.use((req, res) => {
   });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
+// Wire the call-logs store to Supabase, then run a one-shot seed from the
+// legacy JSON file if it still exists. Seed is idempotent (upsert on id) —
+// safe to run on every boot. After this, the ephemeral .data/call-logs.json
+// is no longer the source of truth; call history survives Railway deploys.
+async function bootstrapCallLogsStore() {
+  configureCallLogsStore({ supabase: supabaseServerClient });
+  if (!isCallLogsStoreBacked()) {
+    console.warn("[bootstrap:callLogs] Supabase not configured — call logs will be in-memory only and lost on restart.");
+    return;
+  }
+  try {
+    if (existsSync(CALL_LOGS_PATH)) {
+      const raw = await fs.readFile(CALL_LOGS_PATH, "utf-8").catch(() => "");
+      const legacyRows = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(legacyRows) && legacyRows.length) {
+        const result = await seedCallLogsFromLegacyFile(legacyRows);
+        if (result?.ok) {
+          console.log(`[bootstrap:callLogs] seeded ${result.count} row(s) from legacy file into Supabase.`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[bootstrap:callLogs] legacy seed failed:", err?.message || err);
+  }
+}
+
+bootstrapCallLogsStore().finally(() => {
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running at http://${HOST}:${PORT}`);
+  });
 });
