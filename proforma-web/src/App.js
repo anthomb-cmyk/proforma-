@@ -1518,7 +1518,7 @@ a{color:inherit}
 .bell-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;border-radius:999px;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
 .tb-user{font-size:12px;font-weight:600;color:var(--text2)}
 
-.content{flex:1;padding:22px;overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:14px}
+.content{flex:1;padding:22px;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;height:100%;min-height:0;display:flex;flex-direction:column;gap:14px;min-width:0}
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 
 .btn{border:1px solid var(--border);background:#fff;color:var(--text2);padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer}
@@ -1579,7 +1579,7 @@ a{color:inherit}
 .badge-cold{background:#EAF1FF;color:var(--blue)}
 
 /* Pipeline */
-.kanban-wrap{overflow-x:auto;padding-bottom:3px;touch-action:pan-x}
+.kanban-wrap{overflow-x:auto;overflow-y:hidden;padding-bottom:3px;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .kanban{display:flex;gap:10px;min-width:max-content;align-items:flex-start}
 .k-col{width:220px;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:10px;max-height:calc(100vh - 170px);max-height:calc(100dvh - 170px);overflow-y:auto;touch-action:pan-y}
 .k-col{border-left:3px solid transparent}
@@ -1954,8 +1954,9 @@ button,.btn,.nav-item,a,select,input[type="checkbox"],input[type="radio"]{
    at the app level; intentional overflow-x:auto containers (.kanban-wrap,
    .stage-track) keep their own scrollability because touch-action is
    inherited per-element and those containers reset it as needed. */
-html,body{overscroll-behavior:none}
-#root{overscroll-behavior:none;touch-action:pan-y}
+html{height:100%;overflow:hidden;overscroll-behavior:none}
+body{height:100%;overflow:hidden;overscroll-behavior:none;position:fixed;width:100%;top:0;left:0}
+#root{height:100%;overflow:hidden}
 
 /* iPhone notch safe area */
 @supports (padding:env(safe-area-inset-top)){
