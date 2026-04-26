@@ -429,4 +429,81 @@ describe("buildOwnersAndLeadsFromRole", () => {
     expect(empty.leads).toEqual([]);
     expect(empty.allOwners).toEqual([]);
   });
+
+  test("file phones produce candidatePhones with source_column attribution on owner + lead", () => {
+    const rows = [
+      mkRow({
+        "Adresse Immeuble": "100 Elm",
+        "Numéro de matricule": "M1",
+        "Propriétaire": "Jean Tremblay",
+        "Statut aux fins d'imposition scolaire": "Personne physique",
+        "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
+        "Téléphone": "514-777-1234",
+      }),
+    ];
+    const parsed = extractRoleData({ headers, rows });
+    const { newOwners, leads } = buildOwnersAndLeadsFromRole(parsed, [], { sourceFile: "longueuil.xlsx" });
+    const [owner] = newOwners;
+    expect(owner.candidatePhones).toHaveLength(1);
+    expect(owner.candidatePhones[0].phone).toBe("(514) 777-1234");
+    expect(owner.candidatePhones[0].source).toBe("file");
+    expect(owner.candidatePhones[0].source_column).toBe("Téléphone");
+    expect(owner.candidatePhones[0].relationship_to_lead_owner).toBe("owner");
+    expect(owner.candidatePhones[0].phone_owner_name).toBe("Jean Tremblay");
+    // Lead carries the same candidate.
+    expect(leads[0].candidatePhones).toHaveLength(1);
+    expect(leads[0].phone).toBe("(514) 777-1234");
+    expect(leads[0].phones).toContain("(514) 777-1234");
+  });
+
+  test("two slots = two phones with distinct source columns", () => {
+    const rows = [
+      mkRow({
+        "Adresse Immeuble": "100 Elm",
+        "Numéro de matricule": "M1",
+        "Propriétaire": "Jean Tremblay",
+        "Propriétaire Prénom": "Jean",
+        "Propriétaire Nom": "Tremblay",
+        "Statut aux fins d'imposition scolaire": "Personne physique",
+        "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
+        "Téléphone": "514-777-1234",
+        "Propriétaire 2": "Marie Côté",
+        "Propriétaire 2 Prénom": "Marie",
+        "Propriétaire 2 Nom": "Côté",
+        "Statut aux fins d'imposition scolaire 2": "Personne physique",
+        "Adresse postale 2": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
+        "Téléphone 2": "514-823-9999",
+      }),
+    ];
+    const parsed = extractRoleData({ headers, rows });
+    const { newOwners } = buildOwnersAndLeadsFromRole(parsed, []);
+    const [owner] = newOwners;
+    expect(owner.candidatePhones).toHaveLength(2);
+    const cols = owner.candidatePhones.map(c => c.source_column).sort();
+    expect(cols).toEqual(["Téléphone", "Téléphone 2"]);
+    const owners = owner.candidatePhones.map(c => c.phone_owner_name).sort();
+    expect(owners).toEqual(["Jean Tremblay", "Marie Côté"]);
+  });
+
+  test("re-import does not overwrite existing file candidates with new file ones", () => {
+    const rows = [
+      mkRow({
+        "Adresse Immeuble": "100 Elm",
+        "Numéro de matricule": "M1",
+        "Propriétaire": "Jean Tremblay",
+        "Statut aux fins d'imposition scolaire": "Personne physique",
+        "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
+        "Téléphone": "514-777-1234",
+      }),
+    ];
+    const parsed = extractRoleData({ headers, rows });
+    const first = buildOwnersAndLeadsFromRole(parsed, []);
+    // Re-import same file — candidate should still carry source_column.
+    const second = buildOwnersAndLeadsFromRole(parsed, first.allOwners);
+    const owner = second.allOwners[0];
+    // Existing-merged owner must still have at least one file candidate.
+    const fileCands = (owner.candidatePhones || []).filter(c => c.source === "file");
+    expect(fileCands.length).toBeGreaterThan(0);
+    expect(fileCands[0].source_column).toBe("Téléphone");
+  });
 });

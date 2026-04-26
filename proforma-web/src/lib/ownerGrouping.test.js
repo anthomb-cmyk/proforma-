@@ -267,6 +267,32 @@ describe("mergeOwners", () => {
     expect(merged[0].phones.length).toBe(2);
   });
 
+  test("merge preserves existing file candidates and appends incoming online ones", () => {
+    const fileCand = {
+      phone: "(514) 555-1111", source: "file", source_column: "Téléphone",
+      phone_owner_name: "Jean Tremblay", relationship_to_lead_owner: "owner",
+      confidence: 85, evidence: "from file", status: "unverified",
+    };
+    const onlineCand = {
+      phone: "(438) 823-9999", source: "google_places", source_column: "",
+      phone_owner_name: "ABC Inc.", relationship_to_lead_owner: "owner",
+      confidence: 70, evidence: "Places match", status: "unverified",
+    };
+    const existing = [owner("217 saint jacques|h2y1m6", {
+      candidatePhones: [fileCand], candidateEmails: [], candidateWebsites: [],
+    })];
+    const incoming = [owner("217 saint jacques|h2y1m6", {
+      candidatePhones: [onlineCand], candidateEmails: [], candidateWebsites: [],
+    })];
+    const { merged } = mergeOwners(existing, incoming);
+    expect(merged[0].candidatePhones).toHaveLength(2);
+    const sources = merged[0].candidatePhones.map(c => c.source).sort();
+    expect(sources).toEqual(["file", "google_places"]);
+    // The file candidate retained its source_column attribution.
+    const fc = merged[0].candidatePhones.find(c => c.source === "file");
+    expect(fc.source_column).toBe("Téléphone");
+  });
+
   test("same building isn't duplicated on re-import", () => {
     const b = { id: "b1", address: "100 Elm", postalCode: "H1A 1A1" };
     const existing = [owner("217 saint jacques|h2y1m6", { buildings: [b] })];
@@ -492,5 +518,42 @@ describe("applyLookupResultsToOwners", () => {
     const r = applyLookupResultsToOwners(owners, null, null);
     expect(r.owners).toBe(owners);
     expect(r.touched).toBe(0);
+  });
+
+  test("online lookup adds candidatePhones without overwriting file ones", () => {
+    const fileCand = {
+      phone: "(514) 777-1234", source: "file", source_column: "Téléphone",
+      phone_owner_name: "Jean Tremblay", relationship_to_lead_owner: "owner",
+      confidence: 85, evidence: "from longueuil.xlsx", status: "unverified",
+    };
+    const owners = [{
+      ...mkOwner("o1", "k1", ["(514) 777-1234"]),
+      candidatePhones: [fileCand],
+      candidateEmails: [],
+      candidateWebsites: [],
+    }];
+    const rowLookup = [{ row: {}, ownerId: "o1", ownerKey: "k1" }];
+    const results = [{
+      phone: "514-823-9999",
+      status: "found",
+      candidates: [],
+      source: "google_places",
+      matchedName: "ABC Inc.",
+      confidence: 75,
+      website: "https://abc-inc.com",
+    }];
+    const { owners: out } = applyLookupResultsToOwners(owners, results, rowLookup);
+    const o1 = out[0];
+    // File candidate is still there, untouched.
+    const filePresent = o1.candidatePhones.find(c => c.source === "file");
+    expect(filePresent).toBeTruthy();
+    expect(filePresent.source_column).toBe("Téléphone");
+    expect(filePresent.phone_owner_name).toBe("Jean Tremblay");
+    // New online candidate appears alongside the file one.
+    const onlinePresent = o1.candidatePhones.find(c => c.source === "google_places");
+    expect(onlinePresent).toBeTruthy();
+    expect(onlinePresent.phone).toBe("(514) 823-9999");
+    // Online website surfaced as a candidate.
+    expect(o1.candidateWebsites.find(c => c.website === "abc-inc.com")).toBeTruthy();
   });
 });

@@ -41,6 +41,17 @@
 
 import { ownerKey as buildOwnerKey, normalizeStreet, normalizePostal } from "./ownerKey.js";
 import { normalizePhoneKey } from "./phoneUtils.js";
+import {
+  mergePhoneCandidates,
+  mergeEmailCandidates,
+  mergeWebsiteCandidates,
+  flattenEmailCandidates,
+  flattenWebsiteCandidates,
+  candidatesFromOnlinePhones,
+  candidatesFromOnlineWebsites,
+  pickBestEmail,
+  pickBestWebsite,
+} from "./contactCandidates.js";
 
 // Column-pattern probes (mirrors services/phoneEnrichment.js HEADER_PATTERNS).
 // Keep keys lowercased + accent-stripped before testing.
@@ -550,10 +561,26 @@ export function mergeOwners(existing, incoming) {
     const mergedContactNames = dedupStrings([...(prev.contactNames || []), ...(inc.contactNames || [])]);
     const mergedPhones = dedupPhones([...(prev.phones || []), ...(inc.phones || [])]);
     const mergedEmails = dedupStrings([...(prev.emails || []), ...(inc.emails || [])]);
+    const mergedWebsites = dedupStrings([...(prev.websites || []), ...(inc.websites || [])]);
     // phoneSources: incoming wins only for NEW phones; existing phones keep
     // their original source tag (a Places hit stays "Places" even if the user
     // re-imports the CSV with that same number).
     const mergedPhoneSources = { ...(inc.phoneSources || {}), ...(prev.phoneSources || {}) };
+    // Candidate arrays — existing FIRST so user-edited file candidates with
+    // their source_column attribution win on (value, source, source_column)
+    // collisions. Incoming online candidates simply append.
+    const mergedCandidatePhones = mergePhoneCandidates(
+      prev.candidatePhones || [],
+      inc.candidatePhones || [],
+    );
+    const mergedCandidateEmails = mergeEmailCandidates(
+      prev.candidateEmails || [],
+      inc.candidateEmails || [],
+    );
+    const mergedCandidateWebsites = mergeWebsiteCandidates(
+      prev.candidateWebsites || [],
+      inc.candidateWebsites || [],
+    );
     // Merge buildings by address-postal identity so re-importing the same CSV
     // doesn't stack duplicate building entries.
     const buildingKey = (b) => `${normalizeStreet(b.address)}|${normalizePostal(b.postalCode)}`;
@@ -572,6 +599,10 @@ export function mergeOwners(existing, incoming) {
       phones: mergedPhones,
       phoneSources: mergedPhoneSources,
       emails: mergedEmails,
+      websites: mergedWebsites,
+      candidatePhones: mergedCandidatePhones,
+      candidateEmails: mergedCandidateEmails,
+      candidateWebsites: mergedCandidateWebsites,
       buildings: mergedBuildings,
       displayName: prev.displayName || inc.displayName,
       matchedBusinessName: prev.matchedBusinessName || inc.matchedBusinessName || "",
@@ -678,6 +709,43 @@ export function applyLookupResultsToOwners(owners, results, rowLookup) {
       if (!k) continue;
       if (!nextPhoneSources[k]) nextPhoneSources[k] = "Places";
     }
+
+    // Build online candidate records from the lookup result and merge them
+    // INTO (not over) the existing candidate arrays. File candidates always
+    // come first in mergePhoneCandidates so their (value, source,
+    // source_column) tuples win on collisions.
+    const lookedSourceParts = String(res.source || "").split(/[ ,]+/).filter(Boolean);
+    const placesSource = lookedSourceParts.includes("google_places") ? "google_places"
+      : lookedSourceParts.includes("pages_jaunes") || lookedSourceParts.includes("411ca") ? "directory"
+      : "google_places";
+    const placesEvidence = res.matchedName
+      ? `Places match: ${res.matchedName}${res.confidence ? ` (${Math.round(res.confidence)}%)` : ""}`
+      : "online lookup";
+    const onlinePhoneCands = candidatesFromOnlinePhones(incomingPhones, {
+      source: placesSource,
+      phone_owner_name: res.matchedName || owner.displayName || "",
+      evidence: placesEvidence,
+      confidence: Number.isFinite(Number(res.confidence))
+        ? Math.max(0, Math.min(100, Number(res.confidence)))
+        : undefined,
+    });
+    const onlineWebsiteCands = candidatesFromOnlineWebsites(
+      [res.website].filter(Boolean),
+      { source: placesSource, evidence: placesEvidence },
+    );
+    const candidatePhones = mergePhoneCandidates(
+      owner.candidatePhones || [],
+      onlinePhoneCands,
+    );
+    const candidateWebsites = mergeWebsiteCandidates(
+      owner.candidateWebsites || [],
+      onlineWebsiteCands,
+    );
+    // Refresh the websites[] list from the merged candidate set; only set
+    // owner.website if the user hasn't already curated a primary value
+    // (preserve manual edits).
+    const allWebsites = flattenWebsiteCandidates(candidateWebsites);
+
     // Preserve the business name Places matched the owner to so the user can
     // audit "where did that number come from?" from the fiche.
     const matchedBusinessName = phonesChanged && res.matchedName
@@ -687,6 +755,10 @@ export function applyLookupResultsToOwners(owners, results, rowLookup) {
       ...owner,
       phones: merged,
       phoneSources: nextPhoneSources,
+      candidatePhones,
+      candidateWebsites,
+      candidateEmails: owner.candidateEmails || [],
+      websites: allWebsites.length ? allWebsites : (owner.websites || []),
       matchedBusinessName,
       lookupStatus: res.status || owner.lookupStatus || "pending",
       updatedAt: Date.now(),
