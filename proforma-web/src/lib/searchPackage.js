@@ -623,6 +623,22 @@ export function buildSearchPackages(inputRows, options = {}) {
     pkg.direct_entity_queries = buildDirectEntityQueries(pkg);
     pkg.mailing_address_discovery_queries = buildMailingAddressDiscoveryQueries(pkg);
     pkg.reason = buildReason(pkg);
+
+    // Enrichment scoring — must run after all other fields are set.
+    const searchabilityScore = computeSearchabilityScore(pkg);
+    const leadValueScore = computeLeadValueScore(pkg);
+    const dataQualityScore = computeDataQualityScore(pkg);
+    const enrichmentScore = computeEnrichmentScore(searchabilityScore, leadValueScore, dataQualityScore);
+    const searchEligible = computeSearchEligible(pkg);
+    pkg.search_eligible = searchEligible;
+    pkg.searchability_score = searchabilityScore;
+    pkg.searchability_priority = searchabilityPriorityFromScore(searchabilityScore);
+    pkg.lead_value_score = leadValueScore;
+    pkg.data_quality_score = dataQualityScore;
+    pkg.enrichment_score = enrichmentScore;
+    pkg.enrichment_search_priority = enrichmentPriorityFromScore(enrichmentScore, searchEligible);
+    pkg.enrichment_reason = buildEnrichmentReason(pkg);
+
     packages.push(pkg);
   }
 
@@ -705,6 +721,116 @@ function buildReason(pkg) {
   }
   if ((pkg.warnings || []).length) parts.push(`warn=${pkg.warnings.join("|")}`);
   return parts.join(" · ");
+}
+
+// ─── Enrichment scoring model ─────────────────────────────────────────────────
+//
+// Three orthogonal inputs → one composite enrichment_score (0-100):
+//
+//   searchability_score  (60% weight) — how findable the entity is online.
+//   lead_value_score     (25% weight) — how valuable the lead is if contacted.
+//   data_quality_score   (15% weight) — how complete the name+address data is.
+//
+// Tier mapping:
+//   enrichment_score ≥ 75 → "high"
+//   enrichment_score 45-74 → "medium"
+//   enrichment_score 1-44  → "low"
+//   score = 0 or ineligible → "skipped"
+
+const LEAD_VALUE_SCORES = { high: 100, medium: 60, low: 25 };
+
+function computeLeadValueScore(pkg) {
+  return LEAD_VALUE_SCORES[pkg.lead_value_priority] ?? 25;
+}
+
+function computeSearchabilityScore(pkg) {
+  const name = String(pkg.lead_owner_name || "").trim();
+  if (!name || looksLikeJunkName(name)) return 0;
+  const cat = pkg.legal_entity_category;
+  const quality = mailingAddressQuality(pkg);
+  const propertyCount = (pkg.associated_properties || []).length;
+  const totalUnits = (pkg.associated_properties || [])
+    .reduce((s, p) => s + (Number(p?.units) || 0), 0);
+
+  if (cat === "individual") {
+    if (quality === "missing" && propertyCount === 0) return 0;
+    if (propertyCount >= 2 || totalUnits >= 6) return 45;
+    return 25;
+  }
+  if (cat === "numbered_company") return quality !== "missing" ? 60 : 40;
+  if (cat === "trust") return quality !== "missing" ? 75 : 55;
+  // All other entity categories (immobilier, gestion, investments, holdings,
+  // inc_ltee, society, unknown): searchable via name; mailing improves score.
+  return quality !== "missing" ? 100 : 80;
+}
+
+function computeDataQualityScore(pkg) {
+  const name = String(pkg.lead_owner_name || "").trim();
+  const street = String(pkg.mailing_address || "").trim();
+  const city = String(pkg.mailing_city || "").trim();
+  const postal = String(pkg.mailing_postal_code || "").trim();
+  const hasName = !!name && !looksLikeJunkName(name);
+  const hasStreet = !!street;
+  const hasCityPostal = !!(city && postal);
+  if (hasName && hasStreet && hasCityPostal) return 100;
+  if (hasName && hasStreet) return 80;
+  if (hasName) return 40;
+  if (hasStreet) return 20;
+  return 0;
+}
+
+function computeEnrichmentScore(searchability, leadValue, dataQuality) {
+  return Math.round(searchability * 0.60 + leadValue * 0.25 + dataQuality * 0.15);
+}
+
+function enrichmentPriorityFromScore(score, eligible) {
+  if (!eligible || score === 0) return "skipped";
+  if (score >= 75) return "high";
+  if (score >= 45) return "medium";
+  return "low";
+}
+
+function searchabilityPriorityFromScore(score) {
+  if (score >= 75) return "high";
+  if (score >= 45) return "medium";
+  if (score > 0) return "low";
+  return "skip";
+}
+
+function computeSearchEligible(pkg) {
+  if (pkgHasOwnerFilePhone(pkg)) return false;
+  const name = String(pkg.lead_owner_name || "").trim();
+  if (!name || looksLikeJunkName(name)) return false;
+  return true;
+}
+
+function buildEnrichmentReason(pkg) {
+  const parts = [];
+  if (!pkg.search_eligible) parts.push("not_eligible");
+  parts.push(`category=${pkg.legal_entity_category}`);
+  parts.push(`searchability=${pkg.searchability_score}`);
+  parts.push(`lead_value_score=${pkg.lead_value_score}`);
+  parts.push(`data_quality=${pkg.data_quality_score}`);
+  parts.push(`enrichment_score=${pkg.enrichment_score}`);
+  parts.push(`priority=${pkg.enrichment_search_priority}`);
+  return parts;
+}
+
+// Sort comparator for enrichment target buckets.
+function enrichmentSortComparator(a, b) {
+  if (b.enrichment_score !== a.enrichment_score) return (b.enrichment_score || 0) - (a.enrichment_score || 0);
+  if (b.lead_value_score !== a.lead_value_score) return (b.lead_value_score || 0) - (a.lead_value_score || 0);
+  const ap = (a.associated_properties || []).length;
+  const bp = (b.associated_properties || []).length;
+  if (bp !== ap) return bp - ap;
+  const au = (a.associated_properties || []).reduce((s, x) => s + (Number(x?.units) || 0), 0);
+  const bu = (b.associated_properties || []).reduce((s, x) => s + (Number(x?.units) || 0), 0);
+  if (bu !== au) return bu - au;
+  const am = (a.mailing_address || a.mailing_postal_code) ? 1 : 0;
+  const bm = (b.mailing_address || b.mailing_postal_code) ? 1 : 0;
+  if (bm !== am) return bm - am;
+  // Entity before individual.
+  return (b.legal_entity_category === "individual" ? 0 : 1) - (a.legal_entity_category === "individual" ? 0 : 1);
 }
 
 // ─── Preview helpers ───────────────────────────────────────────────────────
@@ -982,6 +1108,29 @@ export function auditSearchPackages(packages, options = {}) {
     });
   }
 
+  // Tiered enrichment buckets.
+  // already_has_phone: owner-direct file phone found — no enrichment needed.
+  // skipped_unsearchable: search_eligible=false for other reason (junk/no signal).
+  // eligibleWithoutPhone: search_eligible + no owner-direct phone; includes
+  //   packages that only have a building-relationship phone (still need the
+  //   owner's direct line).
+  const alreadyHasPhone = list.filter(pkgHasOwnerFilePhone);
+  const skippedUnsearchable = list.filter(
+    (p) => !p.search_eligible && !pkgHasOwnerFilePhone(p),
+  );
+  const eligibleWithoutPhone = list.filter(
+    (p) => p.search_eligible && !pkgHasOwnerFilePhone(p),
+  );
+  const highTargets = eligibleWithoutPhone
+    .filter((p) => p.enrichment_search_priority === "high")
+    .sort(enrichmentSortComparator);
+  const mediumTargets = eligibleWithoutPhone
+    .filter((p) => p.enrichment_search_priority === "medium")
+    .sort(enrichmentSortComparator);
+  const lowTargets = eligibleWithoutPhone
+    .filter((p) => p.enrichment_search_priority === "low")
+    .sort(enrichmentSortComparator);
+
   return {
     total: list.length,
     with_phone: withPhone.length,
@@ -993,5 +1142,20 @@ export function auditSearchPackages(packages, options = {}) {
     companies_with_mailing_no_phone: companiesWithMailingNoPhone,
     duplicate_different_address: duplicateDifferentAddress,
     suspicious,
+    // Tiered enrichment buckets — use these for enrichment target selection
+    // instead of top_high_value_without_phone.
+    already_has_phone: alreadyHasPhone,
+    skipped_unsearchable: skippedUnsearchable,
+    high_priority_targets: highTargets,
+    medium_priority_targets: mediumTargets,
+    low_priority_targets: lowTargets,
+    summary: {
+      eligible_without_phone: eligibleWithoutPhone.length,
+      already_has_phone: alreadyHasPhone.length,
+      skipped_unsearchable: skippedUnsearchable.length,
+      high_priority_targets: highTargets.length,
+      medium_priority_targets: mediumTargets.length,
+      low_priority_targets: lowTargets.length,
+    },
   };
 }

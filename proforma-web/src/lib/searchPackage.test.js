@@ -904,7 +904,7 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
 
   test("empty input → all zeros", () => {
     const audit = auditSearchPackages([]);
-    expect(audit).toEqual({
+    expect(audit).toMatchObject({
       total: 0, with_phone: 0, without_phone: 0, with_owner_file_phone: 0,
       top_high_value_without_phone: [],
       numbered_companies_without_phone: [],
@@ -912,6 +912,243 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
       companies_with_mailing_no_phone: [],
       duplicate_different_address: [],
       suspicious: [],
+      already_has_phone: [],
+      skipped_unsearchable: [],
+      high_priority_targets: [],
+      medium_priority_targets: [],
+      low_priority_targets: [],
+    });
+    expect(audit.summary).toEqual({
+      eligible_without_phone: 0,
+      already_has_phone: 0,
+      skipped_unsearchable: 0,
+      high_priority_targets: 0,
+      medium_priority_targets: 0,
+      low_priority_targets: 0,
+    });
+  });
+});
+
+describe("enrichment scoring and selection model", () => {
+  // 1. Low-value individual without phone should be search_eligible.
+  test("(S1) low-value individual with address is search_eligible = true, not skipped", () => {
+    const owners = [mkOwner({
+      displayName: "Marie Côté",
+      contactNames: ["Marie Côté"],
+      postalAddress: { street: "100 Elm", city: "Montréal", province: "QC", postalCode: "H1A 1A1" },
+      buildings: [{ id: "b1", address: "100 Elm" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.legal_entity_category).toBe("individual");
+    expect(pkg.lead_value_priority).toBe("low");
+    expect(pkg.search_eligible).toBe(true);
+    expect(pkg.enrichment_search_priority).not.toBe("skipped");
+  });
+
+  // 2. Junk / empty owner name → search_eligible = false.
+  test("(S2) junk owner name results in search_eligible = false and enrichment_search_priority = skipped", () => {
+    const owners = [mkOwner({
+      displayName: "12345678",
+      postalAddress: { street: "", city: "", province: "", postalCode: "" },
+      buildings: [],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.search_eligible).toBe(false);
+    expect(pkg.enrichment_search_priority).toBe("skipped");
+  });
+
+  // 3. Owner with reliable file phone → already_has_phone bucket.
+  test("(S3) owner with owner-direct file phone lands in already_has_phone bucket", () => {
+    const fileOwnerCand = makePhoneCandidate({
+      phone: "514-555-0142", source: "file", source_column: "Téléphone Propriétaire",
+      relationship_to_lead_owner: "owner",
+    });
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      phones: ["(514) 555-0142"],
+      candidatePhones: [fileOwnerCand],
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const pkgs = buildSearchPackages(owners);
+    expect(pkgs[0].search_eligible).toBe(false);
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.already_has_phone).toHaveLength(1);
+    expect(audit.already_has_phone[0].lead_owner_name).toBe("ABC Immobilier Inc.");
+    expect(audit.high_priority_targets.map((p) => p.lead_owner_name)).not.toContain("ABC Immobilier Inc.");
+  });
+
+  // 4. Medium-lead-value company enrichment_score beats high-value individual.
+  test("(S4) medium-lead-value company has higher enrichment_score than high-portfolio individual", () => {
+    const owners = [
+      mkOwner({
+        displayName: "Gestion XYZ Inc.",
+        postalAddress: { street: "1 Elm", city: "Montréal", province: "QC", postalCode: "H1A 1A1" },
+        buildings: [{ id: "b1", address: "1 Elm", units: 4 }],
+      }),
+      mkOwner({
+        displayName: "Jean Tremblay",
+        contactNames: ["Jean Tremblay"],
+        postalAddress: { street: "55 Pionniers", city: "Longueuil", province: "QC", postalCode: "J4M 2N3" },
+        buildings: [
+          { id: "b2", address: "700 Spruce" },
+          { id: "b3", address: "701 Spruce" },
+          { id: "b4", address: "702 Spruce" },
+        ],
+      }),
+    ];
+    const pkgs = buildSearchPackages(owners);
+    const gestion = pkgs.find((p) => p.lead_owner_name === "Gestion XYZ Inc.");
+    const individual = pkgs.find((p) => p.lead_owner_name === "Jean Tremblay");
+    expect(gestion.legal_entity_category).toBe("gestion");
+    expect(individual.legal_entity_category).toBe("individual");
+    // gestion: searchability=100, lead_value=medium(60), dq=100 → score=90 (high)
+    // individual: searchability=45, lead_value=high(100), dq=100 → score=67 (medium)
+    expect(gestion.enrichment_score).toBeGreaterThan(individual.enrichment_score);
+    expect(gestion.enrichment_search_priority).toBe("high");
+    expect(individual.enrichment_search_priority).toBe("medium");
+    // In the audit, gestion appears before individual across the combined list.
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.high_priority_targets.some((p) => p.lead_owner_name === "Gestion XYZ Inc.")).toBe(true);
+    expect(audit.medium_priority_targets.some((p) => p.lead_owner_name === "Jean Tremblay")).toBe(true);
+  });
+
+  // 5. High-value individual → medium priority, not skipped.
+  test("(S5) high-value individual with portfolio is medium enrichment priority, not skipped", () => {
+    const owners = [mkOwner({
+      displayName: "Jean Tremblay",
+      contactNames: ["Jean Tremblay"],
+      postalAddress: { street: "55 Pionniers", city: "Longueuil", province: "QC", postalCode: "J4M 2N3" },
+      buildings: [
+        { id: "b1", address: "700 Spruce" },
+        { id: "b2", address: "701 Spruce" },
+        { id: "b3", address: "702 Spruce" },
+      ],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.search_eligible).toBe(true);
+    expect(pkg.lead_value_priority).toBe("high");
+    // searchability=45, lead_value=100, dq=100 → 45×0.6+100×0.25+100×0.15=67
+    expect(pkg.enrichment_score).toBe(67);
+    expect(pkg.enrichment_search_priority).toBe("medium");
+  });
+
+  // 6. Trust / fiducie with mailing → high or medium priority targets.
+  test("(S6) trust with mailing address appears in high or medium priority targets", () => {
+    const owners = [mkOwner({
+      displayName: "Fiducie Famille Tremblay",
+      postalAddress: { street: "1500 Fiducie", city: "Montréal", province: "QC", postalCode: "H2Z 1M1" },
+      buildings: [{ id: "b1", address: "400 Birch" }, { id: "b2", address: "500 Cedar" }],
+    })];
+    const pkgs = buildSearchPackages(owners);
+    const audit = auditSearchPackages(pkgs);
+    const inPriorityTargets = [
+      ...audit.high_priority_targets,
+      ...audit.medium_priority_targets,
+    ].map((p) => p.lead_owner_name);
+    expect(inPriorityTargets).toContain("Fiducie Famille Tremblay");
+    // Trust + mailing + 2 props: searchability=75, lead_value=high(100), dq=100 → 85 → "high"
+    expect(pkgs[0].enrichment_search_priority).toBe("high");
+  });
+
+  // 7. Numbered company with mailing → search_eligible = true, in priority buckets.
+  test("(S7) numbered company with mailing is search_eligible and in enrichment buckets", () => {
+    const owners = [mkOwner({
+      displayName: "9338-8387 QUEBEC INC.",
+      postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
+      buildings: [{ id: "b1", address: "300 Pine" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.legal_entity_category).toBe("numbered_company");
+    expect(pkg.search_eligible).toBe(true);
+    const audit = auditSearchPackages([pkg]);
+    const all = [
+      ...audit.high_priority_targets,
+      ...audit.medium_priority_targets,
+      ...audit.low_priority_targets,
+    ];
+    expect(all.some((p) => p.lead_owner_name === "9338-8387 QUEBEC INC.")).toBe(true);
+    expect(audit.skipped_unsearchable.some((p) => p.lead_owner_name === "9338-8387 QUEBEC INC.")).toBe(false);
+  });
+
+  // 8. Low-priority targets are returned, not discarded.
+  test("(S8) low-priority individual appears in low_priority_targets, not discarded", () => {
+    const owners = [mkOwner({
+      displayName: "Marie Côté",
+      contactNames: ["Marie Côté"],
+      postalAddress: { street: "100 Elm", city: "Montréal", province: "QC", postalCode: "H1A 1A1" },
+      buildings: [{ id: "b1", address: "100 Elm" }],
+    })];
+    const pkgs = buildSearchPackages(owners);
+    const audit = auditSearchPackages(pkgs);
+    // searchability=25, lead_value=25(low), dq=100 → 25×0.6+25×0.25+100×0.15=36 → "low"
+    expect(pkgs[0].enrichment_score).toBe(36);
+    expect(pkgs[0].enrichment_search_priority).toBe("low");
+    expect(audit.low_priority_targets.some((p) => p.lead_owner_name === "Marie Côté")).toBe(true);
+    expect(audit.skipped_unsearchable.some((p) => p.lead_owner_name === "Marie Côté")).toBe(false);
+  });
+
+  // 9. Audit tiered buckets ordered high → medium → low by enrichment score.
+  test("(S9) audit tiered buckets represent correct priority ordering", () => {
+    const owners = [
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        postalAddress: { street: "217 St-Jacques", city: "Montréal", province: "QC", postalCode: "H2Y 1M6" },
+        buildings: [{ id: "b1", address: "100 Elm", units: 6 }, { id: "b2", address: "200 Oak", units: 8 }],
+      }),
+      mkOwner({
+        displayName: "Jean Tremblay",
+        contactNames: ["Jean Tremblay"],
+        postalAddress: { street: "55 Pionniers", city: "Longueuil", province: "QC", postalCode: "J4M 2N3" },
+        buildings: [
+          { id: "b3", address: "700 Spruce" },
+          { id: "b4", address: "701 Spruce" },
+          { id: "b5", address: "702 Spruce" },
+        ],
+      }),
+      mkOwner({
+        displayName: "Marie Côté",
+        contactNames: ["Marie Côté"],
+        postalAddress: { street: "100 Elm", city: "Montréal", province: "QC", postalCode: "H1A 1A1" },
+        buildings: [{ id: "b6", address: "100 Elm" }],
+      }),
+    ];
+    const pkgs = buildSearchPackages(owners);
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.high_priority_targets.some((p) => p.lead_owner_name === "ABC Immobilier Inc.")).toBe(true);
+    expect(audit.medium_priority_targets.some((p) => p.lead_owner_name === "Jean Tremblay")).toBe(true);
+    expect(audit.low_priority_targets.some((p) => p.lead_owner_name === "Marie Côté")).toBe(true);
+    // No crossover — each owner in exactly one bucket.
+    const allNames = [
+      ...audit.high_priority_targets,
+      ...audit.medium_priority_targets,
+      ...audit.low_priority_targets,
+    ].map((p) => p.lead_owner_name);
+    const abc = allNames.filter((n) => n === "ABC Immobilier Inc.").length;
+    const jean = allNames.filter((n) => n === "Jean Tremblay").length;
+    const marie = allNames.filter((n) => n === "Marie Côté").length;
+    expect(abc).toBe(1);
+    expect(jean).toBe(1);
+    expect(marie).toBe(1);
+  });
+
+  // 10. top_high_value_without_phone still present for backward compat.
+  test("(S10) top_high_value_without_phone still present in audit result for backward compat", () => {
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      postalAddress: { street: "217 St-Jacques", city: "Montréal", province: "QC", postalCode: "H2Y 1M6" },
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const pkgs = buildSearchPackages(owners);
+    const audit = auditSearchPackages(pkgs);
+    expect(Array.isArray(audit.top_high_value_without_phone)).toBe(true);
+    // Summary object present with all keys.
+    expect(audit.summary).toMatchObject({
+      eligible_without_phone: expect.any(Number),
+      already_has_phone: expect.any(Number),
+      skipped_unsearchable: expect.any(Number),
+      high_priority_targets: expect.any(Number),
+      medium_priority_targets: expect.any(Number),
+      low_priority_targets: expect.any(Number),
     });
   });
 });
