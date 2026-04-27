@@ -8,7 +8,7 @@
 // lib/searchPackageDebug.js#buildSearchPackagePreviewData so the tests can
 // run without @testing-library/react.
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, Fragment } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
 import {
   isContactEnrichmentDebugEnabled,
@@ -70,6 +70,100 @@ function StatusBadge({ status }) {
       fontWeight: 600,
       whiteSpace: "nowrap",
     }}>{status?.replace(/_/g, " ")}</span>
+  );
+}
+
+const TD = ({ children, style }) => (
+  <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", ...style }}>{children}</td>
+);
+
+// Enrichment results table with per-row expandable evidence panel.
+function EnrichResultsTable({ results }) {
+  const [openIdx, setOpenIdx] = useState(null);
+  const toggle = useCallback((i) => setOpenIdx((prev) => (prev === i ? null : i)), []);
+
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+      <thead>
+        <tr style={{ textAlign: "left", color: "var(--text3)" }}>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", width: 16 }} />
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Owner</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Status</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Best phone</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Belongs to</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Src</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Email</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Website</th>
+          <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Conf.</th>
+        </tr>
+      </thead>
+      <tbody>
+        {results.map((r, i) => (
+          <Fragment key={i}>
+            <tr style={{ cursor: "pointer" }} onClick={() => toggle(i)}>
+              <TD style={{ color: "var(--text3)", userSelect: "none" }}>
+                {openIdx === i ? "▼" : "▶"}
+              </TD>
+              <TD style={{ fontWeight: 600, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.lead_owner_name || "—"}
+              </TD>
+              <TD><StatusBadge status={r.status} /></TD>
+              <TD style={{ fontFamily: "monospace" }}>{r.bestPhone || "—"}</TD>
+              <TD style={{ color: "var(--text2)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.bestPhoneBelongsTo || "—"}
+              </TD>
+              <TD style={{ color: "var(--text3)" }}>{r.phoneRelationship || "—"}</TD>
+              <TD style={{ color: "var(--text2)" }}>{r.bestEmail || "—"}</TD>
+              <TD style={{ color: "var(--text2)", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.bestWebsite
+                  ? <a href={r.bestWebsite} target="_blank" rel="noopener noreferrer"
+                      style={{ color: "var(--accent)" }}
+                      onClick={(e) => e.stopPropagation()}>{r.bestWebsite}</a>
+                  : "—"}
+              </TD>
+              <TD style={{ color: "var(--text3)" }}>{r.confidence || "—"}</TD>
+            </tr>
+
+            {openIdx === i && (
+              <tr>
+                <td colSpan={9} style={{ padding: "6px 12px 10px 28px", borderBottom: "1px solid var(--border)", background: "var(--surface2, #F9F9F7)" }}>
+                  {/* Evidence log */}
+                  <div style={{ marginBottom: 4, fontSize: 10, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    Evidence
+                  </div>
+                  {(r.evidence || []).length === 0
+                    ? <div style={{ fontSize: 11, color: "var(--text3)" }}>(none)</div>
+                    : (r.evidence || []).map((line, j) => (
+                        <div key={j} style={{
+                          fontSize: 10, fontFamily: "monospace",
+                          color: line.startsWith("rejected") || line.startsWith("skipped") ? "#B91C1C"
+                               : line.startsWith("best_phone") ? "#166534"
+                               : line.startsWith("low_confidence") ? "#854D0E"
+                               : "var(--text2)",
+                          marginBottom: 1,
+                        }}>{line}</div>
+                      ))}
+
+                  {/* All phone candidates */}
+                  {(r.phoneCandidates || []).length > 0 && (
+                    <>
+                      <div style={{ marginTop: 6, marginBottom: 2, fontSize: 10, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                        All phone candidates ({r.phoneCandidates.length})
+                      </div>
+                      {r.phoneCandidates.map((c, k) => (
+                        <div key={k} style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text2)", marginBottom: 1 }}>
+                          {c.raw} · src={c.source} · score={c.score ?? "?"} · nameMatch={String(c.nameMatch)} · from="{c.belongsTo}"
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -238,52 +332,7 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
               enrichResults.length === 0 ? (
                 <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results)</div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                  <thead>
-                    <tr style={{ textAlign: "left", color: "var(--text3)" }}>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Owner</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Status</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Best phone</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Belongs to</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Relationship</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Email</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Website</th>
-                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Conf.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {enrichResults.map((r, i) => (
-                      <tr key={i}>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontWeight: 600, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {r.lead_owner_name || "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>
-                          <StatusBadge status={r.status} />
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontFamily: "monospace" }}>
-                          {r.bestPhone || "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {r.bestPhoneBelongsTo || "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text3)" }}>
-                          {r.phoneRelationship || "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)" }}>
-                          {r.bestEmail || "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {r.bestWebsite
-                            ? <a href={r.bestWebsite} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>{r.bestWebsite}</a>
-                            : "—"}
-                        </td>
-                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text3)" }}>
-                          {r.confidence || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <EnrichResultsTable results={enrichResults} />
               )
             )}
 

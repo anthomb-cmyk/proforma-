@@ -7,7 +7,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runContactEnrichmentPreview } from "./contactEnrichmentPipeline.js";
+import {
+  runContactEnrichmentPreview,
+  isJunkResult,
+  hasNameOverlap,
+} from "./contactEnrichmentPipeline.js";
 
 /* ------------------------------------------------------------------ *
  *  Test fixtures
@@ -224,5 +228,134 @@ test("numbered_company package uses mailing_address_only strategy", async () => 
       !q.includes("9123456 QUÉBEC INC."),
       `direct query for numbered company name should not be issued; got: "${q}"`,
     );
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ *  11. UPS Store result is rejected — phone never reaches bestPhone
+ * ------------------------------------------------------------------ */
+
+test("UPS Store result is rejected and phone is not promoted to bestPhone", async () => {
+  const snippet = `Ship your packages. Call us: ${PHONE_555}`;
+  const results = await runContactEnrichmentPreview({
+    packages: [makePkg()],
+    searchFn: okSearch([
+      { title: "The UPS Store", snippet, url: "https://theupsstore.ca/locations/123" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  // Phone may appear as a candidate (if not filtered) but must NOT be bestPhone
+  assert.equal(r.bestPhone, null, "UPS Store phone must not be bestPhone");
+  // Evidence should record the rejection
+  assert.ok(
+    r.evidence.some((e) => e.includes("rejected") && e.toLowerCase().includes("ups")),
+    "evidence should show UPS Store was rejected",
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ *  12. Municipal/city page is rejected
+ * ------------------------------------------------------------------ */
+
+test("municipal city-hall page is rejected and phone not accepted", async () => {
+  const snippet = `Joignez la ville au ${PHONE_555B}`;
+  const results = await runContactEnrichmentPreview({
+    packages: [makePkg()],
+    searchFn: okSearch([
+      { title: "Ville de Montréal – Contact", snippet, url: "https://ville.montreal.qc.ca/contact" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.bestPhone, null, "municipal phone must not be bestPhone");
+  assert.ok(
+    r.evidence.some((e) => e.includes("rejected")),
+    "evidence should record the municipal rejection",
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ *  13. Individual owner + unrelated mailing-address business → not ready_to_call
+ * ------------------------------------------------------------------ */
+
+test("individual owner mailing-address business phone does not become ready_to_call", async () => {
+  const snippet = `Réservations: ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "Jean Tremblay",
+    legal_entity_category: "individual",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: ["123 rue Fictive, Montréal, QC"],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([
+      { title: "Restaurant XYZ", snippet, url: "https://restaurantxyz.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.notEqual(r.status, "ready_to_call", "individual + unrelated business must not be ready_to_call");
+  assert.equal(r.bestPhone, null, "individual + unrelated business phone must not become bestPhone");
+  assert.ok(
+    r.evidence.some((e) => e.includes("skipped") && e.includes("individual")),
+    "evidence should explain the individual-owner skip",
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ *  14. Exact company name match → high confidence → ready_to_call
+ * ------------------------------------------------------------------ */
+
+test("exact company name in search result produces high confidence ready_to_call", async () => {
+  const snippet = `Gestion Dupont Inc. — appelez-nous au ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "Gestion Dupont Inc.",
+    legal_entity_category: "gestion",
+    search_strategy: "direct_entity",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([
+      { title: "Gestion Dupont Inc.", snippet, url: "https://gestiondupont.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.confidence, "high");
+  assert.equal(r.bestPhone, PHONE_555);
+});
+
+/* ------------------------------------------------------------------ *
+ *  15. Fiducie + related real-estate company at same address → needs_review, not ready_to_call
+ * ------------------------------------------------------------------ */
+
+test("fiducie with related RE company phone stays needs_review, not ready_to_call", async () => {
+  // The mailing query returns a real-estate company co-located with the fiducie.
+  // Score for a mailing-sourced phone (even with nameMatch) is max 2 (low) per
+  // single occurrence, so it must NOT become bestPhone and MUST NOT be ready_to_call.
+  const snippet = `Immobilier Dupont Inc. — ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "FIDUCIE DUPONT",
+    legal_entity_category: "trust",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: ["123 rue Fictive, Montréal, QC"],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    // First call: mailing query → returns RE company
+    // Second call: related company search → returns same phone again
+    searchFn: okSearch([
+      { title: "Immobilier Dupont Inc.", snippet, url: "https://immodupont.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.notEqual(r.status, "ready_to_call", "fiducie related-company phone must not be ready_to_call");
+  // Candidate may or may not have been found, but if bestPhone is set it must be needs_review
+  if (r.bestPhone !== null) {
+    assert.equal(r.status, "needs_review");
   }
 });
