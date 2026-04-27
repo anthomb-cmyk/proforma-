@@ -1,0 +1,8 @@
+lead_owner_name,mailing_address,mailing_city,mailing_province,mailing_postal_code,property_address,property_city,property_postal_code,units,owner_phone,building_phone,email,website,status
+"ABC Immobilier Inc.","217 Saint-Jacques","Montréal","QC","H2Y 1M6","100 Elm","Longueuil","J4K 1A1","12","514-777-1234","","abc@example.com","https://abc.com","Personne morale"
+"9338-8387 QUEBEC INC.","1500 Industriel","Boucherville","QC","J4B 7K6","400 Cedar","Longueuil","J4K 1A4","16","","","","","Personne morale"
+"Jean Tremblay","55 Pionniers","Longueuil","QC","J4M 2N3","700 Spruce","Longueuil","J4L 1B1","6","","","","","Personne physique"
+"Jean Tremblay","55 Pionniers","Longueuil","QC","J4M 2N3","701 Spruce","Longueuil","J4L 1B1","8","","","","","Personne physique"
+"Jean Tremblay","55 Pionniers","Longueuil","QC","J4M 2N3","702 Spruce","Longueuil","J4L 1B1","4","","","","","Personne physique"
+"Fiducie Famille Bouchard","880 Fiducie","Saint-Lambert","QC","J4P 1A1","500 Birch","Longueuil","J4K 1A5","10","","","","","Personne morale"
+"Acme Realty Holdings Ltd.","10 Wellington","Toronto","ON","M5K 1A1","800 Taschereau","Longueuil","J4M 1C1","0","","450-823-9876","","","Personne morale"

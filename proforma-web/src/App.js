@@ -4,6 +4,20 @@ import {
   mergePhoneLists,
   extractPhonesFromRow,
 } from "./lib/phoneUtils.js";
+import {
+  extractContactCandidatesFromRow,
+  mergePhoneCandidates,
+  mergeEmailCandidates,
+  mergeWebsiteCandidates,
+  flattenPhoneCandidates,
+  flattenEmailCandidates,
+  flattenWebsiteCandidates,
+  pickBestPhone,
+  pickBestEmail,
+  pickBestWebsite,
+  candidatesFromOnlinePhones,
+  candidatesFromOnlineWebsites,
+} from "./lib/contactCandidates.js";
 import { STAGES, PRIORITY } from "./lib/stages.js";
 import {
   fmtSz, fileIco, initials, calDays, dayKey,
@@ -2628,6 +2642,9 @@ export default function App() {
             website: "",
             confidence: 0,
             statuses: new Set(),
+            candidatePhones: [],
+            candidateEmails: [],
+            candidateWebsites: [],
           };
           grouped.set(synthKey, g);
         }
@@ -2656,6 +2673,54 @@ export default function App() {
         if (row?.website && !g.website) g.website = String(row.website);
         if (Number(row?.confidence || 0) > g.confidence) g.confidence = Number(row.confidence);
         if (row?.status) g.statuses.add(row.status);
+
+        // Build per-row candidates: file candidates from raw columns + online
+        // candidates from the lookup result. Source attribution is preserved
+        // so the user can audit which Excel column / online lookup produced
+        // each phone. Existing candidates from the row's own carry-through
+        // (if PhoneFinder pre-built them) come last so they don't overwrite.
+        const rawRow = row?.rawRow || {};
+        const fileCands = extractContactCandidatesFromRow(rawRow, {
+          ownerName: g.ownerName || row?.matchedName || "",
+        });
+        const placesSource = rowSource === "google_places" ? "google_places"
+          : rowSource === "pages_jaunes" || rowSource === "411ca" ? "directory"
+          : "google_places";
+        const placesEvidence = row?.matchedName
+          ? `Places match: ${row.matchedName}${row?.confidence ? ` (${Math.round(row.confidence)}%)` : ""}`
+          : "PhoneFinder online lookup";
+        const onlinePhoneCands = candidatesFromOnlinePhones(
+          [row?.phone, ...(Array.isArray(row?.onlinePhones) ? row.onlinePhones : [])],
+          {
+            source: placesSource,
+            phone_owner_name: row?.matchedName || g.ownerName,
+            evidence: placesEvidence,
+            confidence: Number.isFinite(Number(row?.confidence))
+              ? Math.max(0, Math.min(100, Number(row.confidence)))
+              : undefined,
+          },
+        );
+        const onlineWebCands = candidatesFromOnlineWebsites(
+          [row?.website].filter(Boolean),
+          { source: placesSource, evidence: placesEvidence },
+        );
+        g.candidatePhones = mergePhoneCandidates(
+          g.candidatePhones,
+          fileCands.candidatePhones,
+          onlinePhoneCands,
+          Array.isArray(row?.candidatePhones) ? row.candidatePhones : [],
+        );
+        g.candidateEmails = mergeEmailCandidates(
+          g.candidateEmails,
+          fileCands.candidateEmails,
+          Array.isArray(row?.candidateEmails) ? row.candidateEmails : [],
+        );
+        g.candidateWebsites = mergeWebsiteCandidates(
+          g.candidateWebsites,
+          fileCands.candidateWebsites,
+          onlineWebCands,
+          Array.isArray(row?.candidateWebsites) ? row.candidateWebsites : [],
+        );
       }
 
       // Index existing leads by ownerKey for merge detection. Leads created
@@ -2691,10 +2756,39 @@ export default function App() {
           const newBuildings = g.buildings.filter(b => !seenAddrs.has(String(b.address || "").toLowerCase().replace(/\s+/g, " ")));
           const phonesChanged = mergedPhones.length !== (existing.phones || []).length;
           const buildingsChanged = newBuildings.length > 0;
-          if (!phonesChanged && !buildingsChanged) { skipped++; continue; }
+          // Candidate arrays — existing FIRST so file candidates with their
+          // user-edited source_column win on collisions.
+          const beforeCandLen = (existing.candidatePhones || []).length
+            + (existing.candidateEmails || []).length
+            + (existing.candidateWebsites || []).length;
+          const mergedCandidatePhones = mergePhoneCandidates(
+            existing.candidatePhones || [],
+            g.candidatePhones,
+          );
+          const mergedCandidateEmails = mergeEmailCandidates(
+            existing.candidateEmails || [],
+            g.candidateEmails,
+          );
+          const mergedCandidateWebsites = mergeWebsiteCandidates(
+            existing.candidateWebsites || [],
+            g.candidateWebsites,
+          );
+          const candidatesChanged = (mergedCandidatePhones.length
+            + mergedCandidateEmails.length
+            + mergedCandidateWebsites.length) !== beforeCandLen;
+          if (!phonesChanged && !buildingsChanged && !candidatesChanged) { skipped++; continue; }
           existing.phones = mergedPhones;
-          existing.phone = mergedPhones[0] || existing.phone || "";
+          existing.phone = pickBestPhone(mergedCandidatePhones) || mergedPhones[0] || existing.phone || "";
           existing.buildings = [...existingBuildings, ...newBuildings];
+          existing.candidatePhones = mergedCandidatePhones;
+          existing.candidateEmails = mergedCandidateEmails;
+          existing.candidateWebsites = mergedCandidateWebsites;
+          const flatEmails = flattenEmailCandidates(mergedCandidateEmails);
+          if (flatEmails.length) existing.emails = flatEmails;
+          const flatWebs = flattenWebsiteCandidates(mergedCandidateWebsites);
+          if (flatWebs.length) existing.websites = flatWebs;
+          if (!existing.email && flatEmails.length) existing.email = pickBestEmail(mergedCandidateEmails);
+          if (!existing.website && flatWebs.length) existing.website = pickBestWebsite(mergedCandidateWebsites);
           existing.updatedAt = now;
           if (!existing.companyName && g.ownerName) existing.companyName = g.ownerName;
           if (!existing.contactName && g.ownerName && !existing.companyName) existing.contactName = g.ownerName;
@@ -2706,6 +2800,9 @@ export default function App() {
         }
 
         const primaryBuildingAddress = g.buildings[0]?.address || "";
+        const allPhones = flattenPhoneCandidates(g.candidatePhones);
+        const allEmails = flattenEmailCandidates(g.candidateEmails);
+        const allWebsites = flattenWebsiteCandidates(g.candidateWebsites);
         const nextLead = {
           id: `lead_pf_owner_${now}_${Math.random().toString(36).slice(2, 7)}`,
           createdAt: nowIso,
@@ -2725,9 +2822,14 @@ export default function App() {
           city: g.postalCity || "",
           province: "QC",
           country: "Canada",
-          email: "",
-          phone: g.phones[0] || "",
-          phones: g.phones,
+          email: pickBestEmail(g.candidateEmails),
+          phone: pickBestPhone(g.candidatePhones) || g.phones[0] || "",
+          phones: allPhones.length ? allPhones : g.phones,
+          emails: allEmails,
+          websites: allWebsites,
+          candidatePhones: g.candidatePhones,
+          candidateEmails: g.candidateEmails,
+          candidateWebsites: g.candidateWebsites,
           phoneSources: g.phoneSources,
           originalPhone: "",
           units: 0,
@@ -2738,7 +2840,7 @@ export default function App() {
           matchedAddress: "",
           confidence: g.confidence,
           lookupStatus: g.statuses.has("found") ? "found" : (g.statuses.has("needs_manual_review") ? "needs_manual_review" : "not_found"),
-          website: g.website,
+          website: pickBestWebsite(g.candidateWebsites) || g.website,
           ownerKey: g.ownerKey || "",
           linkedDealId: "",
         };
@@ -2772,16 +2874,72 @@ export default function App() {
       const key = buildLeadIdentityKey({ companyName, contactName, buildingAddress, inputName: row?.inputName, matchedName: row?.matchedName, inputAddress: row?.inputAddress, matchedAddress: row?.matchedAddress, phones });
       const createdAt = String(row?.searchedAt || new Date().toISOString());
 
+      // Build candidates from the raw row (file) + lookup result (online).
+      // Done for both new and existing leads so re-imports gain new online
+      // candidates without losing existing file ones.
+      const rawRow = row?.rawRow || {};
+      const fileCands = extractContactCandidatesFromRow(rawRow, { ownerName });
+      const placesSource = String(row?.source || "").includes("google_places") ? "google_places"
+        : String(row?.source || "").match(/pages_jaunes|411ca/) ? "directory"
+        : "google_places";
+      const placesEvidence = row?.matchedName
+        ? `Places match: ${row.matchedName}${row?.confidence ? ` (${Math.round(row.confidence)}%)` : ""}`
+        : "PhoneFinder online lookup";
+      const onlinePhoneCands = candidatesFromOnlinePhones(
+        [row?.phone, ...(Array.isArray(row?.onlinePhones) ? row.onlinePhones : [])],
+        {
+          source: placesSource,
+          phone_owner_name: row?.matchedName || ownerName,
+          evidence: placesEvidence,
+          confidence: Number.isFinite(Number(row?.confidence))
+            ? Math.max(0, Math.min(100, Number(row.confidence)))
+            : undefined,
+        },
+      );
+      const onlineWebCands = candidatesFromOnlineWebsites(
+        [row?.website].filter(Boolean),
+        { source: placesSource, evidence: placesEvidence },
+      );
+      const incomingCandidatePhones = mergePhoneCandidates(
+        fileCands.candidatePhones,
+        onlinePhoneCands,
+        Array.isArray(row?.candidatePhones) ? row.candidatePhones : [],
+      );
+      const incomingCandidateEmails = mergeEmailCandidates(
+        fileCands.candidateEmails,
+        Array.isArray(row?.candidateEmails) ? row.candidateEmails : [],
+      );
+      const incomingCandidateWebsites = mergeWebsiteCandidates(
+        fileCands.candidateWebsites,
+        onlineWebCands,
+        Array.isArray(row?.candidateWebsites) ? row.candidateWebsites : [],
+      );
+
       const existing = key ? byKey.get(key) : null;
       if (existing) {
         const merged = mergePhoneLists(existing.phones, phones);
-        if (merged.length === existing.phones.length) { skipped++; continue; }
+        const beforeCandLen = (existing.candidatePhones || []).length
+          + (existing.candidateEmails || []).length
+          + (existing.candidateWebsites || []).length;
+        const mergedCandPhones = mergePhoneCandidates(existing.candidatePhones || [], incomingCandidatePhones);
+        const mergedCandEmails = mergeEmailCandidates(existing.candidateEmails || [], incomingCandidateEmails);
+        const mergedCandWebsites = mergeWebsiteCandidates(existing.candidateWebsites || [], incomingCandidateWebsites);
+        const candChanged = (mergedCandPhones.length + mergedCandEmails.length + mergedCandWebsites.length) !== beforeCandLen;
+        if (merged.length === existing.phones.length && !candChanged) { skipped++; continue; }
         existing.phones = merged;
-        existing.phone = merged[0] || "";
+        existing.phone = pickBestPhone(mergedCandPhones) || merged[0] || existing.phone || "";
+        existing.candidatePhones = mergedCandPhones;
+        existing.candidateEmails = mergedCandEmails;
+        existing.candidateWebsites = mergedCandWebsites;
+        const flatEmails = flattenEmailCandidates(mergedCandEmails);
+        if (flatEmails.length) existing.emails = flatEmails;
+        const flatWebs = flattenWebsiteCandidates(mergedCandWebsites);
+        if (flatWebs.length) existing.websites = flatWebs;
         existing.updatedAt = now;
         if (!existing.companyName) existing.companyName = companyName;
         if (!existing.contactName) existing.contactName = contactName;
         if (!existing.buildingAddress) existing.buildingAddress = buildingAddress;
+        if (!existing.email && flatEmails.length) existing.email = pickBestEmail(mergedCandEmails);
         if (!existing.website && row?.website) existing.website = String(row.website);
         if (!existing.matchedName && row?.matchedName) existing.matchedName = String(row.matchedName);
         if (!existing.matchedAddress && row?.matchedAddress) existing.matchedAddress = String(row.matchedAddress);
@@ -2798,6 +2956,9 @@ export default function App() {
       const assessment  = rre([/valeur.*fonciere|valeur.*immeuble|[eé]valuation|valeur.*totale|assess/i]);
       const yearBuilt   = rre([/ann[eé]e.*construction|year.*built|construit/i]);
       const lotArea     = rre([/superficie.*terrain|superficie.*lot|lot.*area/i]);
+      const allPhones = flattenPhoneCandidates(incomingCandidatePhones);
+      const allEmails = flattenEmailCandidates(incomingCandidateEmails);
+      const allWebsites = flattenWebsiteCandidates(incomingCandidateWebsites);
       const nextLead = {
         id: `lead_pf_${now}_${Math.random().toString(36).slice(2, 7)}`,
         createdAt,
@@ -2810,9 +2971,14 @@ export default function App() {
         province: "",
         postalCode: "",
         country: "Canada",
-        email: "",
-        phone: phones[0] || "",
-        phones,
+        email: pickBestEmail(incomingCandidateEmails),
+        phone: pickBestPhone(incomingCandidatePhones) || phones[0] || "",
+        phones: allPhones.length ? allPhones : phones,
+        emails: allEmails,
+        websites: allWebsites,
+        candidatePhones: incomingCandidatePhones,
+        candidateEmails: incomingCandidateEmails,
+        candidateWebsites: incomingCandidateWebsites,
         originalPhone: "",
         units,
         utilisation,
@@ -2825,7 +2991,7 @@ export default function App() {
         matchedAddress: String(row?.matchedAddress || ""),
         confidence: Number(row?.confidence || 0),
         lookupStatus: String(row?.status || "found"),
-        website: String(row?.website || ""),
+        website: pickBestWebsite(incomingCandidateWebsites) || String(row?.website || ""),
         linkedDealId: "",
       };
       additions.push(nextLead);

@@ -31,6 +31,22 @@ import { parseSpreadsheet } from "./tableImport.js";
 import { ownerKey as buildOwnerKey, normalizeStreet, normalizePostal } from "./ownerKey.js";
 import { mergeOwners } from "./ownerGrouping.js";
 import { normalizePhoneKey, mergePhoneLists } from "./phoneUtils.js";
+import {
+  makePhoneCandidate,
+  makeEmailCandidate,
+  makeWebsiteCandidate,
+  mergePhoneCandidates,
+  mergeEmailCandidates,
+  mergeWebsiteCandidates,
+  flattenPhoneCandidates,
+  flattenEmailCandidates,
+  flattenWebsiteCandidates,
+  pickBestPhone,
+  pickBestEmail,
+  pickBestWebsite,
+  extractEmailsFromText,
+  extractWebsitesFromText,
+} from "./contactCandidates.js";
 
 // Mirrors ownerGrouping.js — keep the two aligned so a header that matches
 // in one place matches in the other. Strips accents, lowercases, collapses
@@ -131,6 +147,11 @@ function toNumber(value) {
 // slot descriptors, one per slot that actually exists in the headers.
 // We key off the base "Propriétaire" name column: slot 0 is the
 // unsuffixed one; slots 1..7 use " 2", " 3", ..., " 8" suffixes.
+//
+// Phones / emails / websites are also picked up if the export carries them.
+// Standard rôles only ship a "Téléphone" column, but municipalities have
+// started adding "Courriel" and "Site web" columns sporadically — we prefer
+// to detect them up-front rather than miss the data when it shows up.
 function findOwnerSlotColumns(headers) {
   const slots = [];
   // Slot indices 0..7, 0 uses no suffix, 1 uses " 2", 2 uses " 3", etc.
@@ -140,6 +161,7 @@ function findOwnerSlotColumns(headers) {
     const suffix = idx === 0 ? "" : ` ${idx + 1}`;
     const nameCol = findExactHeader(headers, `Propriétaire${suffix}`);
     if (!nameCol) continue;
+    const phoneSuffix = idx === 0 ? "" : ` ${idx + 1}`;
     slots.push({
       idx,
       nameCol,
@@ -147,7 +169,17 @@ function findOwnerSlotColumns(headers) {
       lastNameCol: findExactHeader(headers, `Propriétaire${suffix} Nom`),
       statusCol: findExactHeader(headers, `Statut aux fins d'imposition scolaire${suffix}`),
       addressCol: findExactHeader(headers, `Adresse postale${suffix}`),
-      phoneCol: findExactHeader(headers, idx === 0 ? "Téléphone" : `Téléphone ${idx + 1}`),
+      phoneCol: findExactHeader(headers, `Téléphone${phoneSuffix}`),
+      emailCol:
+        findExactHeader(headers, `Courriel${suffix}`) ||
+        findExactHeader(headers, `Email${suffix}`) ||
+        findExactHeader(headers, `Courriel Propriétaire${suffix}`) ||
+        findExactHeader(headers, `Email Propriétaire${suffix}`),
+      websiteCol:
+        findExactHeader(headers, `Site web${suffix}`) ||
+        findExactHeader(headers, `Site Web${suffix}`) ||
+        findExactHeader(headers, `Website${suffix}`) ||
+        findExactHeader(headers, `Site web Propriétaire${suffix}`),
     });
   }
   return slots;
@@ -155,6 +187,11 @@ function findOwnerSlotColumns(headers) {
 
 // Extract a single owner slot's data from a row. Returns null if the
 // base name column is empty (slot not present on this row).
+//
+// For each contact column we record BOTH the deduped value list (for
+// backwards-compat with the existing flat phones array) AND a list of full
+// candidate objects with source-column attribution. Downstream code merges
+// the candidate lists across slots / properties / re-imports.
 function extractOwnerSlot(row, slot) {
   const name = String(row[slot.nameCol] || "").trim();
   if (!name) return null;
@@ -163,7 +200,47 @@ function extractOwnerSlot(row, slot) {
   const status = slot.statusCol ? String(row[slot.statusCol] || "").trim() : "";
   const postalRaw = slot.addressCol ? String(row[slot.addressCol] || "").trim() : "";
   const phoneRaw = slot.phoneCol ? String(row[slot.phoneCol] || "").trim() : "";
+  const emailRaw = slot.emailCol ? String(row[slot.emailCol] || "").trim() : "";
+  const websiteRaw = slot.websiteCol ? String(row[slot.websiteCol] || "").trim() : "";
   const postal = parsePostalAddress(postalRaw);
+
+  const phones = extractPhones(phoneRaw);
+  const emails = extractEmailsFromText(emailRaw);
+  const websites = extractWebsitesFromText(websiteRaw);
+
+  // Build the file candidates for this slot. Source column is preserved so the
+  // user can audit which Excel column a number/email came from.
+  const candidatePhones = phones
+    .map((p) => makePhoneCandidate({
+      phone: p,
+      source: "file",
+      source_column: slot.phoneCol,
+      phone_owner_name: name,
+      relationship_to_lead_owner: "owner",
+      evidence: `rôle slot ${slot.idx + 1}: ${slot.phoneCol}`,
+    }))
+    .filter(Boolean);
+  const candidateEmails = emails
+    .map((e) => makeEmailCandidate({
+      email: e,
+      source: "file",
+      source_column: slot.emailCol,
+      email_owner_name: name,
+      relationship_to_lead_owner: "owner",
+      evidence: `rôle slot ${slot.idx + 1}: ${slot.emailCol}`,
+    }))
+    .filter(Boolean);
+  const candidateWebsites = websites
+    .map((w) => makeWebsiteCandidate({
+      website: w,
+      source: "file",
+      source_column: slot.websiteCol,
+      website_owner_name: name,
+      relationship_to_lead_owner: "owner",
+      evidence: `rôle slot ${slot.idx + 1}: ${slot.websiteCol}`,
+    }))
+    .filter(Boolean);
+
   return {
     slotIdx: slot.idx,
     name,
@@ -172,7 +249,12 @@ function extractOwnerSlot(row, slot) {
     status,          // "Personne physique" / "Personne morale"
     postalRaw,
     postalAddress: postal,
-    phones: extractPhones(phoneRaw),
+    phones,
+    emails,
+    websites,
+    candidatePhones,
+    candidateEmails,
+    candidateWebsites,
   };
 }
 
@@ -209,11 +291,18 @@ function extractProperty(row, propCols) {
     lon: toNumber(row[propCols.lon]),
     codePostalImmeuble: pick(propCols.codePostalImmeuble),
     telephoneImmeuble: pick(propCols.telephoneImmeuble),
+    courrielImmeuble: pick(propCols.courrielImmeuble),
+    siteWebImmeuble: pick(propCols.siteWebImmeuble),
     genreConstruction: pick(propCols.genreConstruction),
     lienPhysique: pick(propCols.lienPhysique),
     categorie: pick(propCols.categorie),
     sousCategorie: pick(propCols.sousCategorie),
     googleMaps: pick(propCols.googleMaps),
+    // Column names retained so the candidate stamps can carry source_column
+    // metadata back to the Owner/Lead records.
+    _telephoneImmeubleCol: propCols.telephoneImmeuble,
+    _courrielImmeubleCol: propCols.courrielImmeuble,
+    _siteWebImmeubleCol: propCols.siteWebImmeuble,
   };
 }
 
@@ -247,6 +336,13 @@ function buildPropertyColumnMap(headers) {
     lon: findExactHeader(headers, "Lon"),
     codePostalImmeuble: findExactHeader(headers, "Code Postal Immeuble"),
     telephoneImmeuble: findExactHeader(headers, "Téléphone Immeuble"),
+    courrielImmeuble:
+      findExactHeader(headers, "Courriel Immeuble") ||
+      findExactHeader(headers, "Email Immeuble"),
+    siteWebImmeuble:
+      findExactHeader(headers, "Site web Immeuble") ||
+      findExactHeader(headers, "Site Web Immeuble") ||
+      findExactHeader(headers, "Website Immeuble"),
     genreConstruction: findExactHeader(headers, "Genre de construction"),
     lienPhysique: findExactHeader(headers, "Lien physique"),
     // These two have variable-length labels — use contains-matching.
@@ -282,6 +378,38 @@ export function extractRoleData({ rows, headers }) {
     const propertyId = `role_prop_${rowIdx}_${Math.random().toString(36).slice(2, 7)}`;
     const ownerKeysForProp = [];
 
+    // Building-level (relationship = "building") candidates derived from the
+    // property-level columns. Attached to the property + propagated to every
+    // owner that owns it, so the lead/owner records carry building contact
+    // info alongside owner contact info.
+    const buildingCandidatePhones = mergePhoneLists(prop.telephoneImmeuble)
+      .map((p) => makePhoneCandidate({
+        phone: p,
+        source: "file",
+        source_column: prop._telephoneImmeubleCol || "Téléphone Immeuble",
+        relationship_to_lead_owner: "building",
+        evidence: `building phone column "${prop._telephoneImmeubleCol || "Téléphone Immeuble"}"`,
+      }))
+      .filter(Boolean);
+    const buildingCandidateEmails = extractEmailsFromText(prop.courrielImmeuble || "")
+      .map((e) => makeEmailCandidate({
+        email: e,
+        source: "file",
+        source_column: prop._courrielImmeubleCol || "Courriel Immeuble",
+        relationship_to_lead_owner: "building",
+        evidence: `building email column "${prop._courrielImmeubleCol || "Courriel Immeuble"}"`,
+      }))
+      .filter(Boolean);
+    const buildingCandidateWebsites = extractWebsitesFromText(prop.siteWebImmeuble || "")
+      .map((w) => makeWebsiteCandidate({
+        website: w,
+        source: "file",
+        source_column: prop._siteWebImmeubleCol || "Site web Immeuble",
+        relationship_to_lead_owner: "building",
+        evidence: `building website column "${prop._siteWebImmeubleCol || "Site web Immeuble"}"`,
+      }))
+      .filter(Boolean);
+
     for (const slot of ownerSlots) {
       const o = extractOwnerSlot(row, slot);
       if (!o) continue;
@@ -313,6 +441,11 @@ export function extractRoleData({ rows, headers }) {
           postalCode,
         },
         phones: o.phones,
+        emails: o.emails,
+        websites: o.websites,
+        candidatePhones: o.candidatePhones,
+        candidateEmails: o.candidateEmails,
+        candidateWebsites: o.candidateWebsites,
         propertyId,
       };
       if (!ownersMap.has(key)) ownersMap.set(key, []);
@@ -325,6 +458,9 @@ export function extractRoleData({ rows, headers }) {
       rowIndex: rowIdx,
       ownerKeys: Array.from(new Set(ownerKeysForProp)),
       ...prop,
+      candidatePhones: buildingCandidatePhones,
+      candidateEmails: buildingCandidateEmails,
+      candidateWebsites: buildingCandidateWebsites,
     });
   });
 
@@ -451,6 +587,18 @@ export function buildOwnersAndLeadsFromRole(parsed, existingOwners = [], options
   const nowIso = new Date().toISOString();
   const now = Date.now();
 
+  // Helper: walk every property linked to an owner and collect its building-
+  // level candidates (phone/email/website columns on the property row).
+  function buildingCandidatesForOwner(ownerKey, field) {
+    const out = [];
+    for (const p of parsed.properties) {
+      if (!p.ownerKeys.includes(ownerKey)) continue;
+      const list = p[field];
+      if (Array.isArray(list)) out.push(...list);
+    }
+    return out;
+  }
+
   // Build the incoming Owner list from the ownersMap.
   const incomingOwners = [];
   for (const [ownerKey, drafts] of parsed.ownersMap) {
@@ -476,6 +624,24 @@ export function buildOwnersAndLeadsFromRole(parsed, existingOwners = [], options
       phoneSources[k] = "Excel";
     }
 
+    // Roll up the per-slot candidates (owner relationship) plus the per-
+    // property building candidates (building relationship) into one list per
+    // contact kind. Within each list, mergePhoneCandidates / mergeEmailCandidates /
+    // mergeWebsiteCandidates dedupe by (value, source, source_column) so we
+    // keep one entry per distinct provenance reference.
+    const candidatePhones = mergePhoneCandidates(
+      ...drafts.map(d => d.candidatePhones || []),
+      buildingCandidatesForOwner(ownerKey, "candidatePhones"),
+    );
+    const candidateEmails = mergeEmailCandidates(
+      ...drafts.map(d => d.candidateEmails || []),
+      buildingCandidatesForOwner(ownerKey, "candidateEmails"),
+    );
+    const candidateWebsites = mergeWebsiteCandidates(
+      ...drafts.map(d => d.candidateWebsites || []),
+      buildingCandidatesForOwner(ownerKey, "candidateWebsites"),
+    );
+
     incomingOwners.push({
       id: ownerIdFromKey(ownerKey),
       ownerKey,
@@ -491,7 +657,11 @@ export function buildOwnersAndLeadsFromRole(parsed, existingOwners = [], options
       phones,
       phoneSources,
       matchedBusinessName: "",
-      emails: [],
+      emails: flattenEmailCandidates(candidateEmails),
+      websites: flattenWebsiteCandidates(candidateWebsites),
+      candidatePhones,
+      candidateEmails,
+      candidateWebsites,
       buildings: buildingsForOwner(parsed.properties, ownerKey, sourceFile),
       stage: "new",
       callStatus: "none",
@@ -530,6 +700,28 @@ export function buildOwnersAndLeadsFromRole(parsed, existingOwners = [], options
     const phonesFromOwners = mergePhoneLists(
       ...p.ownerKeys.map(k => (parsed.ownersMap.get(k) || []).map(d => d.phones).flat()),
     );
+
+    // Per-lead candidates: owner-relationship candidates from every owner of
+    // this property + this property's own building-level candidates. The
+    // dedup-by-(value, source, source_column) inside mergePhoneCandidates
+    // collapses duplicates without losing per-column attribution.
+    const ownerCandidatePhones = mergePhoneCandidates(
+      ...p.ownerKeys.map(k => (parsed.ownersMap.get(k) || []).map(d => d.candidatePhones || []).flat()),
+    );
+    const ownerCandidateEmails = mergeEmailCandidates(
+      ...p.ownerKeys.map(k => (parsed.ownersMap.get(k) || []).map(d => d.candidateEmails || []).flat()),
+    );
+    const ownerCandidateWebsites = mergeWebsiteCandidates(
+      ...p.ownerKeys.map(k => (parsed.ownersMap.get(k) || []).map(d => d.candidateWebsites || []).flat()),
+    );
+    const candidatePhones = mergePhoneCandidates(ownerCandidatePhones, p.candidatePhones || []);
+    const candidateEmails = mergeEmailCandidates(ownerCandidateEmails, p.candidateEmails || []);
+    const candidateWebsites = mergeWebsiteCandidates(ownerCandidateWebsites, p.candidateWebsites || []);
+
+    const allPhones = flattenPhoneCandidates(candidatePhones);
+    const allEmails = flattenEmailCandidates(candidateEmails);
+    const allWebsites = flattenWebsiteCandidates(candidateWebsites);
+
     leads.push({
       id: `lead_role_${p.id}_${Math.random().toString(36).slice(2, 6)}`,
       createdAt: nowIso,
@@ -543,9 +735,15 @@ export function buildOwnersAndLeadsFromRole(parsed, existingOwners = [], options
       province: "QC",
       postalCode: p.codePostalImmeuble || "",
       country: "Canada",
-      email: "",
-      phone: phonesFromOwners[0] || "",
-      phones: phonesFromOwners,
+      email: pickBestEmail(candidateEmails),
+      phone: pickBestPhone(candidatePhones) || phonesFromOwners[0] || "",
+      website: pickBestWebsite(candidateWebsites),
+      phones: allPhones.length ? allPhones : phonesFromOwners,
+      emails: allEmails,
+      websites: allWebsites,
+      candidatePhones,
+      candidateEmails,
+      candidateWebsites,
       originalPhone: "",
       units: p.nbTotalUnites || p.nbLogements || 0,
       utilisation: p.utilisation || "",

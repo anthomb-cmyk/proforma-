@@ -8,6 +8,23 @@ import {
   mergePhoneLists,
   extractPhonesFromRow,
 } from "../lib/phoneUtils.js";
+import {
+  extractContactCandidatesFromRow,
+  mergePhoneCandidates,
+  mergeEmailCandidates,
+  mergeWebsiteCandidates,
+  flattenPhoneCandidates,
+  flattenEmailCandidates,
+  flattenWebsiteCandidates,
+  pickBestPhone,
+  pickBestEmail,
+  pickBestWebsite,
+  candidatesFromOnlinePhones,
+  candidatesFromOnlineWebsites,
+  makePhoneCandidate,
+  makeEmailCandidate,
+  makeWebsiteCandidate,
+} from "../lib/contactCandidates.js";
 import { buildLeadIdentityKey, getLeadPhones } from "../lib/dealHelpers.js";
 import { firstBusinessLookupName } from "../lib/businessName.js";
 import useDebouncedValue from "../lib/useDebouncedValue.js";
@@ -189,7 +206,50 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const buildingAddress = [address, city, province, postalCode].filter(Boolean).join(", ");
       const lookupName = firstBusinessLookupName(companyName);
       const inputPhones = mergePhoneLists(phone, extractPhonesFromRow(row));
-      return { companyName, contactName, address, city, province, postalCode, country, email, phone, inputPhones, notes, units, utilisation, assessment, yearBuilt, lotArea, buildingAddress, lookupName, rawRow: row };
+      // Pull every contact candidate out of the raw row with full source-
+      // column attribution. The classifier covers explicit phone/email/website
+      // columns plus notes / contact columns; address columns are skipped to
+      // avoid civic-number false positives. Source = "file" because we're at
+      // import time and these came directly from the user's spreadsheet.
+      const fileCandidates = extractContactCandidatesFromRow(row, {
+        ownerName: contactName || companyName,
+      });
+      // The auto-detected primary phone column (`phone`) and email column
+      // (`email`) sometimes have headers the classifier wouldn't pick up
+      // (e.g. localized variants). Force-add them as candidates when they
+      // produced values, so the user-mapped column always shows up as a
+      // file source.
+      if (phone && colMap.phone) {
+        for (const p of mergePhoneLists(phone)) {
+          fileCandidates.candidatePhones.push(makePhoneCandidate({
+            phone: p,
+            source: "file",
+            source_column: colMap.phone,
+            phone_owner_name: contactName || companyName,
+            relationship_to_lead_owner: "owner",
+            evidence: `mapped phone column "${colMap.phone}"`,
+          }));
+        }
+      }
+      if (email && colMap.email) {
+        fileCandidates.candidateEmails.push(makeEmailCandidate({
+          email,
+          source: "file",
+          source_column: colMap.email,
+          email_owner_name: contactName || companyName,
+          relationship_to_lead_owner: "owner",
+          evidence: `mapped email column "${colMap.email}"`,
+        }));
+      }
+      const candidatePhones = mergePhoneCandidates(fileCandidates.candidatePhones.filter(Boolean));
+      const candidateEmails = mergeEmailCandidates(fileCandidates.candidateEmails.filter(Boolean));
+      const candidateWebsites = mergeWebsiteCandidates(fileCandidates.candidateWebsites.filter(Boolean));
+      return {
+        companyName, contactName, address, city, province, postalCode, country, email, phone,
+        inputPhones, notes, units, utilisation, assessment, yearBuilt, lotArea,
+        buildingAddress, lookupName, rawRow: row,
+        candidatePhones, candidateEmails, candidateWebsites,
+      };
     }).filter(item => Object.values(item.rawRow || {}).some(v => String(v ?? "").trim()));
 
     if (!prepared.length) {
@@ -244,13 +304,67 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
       const mapped = batch.map((item, idx) => {
         const looked = lookupResults[idx] || {};
         const mergedPhones = mergePhoneLists(item.inputPhones, looked.inputPhones, looked.phone);
-        const resolvedPhone = mergedPhones[0] || "";
-        const linkedStatus = looked.status || (mergedPhones.length ? "found" : "not_found");
+
+        // Build online candidates from the lookup result. Phones get tagged
+        // by the source the enrichment pipeline reported (google_places /
+        // pages_jaunes / 411ca / file → directory). Websites tag as
+        // google_places. We DO NOT overwrite the file candidates — file +
+        // online live side-by-side in the candidate arrays.
+        const lookedSourceParts = String(looked.source || "").split(/[ ,]+/).filter(Boolean);
+        const placesSource = lookedSourceParts.includes("google_places") ? "google_places"
+          : lookedSourceParts.includes("pages_jaunes") || lookedSourceParts.includes("411ca") ? "directory"
+          : "google_places";
+        const placesEvidence = looked.matchedName
+          ? `Google Places match: ${looked.matchedName}${looked.confidence ? ` (${Math.round(looked.confidence)}%)` : ""}`
+          : "online lookup";
+        const onlinePhoneCandidates = candidatesFromOnlinePhones(
+          [looked.phone, ...(Array.isArray(looked.onlinePhones) ? looked.onlinePhones : [])],
+          {
+            source: placesSource,
+            phone_owner_name: looked.matchedName || item.companyName,
+            evidence: placesEvidence,
+            confidence: Number.isFinite(Number(looked.confidence))
+              ? Math.max(0, Math.min(100, Number(looked.confidence)))
+              : undefined,
+          },
+        );
+        const onlinePjCandidates = candidatesFromOnlinePhones(
+          Array.isArray(looked.pjDirectoryPhones) ? looked.pjDirectoryPhones : [],
+          { source: "directory", evidence: "Pages Jaunes directory" },
+        );
+        const online411Candidates = candidatesFromOnlinePhones(
+          Array.isArray(looked.c411DirectoryPhones) ? looked.c411DirectoryPhones : [],
+          { source: "directory", evidence: "411.ca directory" },
+        );
+        const onlineWebsiteCandidates = candidatesFromOnlineWebsites(
+          [looked.website].filter(Boolean),
+          { source: placesSource, evidence: placesEvidence },
+        );
+
+        // Merge file candidates FIRST so they take priority on (value,
+        // source, source_column) collisions and so flatten/pickBest favors
+        // the user's original data over enrichment guesses.
+        const candidatePhones = mergePhoneCandidates(
+          item.candidatePhones || [],
+          onlinePhoneCandidates,
+          onlinePjCandidates,
+          online411Candidates,
+        );
+        const candidateEmails = mergeEmailCandidates(item.candidateEmails || []);
+        const candidateWebsites = mergeWebsiteCandidates(
+          item.candidateWebsites || [],
+          onlineWebsiteCandidates,
+        );
+
+        const allPhones = flattenPhoneCandidates(candidatePhones);
+        const allEmails = flattenEmailCandidates(candidateEmails);
+        const allWebsites = flattenWebsiteCandidates(candidateWebsites);
+        const linkedStatus = looked.status || (mergedPhones.length || allPhones.length ? "found" : "not_found");
         return {
           id: `lead_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           createdAt: nowIso,
           updatedAt: Date.now(),
-          stage: mergedPhones.length ? "to_call" : "new",
+          stage: (mergedPhones.length || allPhones.length) ? "to_call" : "new",
           companyName: item.companyName || looked.inputName || looked.matchedName || "",
           contactName: item.contactName || "",
           buildingAddress: item.buildingAddress || looked.inputAddress || looked.matchedAddress || "",
@@ -258,9 +372,16 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           province: item.province || "",
           postalCode: item.postalCode || "",
           country: item.country || "Canada",
-          email: item.email || "",
-          phone: resolvedPhone,
-          phones: mergedPhones,
+          // Primary string fields: best file candidate first, then online.
+          phone: pickBestPhone(candidatePhones) || mergedPhones[0] || "",
+          email: pickBestEmail(candidateEmails) || item.email || "",
+          website: pickBestWebsite(candidateWebsites) || looked.website || "",
+          phones: allPhones.length ? allPhones : mergedPhones,
+          emails: allEmails,
+          websites: allWebsites,
+          candidatePhones,
+          candidateEmails,
+          candidateWebsites,
           originalPhone: item.inputPhones[0] || "",
           notes: item.notes || "",
           units:       item.units || 0,
@@ -273,7 +394,6 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
           matchedAddress: looked.matchedAddress || "",
           confidence: Number(looked.confidence || 0),
           lookupStatus: linkedStatus,
-          website: looked.website || "",
           linkedDealId: "",
         };
       });
@@ -323,6 +443,50 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
         existing.phones = mergedPhones;
         existing.phone = mergedPhones[0] || "";
         changed = true;
+      }
+      // Candidate arrays: existing comes FIRST so its file candidates with
+      // user-edited metadata are preserved on (value, source, source_column)
+      // collisions. New incoming online candidates append at the end.
+      const beforePhoneCandLen = (existing.candidatePhones || []).length;
+      const beforeEmailCandLen = (existing.candidateEmails || []).length;
+      const beforeWebsiteCandLen = (existing.candidateWebsites || []).length;
+      existing.candidatePhones = mergePhoneCandidates(
+        existing.candidatePhones || [],
+        incoming.candidatePhones || [],
+      );
+      existing.candidateEmails = mergeEmailCandidates(
+        existing.candidateEmails || [],
+        incoming.candidateEmails || [],
+      );
+      existing.candidateWebsites = mergeWebsiteCandidates(
+        existing.candidateWebsites || [],
+        incoming.candidateWebsites || [],
+      );
+      if (existing.candidatePhones.length !== beforePhoneCandLen ||
+          existing.candidateEmails.length !== beforeEmailCandLen ||
+          existing.candidateWebsites.length !== beforeWebsiteCandLen) {
+        changed = true;
+      }
+      // Re-flatten the value arrays from the merged candidate lists. If the
+      // merge produced no candidates (e.g. a phones-only-from-merge case),
+      // fall back to mergedPhones / existing values so we don't silently drop
+      // anything.
+      const flatPhones = flattenPhoneCandidates(existing.candidatePhones);
+      if (flatPhones.length) {
+        existing.phones = mergePhoneLists(flatPhones, mergedPhones);
+        existing.phone = pickBestPhone(existing.candidatePhones) || existing.phones[0] || "";
+      }
+      const flatEmails = flattenEmailCandidates(existing.candidateEmails);
+      if (flatEmails.length) {
+        existing.emails = flatEmails;
+        // Only overwrite the primary email when there's no existing one — the
+        // user may have manually edited it.
+        if (!existing.email) existing.email = pickBestEmail(existing.candidateEmails);
+      }
+      const flatWebsites = flattenWebsiteCandidates(existing.candidateWebsites);
+      if (flatWebsites.length) {
+        existing.websites = flatWebsites;
+        if (!existing.website) existing.website = pickBestWebsite(existing.candidateWebsites);
       }
       if (!existing.companyName && incoming.companyName) { existing.companyName = incoming.companyName; changed = true; }
       if (!existing.contactName && incoming.contactName) { existing.contactName = incoming.contactName; changed = true; }

@@ -2,3 +2,9 @@
 node_modules/
 .data/
 fluxlocatifwebsite-repo/
+
+# Local-only outputs from scripts/process-role-file.mjs and similar dev tools.
+# Never check in real owner / contact CSVs or XLSX dumps.
+tmp/
+*.xlsx
+*.xls
