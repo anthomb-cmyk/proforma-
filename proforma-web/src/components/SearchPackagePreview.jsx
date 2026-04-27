@@ -231,8 +231,8 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
             sub="informational" />
         </div>
 
-        {/* Lead value vs search need breakdowns */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        {/* Lead value / search need / enrichment priority */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div style={card}>
             <div style={cellLabel}>Lead value</div>
             <Bucket entries={[
@@ -250,16 +250,26 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
               ["skip", data.searchNeed.skip],
             ]} />
           </div>
+          <div style={card}>
+            <div style={cellLabel}>Enrichment priority</div>
+            <Bucket entries={[
+              ["high", data.highPriorityTargets ?? 0],
+              ["med", data.mediumPriorityTargets ?? 0],
+              ["low", data.lowPriorityTargets ?? 0],
+              ["skip", data.skippedUnsearchable ?? 0],
+              ["✓", data.alreadyHasPhone ?? 0],
+            ]} />
+          </div>
         </div>
 
         {/* Top high-value owners without any phone */}
         <div style={{ ...card, padding: "12px 14px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
-              Top {Math.min(topN, data.topHighValueWithoutPhone.length)} high-value owners without phone
+              Top {Math.min(topN, data.topHighValueWithoutPhone.length)} search-priority targets without phone
             </div>
             <div style={{ fontSize: 11, color: "var(--text3)" }}>
-              sorted by portfolio (properties / units)
+              sorted by enrichment score (high → medium → low)
             </div>
           </div>
           {data.topHighValueWithoutPhone.length === 0 ? (
@@ -271,6 +281,8 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>#</th>
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Owner</th>
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Category</th>
+                  <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>Score</th>
+                  <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Enrich</th>
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Strategy</th>
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>Props</th>
                   <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>Units</th>
@@ -283,6 +295,8 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text3)" }}>{i + 1}</td>
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontWeight: 600 }}>{row.name}</td>
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>{row.category}</td>
+                    <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right", fontFamily: "monospace" }}>{row.enrichmentScore}</td>
+                    <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: row.enrichmentPriority === "high" ? "#166534" : row.enrichmentPriority === "medium" ? "#854D0E" : "var(--text3)" }}>{row.enrichmentPriority}</td>
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>{row.strategy}</td>
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>{row.properties}</td>
                     <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>{row.units || "—"}</td>
@@ -313,7 +327,7 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
                   disabled={enrichState === "loading"}
                 >
                   {enrichState === "idle"
-                    ? `Test enrichment on top ${Math.min(data.topHighValueWithoutPhonePackages.length, 5)} packages`
+                    ? `Test enrichment on top ${Math.min(data.topHighValueWithoutPhonePackages.length, 5)} search-priority targets`
                     : "Re-run enrichment"}
                 </button>
               )}

@@ -154,11 +154,21 @@ export function buildSearchPackagePreviewData(rows, options = {}) {
   const stats = aggregateSearchPackageStats(packages);
   const audit = auditSearchPackages(packages, { topN });
 
-  const topRows = audit.top_high_value_without_phone.map((pkg) => ({
+  // Enrichment targets: high → medium → low priority order.
+  const enrichmentTargets = [
+    ...audit.high_priority_targets,
+    ...audit.medium_priority_targets,
+    ...audit.low_priority_targets,
+  ].slice(0, topN);
+
+  const topRows = enrichmentTargets.map((pkg) => ({
     name: pkg.lead_owner_name || "(no name)",
     category: pkg.legal_entity_category,
     leadValue: pkg.lead_value_priority,
     searchNeed: pkg.search_need_priority,
+    enrichmentScore: pkg.enrichment_score ?? 0,
+    enrichmentPriority: pkg.enrichment_search_priority ?? "—",
+    searchabilityPriority: pkg.searchability_priority ?? "—",
     strategy: pkg.search_strategy,
     properties: (pkg.associated_properties || []).length,
     units: (pkg.associated_properties || [])
@@ -183,12 +193,17 @@ export function buildSearchPackagePreviewData(rows, options = {}) {
     totalProperties: stats.total_properties,
     duplicateDifferentAddress: audit.duplicate_different_address.length,
     suspiciousCount: audit.suspicious.length,
+    // Enrichment priority buckets (new selection model).
+    highPriorityTargets: audit.summary.high_priority_targets,
+    mediumPriorityTargets: audit.summary.medium_priority_targets,
+    lowPriorityTargets: audit.summary.low_priority_targets,
+    eligibleWithoutPhone: audit.summary.eligible_without_phone,
+    alreadyHasPhone: audit.summary.already_has_phone,
+    skippedUnsearchable: audit.summary.skipped_unsearchable,
     topHighValueWithoutPhone: topRows,
-    // Raw package objects for the top-N list — used by the contact-enrichment
-    // preview button to POST to /api/contact-enrichment/preview.
-    topHighValueWithoutPhonePackages: audit.top_high_value_without_phone.slice(0, topN),
-    // The full lists are exposed too in case callers want to drill down or
-    // export. Kept as plain arrays so React can map them directly.
+    // Raw packages for /api/contact-enrichment/preview — ordered by enrichment
+    // priority (high → medium → low), not lead_value alone.
+    topHighValueWithoutPhonePackages: enrichmentTargets,
     numberedCompaniesWithoutPhone: audit.numbered_companies_without_phone,
     trustsWithoutPhone: audit.trusts_without_phone,
     companiesWithMailingNoPhone: audit.companies_with_mailing_no_phone,

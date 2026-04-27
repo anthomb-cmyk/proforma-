@@ -138,14 +138,14 @@ describe("buildSearchPackagePreviewData", () => {
     expect(snSum).toBe(data.packageCount);
   });
 
-  test("topHighValueWithoutPhone is sorted by portfolio + carries display fields", () => {
+  test("topHighValueWithoutPhone is sorted by enrichment score and carries display fields", () => {
     const data = buildSearchPackagePreviewData(fixture());
     const top = data.topHighValueWithoutPhone;
     expect(top.length).toBeGreaterThan(0);
-    // Jean Tremblay (3 properties) should be first.
-    expect(top[0].name).toBe("Jean Tremblay");
-    expect(top[0].properties).toBe(3);
-    // Each row carries the fields the panel renders.
+    // Fiducie Famille Bouchard (trust, searchability=75, lead_value=high → score=85) ranks
+    // first under the new enrichment model, ahead of Jean Tremblay (individual, score=67).
+    expect(top[0].name).toBe("Fiducie Famille Bouchard");
+    // Each row carries the core fields the panel renders.
     for (const r of top) {
       expect(typeof r.name).toBe("string");
       expect(typeof r.category).toBe("string");
@@ -155,6 +155,14 @@ describe("buildSearchPackagePreviewData", () => {
       expect(typeof r.properties).toBe("number");
       expect(typeof r.units).toBe("number");
       expect(typeof r.summary).toBe("string");
+      // New enrichment fields.
+      expect(typeof r.enrichmentScore).toBe("number");
+      expect(["high", "medium", "low", "skipped"]).toContain(r.enrichmentPriority);
+      expect(["high", "medium", "low", "skip"]).toContain(r.searchabilityPriority);
+    }
+    // Scores decrease monotonically across the combined bucket list.
+    for (let i = 1; i < top.length; i++) {
+      expect(top[i].enrichmentScore).toBeLessThanOrEqual(top[i - 1].enrichmentScore);
     }
   });
 
