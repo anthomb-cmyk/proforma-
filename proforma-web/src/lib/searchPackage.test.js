@@ -1,6 +1,7 @@
 import {
   buildSearchPackages,
   classifyLegalEntity,
+  assessLeadValue,
   assessSearchPriority,
   chooseSearchStrategy,
   buildDirectEntityQueries,
@@ -465,6 +466,118 @@ describe("Lead-like input shape", () => {
   });
 });
 
+describe("assessLeadValue (independent of contact-completeness)", () => {
+  test("company + multiple properties + good mailing → high (regardless of phone)", () => {
+    const pkg = {
+      lead_owner_name: "ABC Immobilier Inc.",
+      legal_entity_category: "immobilier",
+      is_searchable_entity: true,
+      associated_properties: [{ address: "100 Elm" }, { address: "200 Oak" }],
+      mailing_address: "217 St-Jacques", mailing_city: "Montréal", mailing_postal_code: "H2Y 1M6",
+    };
+    expect(assessLeadValue(pkg)).toBe("high");
+    // Same package WITH a phone is still high — value is independent of contacts.
+    pkg.existing_phones = ["514-777-1234"];
+    expect(assessLeadValue(pkg)).toBe("high");
+  });
+  test("company with one property → medium", () => {
+    const pkg = {
+      lead_owner_name: "ABC Immobilier Inc.",
+      legal_entity_category: "immobilier",
+      is_searchable_entity: true,
+      associated_properties: [{ address: "100 Elm" }],
+      mailing_address: "217 St-Jacques", mailing_city: "Montréal", mailing_postal_code: "H2Y 1M6",
+    };
+    expect(assessLeadValue(pkg)).toBe("medium");
+  });
+  test("company with no properties + no mailing → low", () => {
+    const pkg = {
+      lead_owner_name: "ABC Immobilier Inc.",
+      legal_entity_category: "immobilier",
+      is_searchable_entity: true,
+      associated_properties: [],
+      mailing_address: "", mailing_city: "", mailing_postal_code: "",
+    };
+    expect(assessLeadValue(pkg)).toBe("low");
+  });
+  test("individual with one property → low; with portfolio → medium/high", () => {
+    const base = {
+      lead_owner_name: "Jean Tremblay",
+      legal_entity_category: "individual",
+      is_searchable_entity: false,
+      mailing_address: "x", mailing_city: "y", mailing_postal_code: "z",
+    };
+    expect(assessLeadValue({ ...base, associated_properties: [{ address: "1" }] })).toBe("low");
+    expect(assessLeadValue({ ...base, associated_properties: [{ address: "1" }, { address: "2" }] })).toBe("medium");
+    expect(assessLeadValue({
+      ...base,
+      associated_properties: [{ address: "1" }, { address: "2" }, { address: "3" }],
+    })).toBe("high");
+  });
+  test("never returns 'skip' (only high/medium/low)", () => {
+    expect(["high", "medium", "low"]).toContain(assessLeadValue({
+      lead_owner_name: "",
+      legal_entity_category: "unknown",
+      associated_properties: [],
+      mailing_address: "",
+    }));
+    expect(["high", "medium", "low"]).toContain(assessLeadValue(null));
+  });
+});
+
+describe("lead_value_priority vs search_need_priority — separation", () => {
+  // The headline business rule: a company with multiple properties and a
+  // file phone is HIGH-VALUE but LOW-SEARCH-NEED. Pin it down end-to-end.
+  test("company w/ portfolio + file phone → value=high, search_need=low", () => {
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      phones: ["(514) 777-1234"],
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.lead_value_priority).toBe("high");
+    expect(pkg.search_need_priority).toBe("low");
+    // Backwards-compat alias still equals search_need_priority.
+    expect(pkg.search_priority).toBe("low");
+    expect(pkg.search_strategy).toBe("use_file_phone");
+  });
+
+  test("same company without phone → value=high, search_need=high", () => {
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      phones: [],
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.lead_value_priority).toBe("high");
+    expect(pkg.search_need_priority).toBe("high");
+  });
+
+  test("individual with no contacts and no portfolio → value=low, search_need=skip", () => {
+    const owners = [mkOwner({
+      displayName: "Jean Tremblay",
+      contactNames: ["Jean Tremblay"],
+      postalAddress: { street: "", city: "", province: "", postalCode: "" },
+      buildings: [],
+      phones: [],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.lead_value_priority).toBe("low");
+    expect(pkg.search_need_priority).toBe("skip");
+  });
+
+  test("reason string includes both axes", () => {
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      phones: ["(514) 777-1234"],
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    expect(pkg.reason).toContain("lead_value=high");
+    expect(pkg.reason).toContain("search_need=low");
+  });
+});
+
 describe("aggregateSearchPackageStats", () => {
   function fixture() {
     // Three owners covering the buckets we care about.
@@ -494,10 +607,15 @@ describe("aggregateSearchPackageStats", () => {
     const pkgs = buildSearchPackages(fixture());
     const stats = aggregateSearchPackageStats(pkgs);
     expect(stats.total).toBe(3);
-    // Priorities: ABC has phone → low; numbered → medium (good mailing);
+    // search_need: ABC has phone → low; numbered → high (good mailing);
     // individual w/ no mailing → skip.
-    expect(stats.by_priority.low).toBeGreaterThanOrEqual(1);
-    expect(stats.by_priority.skip).toBeGreaterThanOrEqual(1);
+    expect(stats.by_search_need.low).toBeGreaterThanOrEqual(1);
+    expect(stats.by_search_need.skip).toBeGreaterThanOrEqual(1);
+    // by_priority is the backward-compat alias and should mirror by_search_need.
+    expect(stats.by_priority).toEqual(stats.by_search_need);
+    // lead_value bucket: ABC + numbered both high (portfolio); individual low.
+    expect(stats.by_lead_value.high).toBeGreaterThanOrEqual(1);
+    expect(stats.by_lead_value.low).toBeGreaterThanOrEqual(1);
     // Existing-contact counts come straight off ABC's row.
     expect(stats.with_existing_phone).toBe(1);
     expect(stats.with_existing_email).toBe(1);
@@ -524,7 +642,7 @@ describe("aggregateSearchPackageStats", () => {
 });
 
 describe("formatSearchPackageRow + formatSearchPackageReport", () => {
-  test("row carries name, category, priority, strategy, props, phones, queries", () => {
+  test("row carries name, category, value, priority, strategy, props, phones, queries", () => {
     const owners = [mkOwner({
       displayName: "ABC Immobilier Inc.",
       phones: ["514-777-1234"],
@@ -534,7 +652,9 @@ describe("formatSearchPackageRow + formatSearchPackageReport", () => {
     const row = formatSearchPackageRow(pkg);
     expect(row).toContain("ABC Immobilier Inc.");
     expect(row).toContain("immobilier");
-    expect(row).toMatch(/pri=\w+/);
+    // The value=high · pri=low pairing is the headline business rule.
+    expect(row).toContain("value=high");
+    expect(row).toContain("pri=low");
     expect(row).toMatch(/strat=\w+/);
     expect(row).toMatch(/props=2/);
     expect(row).toMatch(/phones=1/);
@@ -555,7 +675,8 @@ describe("formatSearchPackageRow + formatSearchPackageReport", () => {
     const report = formatSearchPackageReport(pkgs);
     expect(report).toContain("=== Search Package Stats ===");
     expect(report).toContain("total: 2");
-    expect(report).toContain("priority:");
+    expect(report).toContain("lead_value:");
+    expect(report).toContain("search_need:");
     expect(report).toContain("existing:");
     expect(report).toContain("=== Top 2 Packages ===");
     // Numbered rows.

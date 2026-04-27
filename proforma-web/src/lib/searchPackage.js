@@ -158,6 +158,60 @@ function looksLikeJunkName(name) {
 
 // ─── Priority + strategy ───────────────────────────────────────────────────
 
+// ─── Lead value vs. search need ────────────────────────────────────────────
+//
+// These two axes are deliberately separate:
+//
+//   • lead_value_priority — how valuable is this lead independent of how
+//     complete its contact info is. A company with a 12-property portfolio
+//     stays high-value even after we already have its phone number; an
+//     individual with one duplex stays low-value even with no phone.
+//
+//   • search_need_priority — how much enrichment work this package still
+//     needs. A package with a known file phone has LOW search need, even
+//     though the lead itself may be HIGH value. "skip" means "don't search
+//     at all" — typically used for junk or empty records.
+//
+// Code that ranks leads for a sales queue should sort by lead_value_priority.
+// Code that ranks the enrichment queue should sort by search_need_priority.
+// `search_priority` is kept on the package as a backwards-compatible alias
+// for search_need_priority — same value, same semantics, older callers can
+// keep using it.
+
+// Lead value: portfolio + entity strength, ignoring contact-completeness.
+// Returns "high" | "medium" | "low". Never "skip" — even an empty record is
+// still a lead, just a low-value one.
+export function assessLeadValue(pkg) {
+  if (!pkg) return "low";
+  const cat = pkg.legal_entity_category;
+  const isSearchable = !!pkg.is_searchable_entity;
+  const isIndividual = cat === "individual";
+  const propertyCount = Array.isArray(pkg.associated_properties)
+    ? pkg.associated_properties.length
+    : 0;
+  const totalUnits = (pkg.associated_properties || [])
+    .reduce((s, p) => s + (Number(p?.units) || 0), 0);
+  const quality = mailingAddressQuality(pkg);
+  const isJunk = looksLikeJunkName(pkg.lead_owner_name);
+
+  // Searchable entities (companies / trusts / etc.) are high-value when they
+  // hold a portfolio. Mailing-address quality is a tie-breaker; the portfolio
+  // alone is enough to clear the "high" bar.
+  if (isSearchable && (propertyCount >= 2 || totalUnits >= 10)) return "high";
+  // Searchable entity with at least one property OR usable mailing → medium.
+  if (isSearchable && (propertyCount >= 1 || quality !== "missing")) return "medium";
+  // Bare searchable entity with literally nothing else → low.
+  if (isSearchable) return "low";
+
+  // Individuals with sizeable portfolios are still worth pursuing.
+  if (isIndividual && (propertyCount >= 3 || totalUnits >= 12)) return "high";
+  if (isIndividual && (propertyCount >= 2 || totalUnits >= 6)) return "medium";
+
+  // Junk / unknown / single-property individual → low.
+  if (isJunk) return "low";
+  return "low";
+}
+
 export function assessSearchPriority(pkg) {
   if (!pkg) return "skip";
   const quality0 = mailingAddressQuality(pkg);
@@ -558,8 +612,13 @@ export function buildSearchPackages(inputRows, options = {}) {
       source_row_indices: g.sourceRowIndices.slice(),
     };
 
-    // Priority + strategy depend on the rest of the package — assess last.
-    pkg.search_priority = assessSearchPriority(pkg);
+    // Lead value + search need are independent axes — both depend on the rest
+    // of the package, so assess last. `search_priority` is retained as an
+    // alias for `search_need_priority` so existing callers keep working.
+    pkg.lead_value_priority = assessLeadValue(pkg);
+    const searchNeed = assessSearchPriority(pkg);
+    pkg.search_need_priority = searchNeed;
+    pkg.search_priority = searchNeed;
     pkg.search_strategy = chooseSearchStrategy(pkg);
     pkg.direct_entity_queries = buildDirectEntityQueries(pkg);
     pkg.mailing_address_discovery_queries = buildMailingAddressDiscoveryQueries(pkg);
@@ -589,7 +648,8 @@ export function buildSearchPackages(inputRows, options = {}) {
 function buildReason(pkg) {
   const parts = [];
   parts.push(`category=${pkg.legal_entity_category}`);
-  parts.push(`priority=${pkg.search_priority}`);
+  parts.push(`lead_value=${pkg.lead_value_priority}`);
+  parts.push(`search_need=${pkg.search_need_priority || pkg.search_priority}`);
   parts.push(`strategy=${pkg.search_strategy}`);
   if (hasValidPhone(pkg)) parts.push("has_existing_phone");
   if (Array.isArray(pkg.associated_properties) && pkg.associated_properties.length) {
@@ -620,6 +680,7 @@ export function summarizeSearchPackage(pkg) {
   const name = pkg.lead_owner_name || "(no name)";
   return [
     `${name} [${pkg.legal_entity_category}]`,
+    `value=${pkg.lead_value_priority}`,
     `priority=${pkg.search_priority}`,
     `strategy=${pkg.search_strategy}`,
     `phones=${phones}/${candP}`,
@@ -644,7 +705,10 @@ export function aggregateSearchPackageStats(packages) {
   const list = Array.isArray(packages) ? packages : [];
   const stats = {
     total: list.length,
+    // by_priority kept for backward compat; mirrors by_search_need.
     by_priority: { high: 0, medium: 0, low: 0, skip: 0 },
+    by_search_need: { high: 0, medium: 0, low: 0, skip: 0 },
+    by_lead_value: { high: 0, medium: 0, low: 0 },
     by_strategy: {},
     by_category: {},
     with_existing_phone: 0,
@@ -657,9 +721,14 @@ export function aggregateSearchPackageStats(packages) {
   };
   for (const pkg of list) {
     if (!pkg) continue;
-    const pri = pkg.search_priority;
+    const pri = pkg.search_need_priority || pkg.search_priority;
     if (Object.prototype.hasOwnProperty.call(stats.by_priority, pri)) {
       stats.by_priority[pri]++;
+      stats.by_search_need[pri]++;
+    }
+    const val = pkg.lead_value_priority;
+    if (Object.prototype.hasOwnProperty.call(stats.by_lead_value, val)) {
+      stats.by_lead_value[val]++;
     }
     const strat = pkg.search_strategy || "(unknown)";
     stats.by_strategy[strat] = (stats.by_strategy[strat] || 0) + 1;
@@ -694,9 +763,11 @@ export function formatSearchPackageRow(pkg) {
   const mQ = (pkg.mailing_address_discovery_queries || []);
   const dQHead = dQ.length ? `${dQ[0]}${dQ.length > 1 ? ` (+${dQ.length - 1})` : ""}` : "—";
   const mQHead = mQ.length ? `${mQ[0]}${mQ.length > 1 ? ` (+${mQ.length - 1})` : ""}` : "—";
+  const val = pkg.lead_value_priority || "?";
   return [
     name,
     cat,
+    `value=${val}`,
     `pri=${pri}`,
     `strat=${strat}`,
     `props=${props}`,
@@ -722,8 +793,12 @@ export function formatSearchPackageReport(packages, options = {}) {
   lines.push("=== Search Package Stats ===");
   lines.push(`total: ${stats.total}`);
   lines.push(
-    `priority: high=${stats.by_priority.high} medium=${stats.by_priority.medium} ` +
-    `low=${stats.by_priority.low} skip=${stats.by_priority.skip}`,
+    `lead_value: high=${stats.by_lead_value.high} medium=${stats.by_lead_value.medium} ` +
+    `low=${stats.by_lead_value.low}`,
+  );
+  lines.push(
+    `search_need: high=${stats.by_search_need.high} medium=${stats.by_search_need.medium} ` +
+    `low=${stats.by_search_need.low} skip=${stats.by_search_need.skip}`,
   );
   lines.push(
     `existing: phone=${stats.with_existing_phone} email=${stats.with_existing_email} ` +
