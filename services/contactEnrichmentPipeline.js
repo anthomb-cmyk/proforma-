@@ -7,12 +7,18 @@
 //   - Pure function: network is injected (searchFn, fetchPageFn) so tests
 //     can run without external calls.
 //   - Hard limits guard against runaway API spend.
-//   - Skips packages that already have an owner-direct phone — no need to
-//     look them up.
+//   - Skips packages that already have an owner-direct phone.
 //   - Does NOT write to the CRM, does NOT call /api/phone-lookup, does NOT
 //     use Google Places.
+//
+// Scoring rules (tightened in v2):
+//   - Junk/directory/municipal results are rejected before any phone is recorded.
+//   - Individual owners never receive mailing-address business phones.
+//   - A phone only becomes bestPhone when confidence ≥ medium (score ≥ 3).
+//   - ready_to_call requires direct_entity or page source + name match.
+//   - Mailing/related phones stay at needs_review even when accepted.
 
-import { isValidNanpPhone, normalizePhoneKey } from "./phoneEnrichment.js";
+import { isValidNanpPhone, normalizePhoneKey, normalizeKey } from "./phoneEnrichment.js";
 
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
@@ -25,13 +31,8 @@ const MAX_PAGES_PER_SITE = 2;
 
 /* ─── Phone / email / URL extraction from free text ───────────────────────── */
 
-// Broad NANP pattern — isValidNanpPhone filters junk afterwards.
 const PHONE_RE = /(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)(?:\d{3}[-.\s]?\d{4})/g;
-
-// RFC-5321-ish; good enough for snippets.
 const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-
-// URLs starting with http(s):// or www.
 const URL_RE = /https?:\/\/[^\s"'<>)]+|www\.[^\s"'<>)]+/gi;
 
 function extractPhones(text) {
@@ -66,7 +67,7 @@ function extractUrls(text) {
   const raw = String(text).match(URL_RE) || [];
   const seen = new Set();
   return raw
-    .map((u) => u.replace(/[.,;:!?)]+$/, ""))   // strip trailing punctuation
+    .map((u) => u.replace(/[.,;:!?)]+$/, ""))
     .filter((u) => {
       const low = u.toLowerCase();
       if (seen.has(low)) return false;
@@ -75,10 +76,62 @@ function extractUrls(text) {
     });
 }
 
+/* ─── Junk result detection ────────────────────────────────────────────────── */
+
+// Titles that signal a generic directory listing, shipping/mailbox store,
+// or municipal/government page rather than the owner entity being searched.
+const JUNK_TITLE_RE = /\b(?:ups\s+store|the\s+ups|purolator|fedex|dhl|canada\s+post|postes?\s+canada|courrier|courier|mailbox(?:es)?|mail\s+box|boite\s+postale|bo[iî]te\s+postale|packing\s+store|shipping\s+store|pages?\s+jaunes|yellowpages?|canada\s*411|411\s*canada|annuaire|yelp|tripadvisor|facebook|linkedin|instagram|mairie|ville\s+de|city\s+of|town\s+of|municipalit[eé]|h[oô]tel\s+de\s+ville|gouvernement|government)\b/i;
+
+// Domains that are directories, social networks, or municipal portals.
+const JUNK_DOMAIN_RE = /(?:facebook\.com|linkedin\.com|twitter\.com|instagram\.com|tiktok\.com|yelp\.com|yelp\.ca|yellowpages\.\w+|canada411\.ca|pagesjaunes\.ca|411\.ca|tripadvisor\.com|tripadvisor\.ca)/i;
+
+const MUNICIPAL_DOMAIN_RE = /(?:gouv\.qc\.ca|\.gc\.ca|ville\.[a-z-]+\.(qc\.)?ca|mairie\.[a-z-]+\.ca)/i;
+
+export function isJunkResult(title, url) {
+  const t = String(title || "");
+  const u = String(url || "");
+  if (JUNK_TITLE_RE.test(t)) return true;
+  if (JUNK_DOMAIN_RE.test(u)) return true;
+  if (MUNICIPAL_DOMAIN_RE.test(u)) return true;
+  return false;
+}
+
+/* ─── Name-overlap detection ───────────────────────────────────────────────── */
+
+// Tokens too generic to drive a name match decision.
+const NAME_STOP_WORDS = new Set([
+  "inc", "ltee", "ltee", "llp", "llc", "corp", "ltd",
+  "et", "and", "the", "a", "an",
+  "le", "la", "les", "de", "du", "des", "en", "au", "aux",
+]);
+
+function significantTokens(name) {
+  return normalizeKey(name)
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !NAME_STOP_WORDS.has(t));
+}
+
+// Returns true when at least one significant token from the owner name appears
+// in the result title, using prefix matching to handle slight morphological
+// variants (e.g. "dupont" matches "duponts").
+export function hasNameOverlap(ownerName, resultTitle) {
+  if (!ownerName || !resultTitle) return false;
+  const ot = significantTokens(ownerName);
+  const rt = significantTokens(resultTitle);
+  if (!ot.length || !rt.length) return false;
+  return ot.some((a) => rt.some((b) => a === b || a.startsWith(b) || b.startsWith(a)));
+}
+
+/* ─── Real-estate keyword heuristic ───────────────────────────────────────── */
+
+const REAL_ESTATE_RE = /\b(?:immobilier|immobili[eè]re|immo|gestion|holding|investissement|placement|properties|realty|real\s+estate|appartement|logement|r[eé]sidentiel|residential|locatif|locative|propri[eé]t[eé]s?|location)\b/i;
+
+export function hasRealEstateKeyword(text) {
+  return REAL_ESTATE_RE.test(String(text || ""));
+}
+
 /* ─── Owner-direct phone detection ────────────────────────────────────────── */
 
-// Returns true when the package already has at least one phone whose
-// relationship_to_lead_owner is "owner" — we don't need to search for it.
 function pkgHasOwnerDirectPhone(pkg) {
   for (const c of pkg.candidatePhones || []) {
     if (normalizePhoneKey(c?.phone) && c?.relationship_to_lead_owner === "owner") return true;
@@ -88,9 +141,6 @@ function pkgHasOwnerDirectPhone(pkg) {
 
 /* ─── Candidate scoring ────────────────────────────────────────────────────── */
 
-// Very simple scoring: multiply source weight × recurrence weight.
-// Source weights: direct-entity search snippet > page body > mailing-address
-// search snippet > related-company search.
 const SOURCE_WEIGHTS = {
   direct_entity: 3,
   page: 2,
@@ -98,15 +148,22 @@ const SOURCE_WEIGHTS = {
   related: 1,
 };
 
+// Name match doubles the score — it's the primary signal that the phone
+// actually belongs to the entity we're searching for.
 function scorePhoneCandidate(c) {
   const sw = SOURCE_WEIGHTS[c.source] || 1;
-  return sw * (c.occurrences || 1);
+  const nameBonus = c.nameMatch ? 2 : 1;
+  return sw * (c.occurrences || 1) * nameBonus;
+}
+
+function confidenceFromScore(score) {
+  if (score >= 6) return "high";
+  if (score >= 3) return "medium";
+  return "low";
 }
 
 /* ─── HTML page scraping helpers ───────────────────────────────────────────── */
 
-// Derive candidate sub-pages to fetch for a given homepage URL.
-// Returns at most MAX_PAGES_PER_SITE URLs including the homepage itself.
 function buildPageUrls(homepageUrl, max) {
   const base = homepageUrl.replace(/\/+$/, "");
   const pages = [homepageUrl];
@@ -119,17 +176,6 @@ function buildPageUrls(homepageUrl, max) {
 
 /* ─── Main pipeline ─────────────────────────────────────────────────────────── */
 
-/**
- * Run the contact-enrichment pipeline over a list of search packages.
- *
- * @param {object} params
- * @param {object[]} params.packages  Array of search-package objects (output of buildSearchPackages).
- * @param {number}  [params.limit]    How many packages to process (default 5, max 10).
- * @param {Function} params.searchFn  async (query) => { ok, results: [{title,snippet,url}] }
- * @param {Function} [params.fetchPageFn]  async (url) => html string | null
- * @param {object}  [params.options]  Fine-grained overrides for hard limits.
- * @returns {Promise<object[]>}  Array of enrichment result objects.
- */
 export async function runContactEnrichmentPreview({
   packages,
   limit: rawLimit,
@@ -179,9 +225,13 @@ export async function runContactEnrichmentPreview({
 }
 
 async function processSinglePackage(pkg, opts) {
+  const ownerName = pkg.lead_owner_name || "";
+  const category = pkg.legal_entity_category || "unknown";
+  const isIndividual = category === "individual";
+
   const base = {
-    lead_owner_name: pkg.lead_owner_name || "",
-    legal_entity_category: pkg.legal_entity_category || "unknown",
+    lead_owner_name: ownerName,
+    legal_entity_category: category,
     mailing_address: pkg.mailing_address || "",
     mailing_city: pkg.mailing_city || "",
     lead_value_priority: pkg.lead_value_priority || "low",
@@ -200,23 +250,17 @@ async function processSinglePackage(pkg, opts) {
     status: "no_contact_found",
   };
 
-  // Step 0 — skip packages that already have an owner-direct phone.
   if (pkgHasOwnerDirectPhone(pkg)) {
     return { ...base, status: "skipped_existing_phone" };
   }
 
-  const phoneCands = [];  // { digits, raw, belongsTo, source, url, occurrences }
-  const emailCands = [];  // { email, source, url }
-  const websiteCands = [];  // { url, source }
-  const relatedCompanies = [];  // { name, url }
-  const evidence = [];  // string notes for transparency
+  const phoneCands = [];
+  const emailCands = [];
+  const websiteCands = [];
+  const relatedCompanies = [];
+  const evidence = [];
 
   const strategy = pkg.search_strategy || "direct_entity";
-  const directQueries = (pkg.mailing_address_discovery_queries === undefined)
-    ? buildDirectEntityQueriesLocal(pkg)
-    : [];
-
-  // Determine which queries to run based on strategy.
   const useDirectQueries = strategy !== "mailing_address_only" && strategy !== "skip_low_value";
   const useMailingQueries = strategy === "mailing_address_only"
     || strategy === "direct_entity_then_mailing_address_related_companies";
@@ -232,35 +276,37 @@ async function processSinglePackage(pkg, opts) {
       }
       evidence.push(`direct_query: "${q}" → ${res.results.length} results`);
       for (const r of res.results) {
+        if (isJunkResult(r.title, r.url)) {
+          evidence.push(`rejected: "${r.title}" (junk_business)`);
+          continue;
+        }
+        const nameMatch = hasNameOverlap(ownerName, r.title);
         const combined = `${r.title} ${r.snippet}`;
         for (const p of extractPhones(combined)) {
-          recordPhone(phoneCands, p, "direct_entity", r.url, r.title);
+          recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch);
         }
         for (const e of extractEmails(combined)) {
           recordEmail(emailCands, e, "direct_entity", r.url);
         }
-        // Record the result URL itself as a website candidate in addition to
-        // any URLs found inside the snippet text.
-        if (r.url) recordWebsite(websiteCands, r.url, "direct_entity");
+        if (r.url) recordWebsite(websiteCands, r.url, "direct_entity", nameMatch);
         for (const u of extractUrls(combined)) {
-          recordWebsite(websiteCands, u, "direct_entity");
+          recordWebsite(websiteCands, u, "direct_entity", nameMatch);
         }
       }
     }
   }
 
-  // Step 2 — website page extraction.
-  // Take the top unique website URL found so far and fetch its contact page.
-  const topWebsite = websiteCands[0]?.url;
+  // Step 2 — website page extraction from top non-junk result URL.
+  const topWebsite = websiteCands.find((w) => !isJunkResult("", w.url));
   if (topWebsite) {
-    const pageUrls = buildPageUrls(topWebsite, opts.maxPages);
+    const pageUrls = buildPageUrls(topWebsite.url, opts.maxPages);
     for (const pageUrl of pageUrls) {
       const html = await opts.fetchPageFn(pageUrl);
       if (!html) continue;
       evidence.push(`page_fetched: ${pageUrl}`);
       const text = stripHtmlTags(html);
       for (const p of extractPhones(text)) {
-        recordPhone(phoneCands, p, "page", pageUrl, pageUrl);
+        recordPhone(phoneCands, p, "page", pageUrl, pageUrl, topWebsite.nameMatch);
       }
       for (const e of extractEmails(text)) {
         recordEmail(emailCands, e, "page", pageUrl);
@@ -279,14 +325,26 @@ async function processSinglePackage(pkg, opts) {
       }
       evidence.push(`mailing_query: "${q}" → ${res.results.length} results`);
       for (const r of res.results) {
-        const combined = `${r.title} ${r.snippet}`;
-        for (const p of extractPhones(combined)) {
-          recordPhone(phoneCands, p, "mailing", r.url, r.title);
+        if (isJunkResult(r.title, r.url)) {
+          evidence.push(`rejected: "${r.title}" (junk_business)`);
+          continue;
         }
+        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const combined = `${r.title} ${r.snippet}`;
+
+        // Individual owners: mailing-address business phones are noise.
+        // Only record if there is an explicit name match (rare for personal names).
+        if (!isIndividual || nameMatch) {
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, "mailing", r.url, r.title, nameMatch);
+          }
+        } else {
+          evidence.push(`skipped: individual owner + mailing business "${r.title}" (no name match)`);
+        }
+
         for (const e of extractEmails(combined)) {
           recordEmail(emailCands, e, "mailing", r.url);
         }
-        // Track company names found at the mailing address as related companies.
         if (r.title && relatedCompanies.length < opts.maxRelated) {
           relatedCompanies.push({ name: r.title, url: r.url });
         }
@@ -294,40 +352,63 @@ async function processSinglePackage(pkg, opts) {
     }
   }
 
-  // Step 4 — related company lookup: search for each related company individually.
+  // Step 4 — related company lookup.
   const relatedToSearch = relatedCompanies.slice(0, opts.maxRelated);
   for (const rel of relatedToSearch) {
-    const q = rel.name;
-    const res = await opts.searchFn(q);
+    const res = await opts.searchFn(rel.name);
     if (!res.ok) continue;
-    evidence.push(`related_query: "${q}" → ${res.results.length} results`);
+    evidence.push(`related_query: "${rel.name}" → ${res.results.length} results`);
     for (const r of res.results.slice(0, 2)) {
-      const combined = `${r.title} ${r.snippet}`;
-      for (const p of extractPhones(combined)) {
-        recordPhone(phoneCands, p, "related", r.url, rel.name);
+      if (isJunkResult(r.title, r.url)) continue;
+      const nameMatch = hasNameOverlap(ownerName, r.title);
+      if (!isIndividual || nameMatch) {
+        for (const p of extractPhones(`${r.title} ${r.snippet}`)) {
+          recordPhone(phoneCands, p, "related", r.url, rel.name, nameMatch);
+        }
       }
     }
   }
 
-  // Step 5 — score and select best candidates.
-  phoneCands.sort((a, b) => scorePhoneCandidate(b) - scorePhoneCandidate(a));
+  // Step 5 — score, filter, and select best candidate.
+  const scored = phoneCands
+    .map((c) => ({ ...c, score: scorePhoneCandidate(c) }))
+    .sort((a, b) => b.score - a.score);
 
-  const best = phoneCands[0] || null;
+  // Only accept bestPhone if confidence ≥ medium (score ≥ 3).
+  const bestCand = scored.find((c) => c.score >= 3) || null;
 
-  let status = "no_contact_found";
+  let bestPhone = null;
+  let bestPhoneBelongsTo = null;
+  let phoneRelationship = null;
   let confidence = "low";
+  let status = "no_contact_found";
 
-  if (best) {
-    const sc = scorePhoneCandidate(best);
-    if (sc >= 6) confidence = "high";
-    else if (sc >= 3) confidence = "medium";
-    else confidence = "low";
+  if (bestCand) {
+    confidence = confidenceFromScore(bestCand.score);
+    bestPhone = bestCand.raw;
+    bestPhoneBelongsTo = bestCand.belongsTo || null;
+    phoneRelationship = bestCand.source;
 
-    if (confidence === "high" || best.source === "direct_entity") {
+    // ready_to_call only when the phone came directly from a named entity
+    // (not just a mailing-address neighbour) and that entity name overlaps
+    // with the owner we searched for.
+    const isDirectOrPage = bestCand.source === "direct_entity" || bestCand.source === "page";
+    if (isDirectOrPage && bestCand.nameMatch) {
       status = "ready_to_call";
     } else {
       status = "needs_review";
     }
+    evidence.push(
+      `best_phone: ${bestPhone} from "${bestPhoneBelongsTo}" ` +
+      `(score=${bestCand.score}, nameMatch=${bestCand.nameMatch}, source=${bestCand.source})`
+    );
+  } else if (scored.length > 0) {
+    // Candidates exist but none met the medium-confidence bar.
+    status = "needs_review";
+    confidence = "low";
+    evidence.push(
+      `low_confidence_only: ${scored.length} candidate(s), best score=${scored[0].score} — bestPhone withheld`
+    );
   } else if (emailCands.length > 0) {
     status = "ready_to_email";
     confidence = "medium";
@@ -335,12 +416,12 @@ async function processSinglePackage(pkg, opts) {
 
   return {
     ...base,
-    bestPhone: best ? best.raw : null,
-    bestPhoneBelongsTo: best ? (best.belongsTo || null) : null,
-    phoneRelationship: best ? best.source : null,
+    bestPhone,
+    bestPhoneBelongsTo,
+    phoneRelationship,
     bestEmail: emailCands[0]?.email || null,
     bestWebsite: websiteCands[0]?.url || null,
-    phoneCandidates: phoneCands,
+    phoneCandidates: scored,
     emailCandidates: emailCands,
     websiteCandidates: websiteCands,
     relatedCompanies,
@@ -352,12 +433,17 @@ async function processSinglePackage(pkg, opts) {
 
 /* ─── Candidate list helpers ─────────────────────────────────────────────── */
 
-function recordPhone(list, { digits, raw }, source, url, belongsTo) {
+function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch) {
   const existing = list.find((c) => c.digits === digits && c.source === source);
   if (existing) {
     existing.occurrences = (existing.occurrences || 1) + 1;
+    if (nameMatch) existing.nameMatch = true;
   } else {
-    list.push({ digits, raw, source, url: url || "", belongsTo: belongsTo || "", occurrences: 1 });
+    list.push({
+      digits, raw, source,
+      url: url || "", belongsTo: belongsTo || "",
+      occurrences: 1, nameMatch: !!nameMatch,
+    });
   }
 }
 
@@ -367,18 +453,18 @@ function recordEmail(list, email, source, url) {
   }
 }
 
-function recordWebsite(list, url, source) {
+function recordWebsite(list, url, source, nameMatch) {
   if (!list.some((c) => c.url === url)) {
-    list.push({ url, source });
+    list.push({ url, source, nameMatch: !!nameMatch });
   }
 }
 
-/* ─── Local query builder (mirrors searchPackage.js logic without importing) ── */
+/* ─── Local query builder ────────────────────────────────────────────────── */
 
-const JUNK_RE = /^(?:\d{6,8}|[\d\-]{10,30}|[a-z]{0,3}\d+[a-z]{0,3})$/i;
+const JUNK_NAME_RE = /^(?:\d{6,8}|[\d\-]{10,30}|[a-z]{0,3}\d+[a-z]{0,3})$/i;
 function looksLikeJunkLocal(name) {
   if (!name) return true;
-  return JUNK_RE.test(String(name).trim());
+  return JUNK_NAME_RE.test(String(name).trim());
 }
 
 function buildDirectEntityQueriesLocal(pkg) {
@@ -400,7 +486,6 @@ function buildDirectEntityQueriesLocal(pkg) {
     const key = trimmed.toLowerCase();
     if (!seen.has(key)) { seen.add(key); out.push(trimmed); }
   };
-
   const join = (...parts) => parts.filter(Boolean).join(", ");
 
   if (city) push(join(name, city, prov));
