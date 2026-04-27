@@ -1,0 +1,108 @@
+{
+  "_comment": "Sample owner-shaped fixture for scripts/preview-search-packages.mjs. Schema matches the Owner records produced by ownerGrouping.js + roleImport.js. Edit / extend as needed; not loaded by any production code.",
+  "owners": [
+    {
+      "id": "owner_1",
+      "ownerKey": "217 saint jacques|h2y1m6",
+      "displayName": "ABC Immobilier Inc.",
+      "aliases": [],
+      "contactNames": ["Jean Tremblay", "Marie Côté"],
+      "phones": ["(514) 777-1234"],
+      "phoneSources": { "5147771234": "Excel" },
+      "emails": ["abc@example.com"],
+      "websites": ["abc.com"],
+      "candidatePhones": [
+        {
+          "phone": "(514) 777-1234",
+          "source": "file",
+          "source_column": "Téléphone Propriétaire",
+          "phone_owner_name": "Jean Tremblay",
+          "relationship_to_lead_owner": "owner",
+          "confidence": 85,
+          "evidence": "from longueuil.xlsx",
+          "status": "unverified"
+        }
+      ],
+      "candidateEmails": [],
+      "candidateWebsites": [],
+      "postalAddress": {
+        "street": "217 rue Saint-Jacques",
+        "city": "Montréal",
+        "province": "QC",
+        "postalCode": "H2Y 1M6"
+      },
+      "buildings": [
+        { "id": "b1", "address": "100 Elm", "postalCode": "H1A 1A1", "units": 6 },
+        { "id": "b2", "address": "200 Oak", "postalCode": "H1B 1B1", "units": 8 }
+      ]
+    },
+    {
+      "id": "owner_2",
+      "ownerKey": "999 other|h7a1a1",
+      "displayName": "9338-8387 QUEBEC INC.",
+      "aliases": ["9338-8387 QUEBEC INC."],
+      "contactNames": [],
+      "phones": [],
+      "phoneSources": {},
+      "emails": [],
+      "websites": [],
+      "candidatePhones": [],
+      "candidateEmails": [],
+      "candidateWebsites": [],
+      "postalAddress": {
+        "street": "999 boul. Other",
+        "city": "Laval",
+        "province": "QC",
+        "postalCode": "H7A 1A1"
+      },
+      "buildings": [
+        { "id": "b3", "address": "300 Pine", "postalCode": "H1C 1C1", "units": 12 }
+      ]
+    },
+    {
+      "id": "owner_3",
+      "ownerKey": "fiducie|h2z1m1",
+      "displayName": "Fiducie Famille Tremblay",
+      "aliases": ["Fiducie Famille Tremblay"],
+      "contactNames": [],
+      "phones": [],
+      "phoneSources": {},
+      "emails": [],
+      "websites": [],
+      "candidatePhones": [],
+      "candidateEmails": [],
+      "candidateWebsites": [],
+      "postalAddress": {
+        "street": "1500 rue de la Fiducie",
+        "city": "Montréal",
+        "province": "QC",
+        "postalCode": "H2Z 1M1"
+      },
+      "buildings": [
+        { "id": "b4", "address": "400 Birch", "postalCode": "H1D 1D1", "units": 4 },
+        { "id": "b5", "address": "500 Cedar", "postalCode": "H1E 1E1", "units": 4 }
+      ]
+    },
+    {
+      "id": "owner_4",
+      "ownerKey": "individual|h3z1p1",
+      "displayName": "Marie Bouchard",
+      "aliases": [],
+      "contactNames": ["Marie Bouchard"],
+      "phones": [],
+      "phoneSources": {},
+      "emails": [],
+      "websites": [],
+      "candidatePhones": [],
+      "candidateEmails": [],
+      "candidateWebsites": [],
+      "postalAddress": {
+        "street": "",
+        "city": "",
+        "province": "",
+        "postalCode": ""
+      },
+      "buildings": []
+    }
+  ]
+}

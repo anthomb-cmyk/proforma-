@@ -635,3 +635,121 @@ export function previewSearchPackages(inputRows, options = {}) {
   const pkgs = buildSearchPackages(inputRows, options);
   return pkgs.map(summarizeSearchPackage).join("\n");
 }
+
+// ─── Aggregation + reporting ───────────────────────────────────────────────
+
+// Pure rollup helper for the dev preview script (and any future debug UI).
+// Returns the bucket counts the user wants to inspect at a glance.
+export function aggregateSearchPackageStats(packages) {
+  const list = Array.isArray(packages) ? packages : [];
+  const stats = {
+    total: list.length,
+    by_priority: { high: 0, medium: 0, low: 0, skip: 0 },
+    by_strategy: {},
+    by_category: {},
+    with_existing_phone: 0,
+    with_existing_email: 0,
+    with_existing_website: 0,
+    numbered_companies: 0,
+    individuals: 0,
+    with_mailing_address: 0,
+    total_properties: 0,
+  };
+  for (const pkg of list) {
+    if (!pkg) continue;
+    const pri = pkg.search_priority;
+    if (Object.prototype.hasOwnProperty.call(stats.by_priority, pri)) {
+      stats.by_priority[pri]++;
+    }
+    const strat = pkg.search_strategy || "(unknown)";
+    stats.by_strategy[strat] = (stats.by_strategy[strat] || 0) + 1;
+    const cat = pkg.legal_entity_category || "unknown";
+    stats.by_category[cat] = (stats.by_category[cat] || 0) + 1;
+    if ((pkg.existing_phones || []).length) stats.with_existing_phone++;
+    if ((pkg.existing_emails || []).length) stats.with_existing_email++;
+    if ((pkg.existing_websites || []).length) stats.with_existing_website++;
+    if (cat === "numbered_company") stats.numbered_companies++;
+    if (cat === "individual") stats.individuals++;
+    if (pkg.mailing_address || pkg.mailing_postal_code) stats.with_mailing_address++;
+    stats.total_properties += (pkg.associated_properties || []).length;
+  }
+  return stats;
+}
+
+// Detailed per-package row: name, category, priority, strategy, property
+// count, existing-phone count, top direct query, top mailing-address query.
+// Used by formatSearchPackageReport — kept as a separate export so callers
+// (e.g. unit tests) can inspect the row shape directly.
+export function formatSearchPackageRow(pkg) {
+  if (!pkg) return "";
+  const name = pkg.lead_owner_name || "(no name)";
+  const cat = pkg.legal_entity_category;
+  const pri = pkg.search_priority;
+  const strat = pkg.search_strategy;
+  const props = (pkg.associated_properties || []).length;
+  const phones = (pkg.existing_phones || []).length;
+  const emails = (pkg.existing_emails || []).length;
+  const sites = (pkg.existing_websites || []).length;
+  const dQ = (pkg.direct_entity_queries || []);
+  const mQ = (pkg.mailing_address_discovery_queries || []);
+  const dQHead = dQ.length ? `${dQ[0]}${dQ.length > 1 ? ` (+${dQ.length - 1})` : ""}` : "—";
+  const mQHead = mQ.length ? `${mQ[0]}${mQ.length > 1 ? ` (+${mQ.length - 1})` : ""}` : "—";
+  return [
+    name,
+    cat,
+    `pri=${pri}`,
+    `strat=${strat}`,
+    `props=${props}`,
+    `phones=${phones}`,
+    `emails=${emails}`,
+    `sites=${sites}`,
+    `dQ=${dQHead}`,
+    `mQ=${mQHead}`,
+  ].join(" | ");
+}
+
+// Multi-line debug report: stats header + the top-N package rows. `topN`
+// defaults to 20, matching the dev-script ask. Pass `0` for "all packages".
+//
+// Order: input order (buildSearchPackages already sorts by source_row_indices).
+// The caller can sort packages differently before passing them in if needed.
+export function formatSearchPackageReport(packages, options = {}) {
+  const topN = Number.isFinite(options.topN) ? options.topN : 20;
+  const list = Array.isArray(packages) ? packages : [];
+  const stats = aggregateSearchPackageStats(list);
+
+  const lines = [];
+  lines.push("=== Search Package Stats ===");
+  lines.push(`total: ${stats.total}`);
+  lines.push(
+    `priority: high=${stats.by_priority.high} medium=${stats.by_priority.medium} ` +
+    `low=${stats.by_priority.low} skip=${stats.by_priority.skip}`,
+  );
+  lines.push(
+    `existing: phone=${stats.with_existing_phone} email=${stats.with_existing_email} ` +
+    `website=${stats.with_existing_website}`,
+  );
+  lines.push(
+    `entities: numbered_company=${stats.numbered_companies} ` +
+    `individual=${stats.individuals} with_mailing=${stats.with_mailing_address}`,
+  );
+  const catEntries = Object.entries(stats.by_category).sort((a, b) => b[1] - a[1]);
+  if (catEntries.length) {
+    lines.push("categories: " + catEntries.map(([k, v]) => `${k}=${v}`).join(" "));
+  }
+  const stratEntries = Object.entries(stats.by_strategy).sort((a, b) => b[1] - a[1]);
+  if (stratEntries.length) {
+    lines.push("strategies: " + stratEntries.map(([k, v]) => `${k}=${v}`).join(" "));
+  }
+  lines.push(`total_properties: ${stats.total_properties}`);
+
+  const rows = topN > 0 ? list.slice(0, topN) : list;
+  if (rows.length) {
+    lines.push("");
+    lines.push(`=== Top ${rows.length} Packages ===`);
+    rows.forEach((pkg, idx) => {
+      lines.push(`${String(idx + 1).padStart(3, " ")}. ${formatSearchPackageRow(pkg)}`);
+    });
+  }
+  return lines.join("\n");
+}

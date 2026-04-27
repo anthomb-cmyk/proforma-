@@ -7,6 +7,9 @@ import {
   buildMailingAddressDiscoveryQueries,
   summarizeSearchPackage,
   previewSearchPackages,
+  aggregateSearchPackageStats,
+  formatSearchPackageRow,
+  formatSearchPackageReport,
 } from "./searchPackage.js";
 import {
   makePhoneCandidate,
@@ -459,6 +462,119 @@ describe("Lead-like input shape", () => {
     expect(pkg.associated_properties).toHaveLength(2);
     expect(pkg.candidatePhones).toHaveLength(1);
     expect(pkg.search_strategy).toBe("use_file_phone");
+  });
+});
+
+describe("aggregateSearchPackageStats", () => {
+  function fixture() {
+    // Three owners covering the buckets we care about.
+    return [
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        phones: ["514-777-1234"],
+        emails: ["abc@example.com"],
+        websites: ["abc.com"],
+        buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+      }),
+      mkOwner({
+        displayName: "9338-8387 QUEBEC INC.",
+        postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
+        buildings: [{ id: "b3", address: "300 Pine" }],
+      }),
+      mkOwner({
+        displayName: "Jean Tremblay",
+        contactNames: ["Jean Tremblay"],
+        postalAddress: { street: "", city: "", province: "", postalCode: "" },
+        buildings: [],
+      }),
+    ];
+  }
+
+  test("rolls up totals + buckets correctly", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const stats = aggregateSearchPackageStats(pkgs);
+    expect(stats.total).toBe(3);
+    // Priorities: ABC has phone → low; numbered → medium (good mailing);
+    // individual w/ no mailing → skip.
+    expect(stats.by_priority.low).toBeGreaterThanOrEqual(1);
+    expect(stats.by_priority.skip).toBeGreaterThanOrEqual(1);
+    // Existing-contact counts come straight off ABC's row.
+    expect(stats.with_existing_phone).toBe(1);
+    expect(stats.with_existing_email).toBe(1);
+    expect(stats.with_existing_website).toBe(1);
+    // Numbered-company + individual buckets.
+    expect(stats.numbered_companies).toBe(1);
+    expect(stats.individuals).toBe(1);
+    // Category breakdown is a plain object keyed by category.
+    expect(stats.by_category.numbered_company).toBe(1);
+    expect(stats.by_category.immobilier).toBe(1);
+    expect(stats.by_category.individual).toBe(1);
+    // Strategy breakdown is also keyed by strategy.
+    expect(Object.keys(stats.by_strategy).length).toBeGreaterThan(0);
+    // Property total is the sum across all packages.
+    expect(stats.total_properties).toBe(3);
+  });
+
+  test("empty / null input → zeros", () => {
+    const empty = aggregateSearchPackageStats([]);
+    expect(empty.total).toBe(0);
+    expect(empty.by_priority).toEqual({ high: 0, medium: 0, low: 0, skip: 0 });
+    expect(aggregateSearchPackageStats(null).total).toBe(0);
+  });
+});
+
+describe("formatSearchPackageRow + formatSearchPackageReport", () => {
+  test("row carries name, category, priority, strategy, props, phones, queries", () => {
+    const owners = [mkOwner({
+      displayName: "ABC Immobilier Inc.",
+      phones: ["514-777-1234"],
+      buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+    })];
+    const [pkg] = buildSearchPackages(owners);
+    const row = formatSearchPackageRow(pkg);
+    expect(row).toContain("ABC Immobilier Inc.");
+    expect(row).toContain("immobilier");
+    expect(row).toMatch(/pri=\w+/);
+    expect(row).toMatch(/strat=\w+/);
+    expect(row).toMatch(/props=2/);
+    expect(row).toMatch(/phones=1/);
+    expect(row).toContain("dQ=");
+    expect(row).toContain("mQ=");
+  });
+
+  test("report has stats header + numbered top-N rows", () => {
+    const owners = [
+      mkOwner({ displayName: "ABC Immobilier Inc.", buildings: [{ id: "b1", address: "100 Elm" }] }),
+      mkOwner({
+        displayName: "Gestion XYZ Inc.",
+        postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
+        buildings: [{ id: "b2", address: "300 Pine" }],
+      }),
+    ];
+    const pkgs = buildSearchPackages(owners);
+    const report = formatSearchPackageReport(pkgs);
+    expect(report).toContain("=== Search Package Stats ===");
+    expect(report).toContain("total: 2");
+    expect(report).toContain("priority:");
+    expect(report).toContain("existing:");
+    expect(report).toContain("=== Top 2 Packages ===");
+    // Numbered rows.
+    expect(report).toMatch(/\n  1\. /);
+    expect(report).toMatch(/\n  2\. /);
+  });
+
+  test("topN caps the row count", () => {
+    const owners = Array.from({ length: 30 }, (_, i) => mkOwner({
+      displayName: `Company ${i} Inc.`,
+      postalAddress: { street: `${i} Street`, city: "City", province: "QC", postalCode: "H1A 1A1" },
+      buildings: [{ id: `b${i}`, address: `${i} Elm` }],
+    }));
+    const pkgs = buildSearchPackages(owners);
+    expect(pkgs).toHaveLength(30);
+    const report = formatSearchPackageReport(pkgs, { topN: 5 });
+    expect(report).toContain("=== Top 5 Packages ===");
+    expect(report).toMatch(/\n  5\. /);
+    expect(report).not.toMatch(/\n  6\. /);
   });
 });
 
