@@ -359,3 +359,152 @@ test("fiducie with related RE company phone stays needs_review, not ready_to_cal
     assert.equal(r.status, "needs_review");
   }
 });
+
+/* ------------------------------------------------------------------ *
+ *  16. Directory fallback: exact company name match from Pages Jaunes
+ * ------------------------------------------------------------------ */
+
+test("directory fallback: exact company match from Pages Jaunes produces needs_review with bestPhone", async () => {
+  // Steps 1–5 return nothing; directory fallback fires and finds the company
+  // listed on pagesjaunes.ca with a matching title.
+  const searchSpy = async (q) => {
+    if (q.includes("pagesjaunes.ca") || q.includes("411.ca")) {
+      const snippet = `Immobilier Fictif Inc. — ${PHONE_555}`;
+      return {
+        ok: true,
+        results: [{ title: "Immobilier Fictif Inc.", snippet, url: "https://pagesjaunes.ca/immobilier-fictif/123" }],
+      };
+    }
+    return { ok: true, results: [] };
+  };
+  const results = await runContactEnrichmentPreview({
+    packages: [makePkg()],
+    searchFn: searchSpy,
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.bestPhone, PHONE_555, "directory phone should be promoted to bestPhone");
+  assert.equal(r.status, "needs_review", "directory result must produce needs_review, not ready_to_call");
+  assert.notEqual(r.status, "ready_to_call");
+});
+
+/* ------------------------------------------------------------------ *
+ *  17. Directory fallback: unrelated title is rejected
+ * ------------------------------------------------------------------ */
+
+test("directory fallback: unrelated directory title is rejected and bestPhone stays null", async () => {
+  // The directory returns a business with no name overlap with the owner.
+  const searchSpy = async (q) => {
+    if (q.includes("pagesjaunes.ca") || q.includes("411.ca")) {
+      return {
+        ok: true,
+        results: [{ title: "Boutique Tendance XYZW", snippet: `Appelez: ${PHONE_555}`, url: "https://pagesjaunes.ca/boutique/456" }],
+      };
+    }
+    return { ok: true, results: [] };
+  };
+  const results = await runContactEnrichmentPreview({
+    packages: [makePkg()],
+    searchFn: searchSpy,
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.bestPhone, null, "unrelated directory result must not produce bestPhone");
+  assert.ok(
+    r.evidence.some((e) => e.includes("rejected_directory")),
+    "evidence must record rejected_directory",
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ *  18. Directory fallback: individual owner triggers no directory queries
+ * ------------------------------------------------------------------ */
+
+test("directory fallback: individual owner triggers no directory queries", async () => {
+  const queriesUsed = [];
+  const searchSpy = async (q) => {
+    queriesUsed.push(q);
+    return { ok: true, results: [] };
+  };
+  const pkg = makePkg({
+    lead_owner_name: "Sophie Bouchard",
+    legal_entity_category: "individual",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: ["123 rue Fictive, Montréal, QC"],
+  });
+  await runContactEnrichmentPreview({ packages: [pkg], searchFn: searchSpy });
+  const dirQueries = queriesUsed.filter(
+    (q) => q.includes("pagesjaunes.ca") || q.includes("411.ca"),
+  );
+  assert.equal(dirQueries.length, 0, "individual owner must not trigger directory queries");
+});
+
+/* ------------------------------------------------------------------ *
+ *  19. Directory fallback: related RE company phone accepted as needs_review
+ * ------------------------------------------------------------------ */
+
+test("directory fallback: related RE company phone from directory accepted as needs_review", async () => {
+  // Mailing query finds a gestion/immobilier company co-located with the fiducie.
+  // The direct and mailing steps produce no phone; the directory fallback then
+  // searches for the RE company on pagesjaunes.ca and finds a number.
+  const pkg = makePkg({
+    lead_owner_name: "FIDUCIE IMMOBILIA",
+    legal_entity_category: "trust",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: ["123 rue Fictive, Montréal, QC"],
+  });
+  const searchSpy = async (q) => {
+    if (q === "123 rue Fictive, Montréal, QC") {
+      return {
+        ok: true,
+        results: [{ title: "Gestion Immobilia Inc.", snippet: "Services de gestion immobilière.", url: "https://gestionimmobilia.ca" }],
+      };
+    }
+    if (q === "Gestion Immobilia Inc.") {
+      return {
+        ok: true,
+        results: [{ title: "Gestion Immobilia Inc.", snippet: "Expertise en gestion.", url: "https://gestionimmobilia.ca" }],
+      };
+    }
+    if (q.includes("Gestion Immobilia") && (q.includes("pagesjaunes.ca") || q.includes("411.ca"))) {
+      return {
+        ok: true,
+        results: [{ title: "Gestion Immobilia Inc.", snippet: `Tél: ${PHONE_555}`, url: "https://pagesjaunes.ca/gestionimmobilia/789" }],
+      };
+    }
+    return { ok: true, results: [] };
+  };
+  const results = await runContactEnrichmentPreview({ packages: [pkg], searchFn: searchSpy });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.notEqual(r.bestPhone, null, "related RE company directory phone should become bestPhone");
+  assert.equal(r.status, "needs_review", "related RE company must produce needs_review");
+});
+
+/* ------------------------------------------------------------------ *
+ *  20. Directory fallback: evidence records directory source and URL
+ * ------------------------------------------------------------------ */
+
+test("directory fallback: evidence records directory source and URL", async () => {
+  const dirUrl = "https://www.pagesjaunes.ca/bus/QC/Montreal/ImmobilierFictif/987654";
+  const snippet = `Immobilier Fictif Inc. — ${PHONE_555}`;
+  const searchSpy = async (q) => {
+    if (q.includes("pagesjaunes.ca")) {
+      return { ok: true, results: [{ title: "Immobilier Fictif Inc.", snippet, url: dirUrl }] };
+    }
+    return { ok: true, results: [] };
+  };
+  const results = await runContactEnrichmentPreview({
+    packages: [makePkg()],
+    searchFn: searchSpy,
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  const dirCandidate = r.phoneCandidates.find((c) => c.source === "pages_jaunes");
+  assert.ok(dirCandidate, "should find a pages_jaunes phone candidate");
+  assert.equal(dirCandidate.url, dirUrl, "candidate URL should match the directory listing URL");
+  assert.ok(
+    r.evidence.some((e) => e.includes("pages_jaunes")),
+    "evidence must mention pages_jaunes",
+  );
+});

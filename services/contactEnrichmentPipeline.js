@@ -146,6 +146,8 @@ const SOURCE_WEIGHTS = {
   page: 2,
   mailing: 1,
   related: 1,
+  pages_jaunes: 2,
+  "411": 2,
 };
 
 // Name match doubles the score — it's the primary signal that the phone
@@ -369,7 +371,60 @@ async function processSinglePackage(pkg, opts) {
     }
   }
 
-  // Step 5 — score, filter, and select best candidate.
+  // Step 6 — directory fallback (Pages Jaunes, 411.ca).
+  // Fires only when no medium+ candidate (score ≥ 3) was found in Steps 1–4.
+  // Intentionally bypasses isJunkResult since we are targeting these directories.
+  // A name match against the search target is required; unmatched results are
+  // rejected and logged to evidence.
+  const noMediumCandYet = !phoneCands.some((c) => scorePhoneCandidate(c) >= 3);
+  if (noMediumCandYet) {
+    const ownerSearchable =
+      !isIndividual &&
+      category !== "numbered_company" &&
+      ownerName &&
+      !looksLikeJunkLocal(ownerName);
+
+    const dirTargets = [];
+    if (ownerSearchable) dirTargets.push(ownerName);
+    for (const rel of relatedCompanies.slice(0, opts.maxRelated)) {
+      if (hasRealEstateKeyword(rel.name) && !dirTargets.includes(rel.name)) {
+        dirTargets.push(rel.name);
+      }
+    }
+
+    const DIRECTORY_PROVIDERS = [
+      { source: "pages_jaunes", hint: "pagesjaunes.ca" },
+      { source: "411", hint: "411.ca" },
+    ];
+
+    for (const targetName of dirTargets) {
+      for (const { source: dirSource, hint } of DIRECTORY_PROVIDERS) {
+        const q = `"${targetName}" ${hint}`;
+        const res = await opts.searchFn(q);
+        if (!res.ok) {
+          evidence.push(`directory_search_failed (${dirSource}): ${res.error}`);
+          continue;
+        }
+        evidence.push(`directory_query (${dirSource}): "${q}" → ${res.results.length} results`);
+        for (const r of res.results) {
+          const nameMatch = hasNameOverlap(targetName, r.title);
+          if (!nameMatch) {
+            evidence.push(`rejected_directory: "${r.title}" (no name match) [${dirSource}]`);
+            continue;
+          }
+          const combined = `${r.title} ${r.snippet}`;
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, dirSource, r.url, r.title, nameMatch);
+          }
+          for (const e of extractEmails(combined)) {
+            recordEmail(emailCands, e, dirSource, r.url);
+          }
+        }
+      }
+    }
+  }
+
+  // Step 7 — score, filter, and select best candidate.
   const scored = phoneCands
     .map((c) => ({ ...c, score: scorePhoneCandidate(c) }))
     .sort((a, b) => b.score - a.score);
