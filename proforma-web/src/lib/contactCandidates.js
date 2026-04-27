@@ -20,7 +20,7 @@
 //
 // Shape of a phone candidate:
 //   {
-//     phone:                          "(514) 777-1234",        // formatted display
+//     phone:                          "(514) 555-0142",        // formatted display
 //     source:                         "file" | "cache" | "web_search" |
 //                                     "company_website" | "related_company" |
 //                                     "directory" | "google_places" | "manual",

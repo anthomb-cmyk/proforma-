@@ -135,7 +135,7 @@ describe("classifyContactColumn", () => {
 describe("makePhoneCandidate / makeEmailCandidate / makeWebsiteCandidate", () => {
   test("phone candidate carries source + relationship + default confidence", () => {
     const c = makePhoneCandidate({
-      phone: "514-777-1234",
+      phone: "514-555-0142",
       source: "file",
       source_column: "Téléphone Propriétaire 2",
       phone_owner_name: "Jean Tremblay",
@@ -143,7 +143,7 @@ describe("makePhoneCandidate / makeEmailCandidate / makeWebsiteCandidate", () =>
       evidence: "imported from longueuil.xlsx",
     });
     expect(c).toEqual({
-      phone: "(514) 777-1234",
+      phone: "(514) 555-0142",
       source: "file",
       source_column: "Téléphone Propriétaire 2",
       phone_owner_name: "Jean Tremblay",
@@ -175,7 +175,7 @@ describe("makePhoneCandidate / makeEmailCandidate / makeWebsiteCandidate", () =>
     expect(c.confidence).toBe(70);
   });
   test("unknown source falls back to 'file'", () => {
-    const c = makePhoneCandidate({ phone: "5147771234", source: "bogus" });
+    const c = makePhoneCandidate({ phone: "5145550142", source: "bogus" });
     expect(c.source).toBe("file");
   });
 });
@@ -184,8 +184,8 @@ describe("extractContactCandidatesFromRow", () => {
   test("extracts owner phone, building phone, owner email", () => {
     const row = {
       "Propriétaire": "Jean Tremblay",
-      "Téléphone Propriétaire": "514-777-1234",
-      "Téléphone Immeuble": "438-823-9876",
+      "Téléphone Propriétaire": "514-555-0142",
+      "Téléphone Immeuble": "438-555-0143",
       "Courriel Propriétaire": "jean@example.com",
       "Adresse postale": "123 rue Saint-Jacques, Montréal",
     };
@@ -193,11 +193,11 @@ describe("extractContactCandidatesFromRow", () => {
     expect(out.candidatePhones).toHaveLength(2);
     const owner = out.candidatePhones.find((c) => c.relationship_to_lead_owner === "owner");
     const bldg = out.candidatePhones.find((c) => c.relationship_to_lead_owner === "building");
-    expect(owner.phone).toBe("(514) 777-1234");
+    expect(owner.phone).toBe("(514) 555-0142");
     expect(owner.source_column).toBe("Téléphone Propriétaire");
     expect(owner.source).toBe("file");
     expect(owner.phone_owner_name).toBe("Jean Tremblay");
-    expect(bldg.phone).toBe("(438) 823-9876");
+    expect(bldg.phone).toBe("(438) 555-0143");
     expect(bldg.relationship_to_lead_owner).toBe("building");
     expect(out.candidateEmails).toHaveLength(1);
     expect(out.candidateEmails[0].email).toBe("jean@example.com");
@@ -206,7 +206,7 @@ describe("extractContactCandidatesFromRow", () => {
 
   test("scans notes for phones, emails, websites", () => {
     const row = {
-      "Notes": "Appeler au 514-777-1234, courriel jean@example.com, site example.qc.ca",
+      "Notes": "Appeler au 514-555-0142, courriel jean@example.com, site example.qc.ca",
     };
     const out = extractContactCandidatesFromRow(row);
     expect(out.candidatePhones).toHaveLength(1);
@@ -218,7 +218,7 @@ describe("extractContactCandidatesFromRow", () => {
   });
 
   test("multiple phones in a single cell are all extracted", () => {
-    const row = { "Téléphone": "514-777-1234 / 438-823-9876" };
+    const row = { "Téléphone": "514-555-0142 / 438-555-0143" };
     const out = extractContactCandidatesFromRow(row);
     expect(out.candidatePhones).toHaveLength(2);
     expect(out.candidatePhones[0].source_column).toBe("Téléphone");
@@ -233,8 +233,8 @@ describe("extractContactCandidatesFromRow", () => {
 
   test("dedupes (phone, source, source_column) within a single row", () => {
     const row = {
-      "Téléphone": "514-777-1234",
-      "Notes": "Tél. 514-777-1234 et 438-823-9876",
+      "Téléphone": "514-555-0142",
+      "Notes": "Tél. 514-555-0142 et 438-555-0143",
     };
     const out = extractContactCandidatesFromRow(row);
     // Three entries: one from Téléphone, two from Notes (different columns
@@ -255,9 +255,9 @@ describe("extractContactCandidatesFromRow", () => {
 
 describe("merge*Candidates", () => {
   test("mergePhoneCandidates dedupes by (phone, source, source_column)", () => {
-    const a = [makePhoneCandidate({ phone: "514-777-1234", source: "file", source_column: "Téléphone" })];
-    const b = [makePhoneCandidate({ phone: "514-777-1234", source: "file", source_column: "Téléphone" })];
-    const c = [makePhoneCandidate({ phone: "514-777-1234", source: "google_places", evidence: "Place X" })];
+    const a = [makePhoneCandidate({ phone: "514-555-0142", source: "file", source_column: "Téléphone" })];
+    const b = [makePhoneCandidate({ phone: "514-555-0142", source: "file", source_column: "Téléphone" })];
+    const c = [makePhoneCandidate({ phone: "514-555-0142", source: "google_places", evidence: "Place X" })];
     const merged = mergePhoneCandidates(a, b, c);
     expect(merged).toHaveLength(2);
     expect(merged[0].source).toBe("file");
@@ -265,8 +265,8 @@ describe("merge*Candidates", () => {
   });
 
   test("first-list wins on collisions", () => {
-    const high = [makePhoneCandidate({ phone: "514-777-1234", source: "file", source_column: "X", confidence: 99 })];
-    const low  = [makePhoneCandidate({ phone: "514-777-1234", source: "file", source_column: "X", confidence: 10 })];
+    const high = [makePhoneCandidate({ phone: "514-555-0142", source: "file", source_column: "X", confidence: 99 })];
+    const low  = [makePhoneCandidate({ phone: "514-555-0142", source: "file", source_column: "X", confidence: 10 })];
     const merged = mergePhoneCandidates(high, low);
     expect(merged).toHaveLength(1);
     expect(merged[0].confidence).toBe(99);
@@ -291,15 +291,15 @@ describe("merge*Candidates", () => {
 describe("flatten*Candidates", () => {
   test("phones: dedups by normalized key", () => {
     const list = [
-      makePhoneCandidate({ phone: "(514) 777-1234", source: "file", confidence: 80 }),
-      makePhoneCandidate({ phone: "5147771234", source: "google_places", confidence: 90 }),
-      makePhoneCandidate({ phone: "438-823-9876", source: "file", confidence: 80 }),
+      makePhoneCandidate({ phone: "(514) 555-0142", source: "file", confidence: 80 }),
+      makePhoneCandidate({ phone: "5145550142", source: "google_places", confidence: 90 }),
+      makePhoneCandidate({ phone: "438-555-0143", source: "file", confidence: 80 }),
     ];
     const flat = flattenPhoneCandidates(list);
     expect(flat).toHaveLength(2);
-    // formatPhone normalizes both inputs to "(514) 777-1234" — the highest-
+    // formatPhone normalizes both inputs to "(514) 555-0142" — the highest-
     // confidence (google_places) candidate is the one held in the dedup map.
-    expect(flat[0]).toBe("(514) 777-1234");
+    expect(flat[0]).toBe("(514) 555-0142");
   });
   test("emails / websites: dedup by key", () => {
     expect(flattenEmailCandidates([
@@ -316,17 +316,17 @@ describe("flatten*Candidates", () => {
 describe("pickBest*", () => {
   test("file candidates beat online ones even at lower confidence", () => {
     const list = [
-      makePhoneCandidate({ phone: "514-777-1234", source: "file", confidence: 50 }),
-      makePhoneCandidate({ phone: "438-823-9876", source: "google_places", confidence: 99 }),
+      makePhoneCandidate({ phone: "514-555-0142", source: "file", confidence: 50 }),
+      makePhoneCandidate({ phone: "438-555-0143", source: "google_places", confidence: 99 }),
     ];
-    expect(pickBestPhone(list)).toBe("(514) 777-1234");
+    expect(pickBestPhone(list)).toBe("(514) 555-0142");
   });
   test("falls back to online when no file candidate exists", () => {
     const list = [
-      makePhoneCandidate({ phone: "438-823-9876", source: "google_places", confidence: 80 }),
-      makePhoneCandidate({ phone: "514-777-1234", source: "directory", confidence: 65 }),
+      makePhoneCandidate({ phone: "438-555-0143", source: "google_places", confidence: 80 }),
+      makePhoneCandidate({ phone: "514-555-0142", source: "directory", confidence: 65 }),
     ];
-    expect(pickBestPhone(list)).toBe("(438) 823-9876");
+    expect(pickBestPhone(list)).toBe("(438) 555-0143");
   });
   test("emails / websites use the same priority", () => {
     expect(pickBestEmail([
@@ -346,7 +346,7 @@ describe("pickBest*", () => {
 
 describe("candidatesFrom* online helpers", () => {
   test("phones tag source as google_places by default", () => {
-    const c = candidatesFromOnlinePhones(["514-777-1234", "438-823-9876"], { evidence: "matched X" });
+    const c = candidatesFromOnlinePhones(["514-555-0142", "438-555-0143"], { evidence: "matched X" });
     expect(c).toHaveLength(2);
     expect(c[0].source).toBe("google_places");
     expect(c[0].evidence).toBe("matched X");
@@ -365,8 +365,8 @@ describe("candidatesFrom* online helpers", () => {
 
 describe("non-overwrite invariant: file candidates survive online merge", () => {
   test("file phones + online phones produce a list with both, file first", () => {
-    const fileC = [makePhoneCandidate({ phone: "514-777-1234", source: "file", source_column: "Téléphone" })];
-    const onlineC = candidatesFromOnlinePhones(["514-777-1234", "438-823-9876"], { evidence: "Places" });
+    const fileC = [makePhoneCandidate({ phone: "514-555-0142", source: "file", source_column: "Téléphone" })];
+    const onlineC = candidatesFromOnlinePhones(["514-555-0142", "438-555-0143"], { evidence: "Places" });
     const merged = mergePhoneCandidates(fileC, onlineC);
     // Same phone from file + google_places = TWO entries (different sources).
     expect(merged).toHaveLength(3);

@@ -145,7 +145,7 @@ describe("assessSearchPriority + chooseSearchStrategy", () => {
       lead_owner_name: "ABC Immobilier Inc.",
       legal_entity_category: "immobilier",
       is_searchable_entity: true,
-      existing_phones: ["514-777-1234"],
+      existing_phones: ["514-555-0142"],
       candidatePhones: [],
       associated_properties: [{ address: "100 Elm" }, { address: "200 Oak" }],
       mailing_address: "217 St-Jacques", mailing_city: "Montréal", mailing_postal_code: "H2Y 1M6",
@@ -251,7 +251,7 @@ describe("buildSearchPackages — required test cases", () => {
   // 3. file phone/email/website candidates are preserved
   test("(3) file candidates pass through unchanged", () => {
     const fileP = makePhoneCandidate({
-      phone: "514-777-1234", source: "file", source_column: "Téléphone Propriétaire",
+      phone: "514-555-0142", source: "file", source_column: "Téléphone Propriétaire",
       phone_owner_name: "ABC", relationship_to_lead_owner: "owner",
     });
     const fileE = makeEmailCandidate({
@@ -264,7 +264,7 @@ describe("buildSearchPackages — required test cases", () => {
     });
     const owners = [mkOwner({
       candidatePhones: [fileP], candidateEmails: [fileE], candidateWebsites: [fileW],
-      phones: ["(514) 777-1234"], emails: ["abc@example.com"], websites: ["example.com"],
+      phones: ["(514) 555-0142"], emails: ["abc@example.com"], websites: ["example.com"],
     })];
     const [pkg] = buildSearchPackages(owners);
     expect(pkg.candidatePhones).toHaveLength(1);
@@ -275,7 +275,7 @@ describe("buildSearchPackages — required test cases", () => {
     expect(pkg.candidateWebsites).toHaveLength(1);
     expect(pkg.candidateWebsites[0].website).toBe("example.com");
     // Flat lists carry the values too.
-    expect(pkg.existing_phones).toEqual(["(514) 777-1234"]);
+    expect(pkg.existing_phones).toEqual(["(514) 555-0142"]);
     expect(pkg.existing_emails).toEqual(["abc@example.com"]);
     expect(pkg.existing_websites).toEqual(["example.com"]);
   });
@@ -283,7 +283,7 @@ describe("buildSearchPackages — required test cases", () => {
   // 4. building contacts remain candidates but do not become owner phone priority
   test("(4) building-relationship phone stays candidate-only, doesn't make package look phoned-in", () => {
     const bldgP = makePhoneCandidate({
-      phone: "438-823-9876", source: "file", source_column: "Téléphone Immeuble",
+      phone: "438-555-0143", source: "file", source_column: "Téléphone Immeuble",
       relationship_to_lead_owner: "building",
     });
     const owners = [mkOwner({
@@ -298,7 +298,7 @@ describe("buildSearchPackages — required test cases", () => {
     // valid number we know about) — but the package still gets enriched
     // because we treat "any valid phone" as a found-phone signal. This test
     // pins down: relationship metadata survives the build.
-    expect(pkg.existing_phones).toContain("(438) 823-9876");
+    expect(pkg.existing_phones).toContain("(438) 555-0143");
   });
 
   // 5. company with no phone gets direct entity queries
@@ -366,14 +366,14 @@ describe("buildSearchPackages — required test cases", () => {
     const owners = [
       mkOwner({
         displayName: "ABC Immobilier Inc.",
-        phones: ["514-777-1234"],
+        phones: ["514-555-0142"],
         emails: ["abc@example.com"],
         websites: ["https://abc.com"],
       }),
       mkOwner({
         displayName: "ABC Immobilier Inc.",
         // Same dedup key (same name + same postal) — these merge.
-        phones: ["(514) 777-1234", "438-823-9999"],
+        phones: ["(514) 555-0142", "438-555-0144"],
         emails: ["ABC@example.com", "alt@example.com"],
         websites: ["abc.com", "https://other.com"],
       }),
@@ -393,12 +393,12 @@ describe("buildSearchPackages — required test cases", () => {
   // 10. summarizeSearchPackage returns useful counts
   test("(10) summarizeSearchPackage carries name, category, counts", () => {
     const fileP = makePhoneCandidate({
-      phone: "514-777-1234", source: "file", source_column: "Téléphone",
+      phone: "514-555-0142", source: "file", source_column: "Téléphone",
       relationship_to_lead_owner: "owner",
     });
     const owners = [mkOwner({
       displayName: "ABC Immobilier Inc.",
-      candidatePhones: [fileP], phones: ["(514) 777-1234"],
+      candidatePhones: [fileP], phones: ["(514) 555-0142"],
       buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
       contactNames: ["Co Owner"],
     })];
@@ -442,9 +442,9 @@ describe("Lead-like input shape", () => {
         city: "Montréal",
         province: "QC",
         postalCode: "H2Y 1M6",
-        phones: ["514-777-1234"],
+        phones: ["514-555-0142"],
         candidatePhones: [makePhoneCandidate({
-          phone: "514-777-1234", source: "file", source_column: "Téléphone",
+          phone: "514-555-0142", source: "file", source_column: "Téléphone",
           relationship_to_lead_owner: "owner",
         })],
       },
@@ -478,7 +478,7 @@ describe("assessLeadValue (independent of contact-completeness)", () => {
     };
     expect(assessLeadValue(pkg)).toBe("high");
     // Same package WITH a phone is still high — value is independent of contacts.
-    pkg.existing_phones = ["514-777-1234"];
+    pkg.existing_phones = ["514-555-0142"];
     expect(assessLeadValue(pkg)).toBe("high");
   });
   test("company with one property → medium", () => {
@@ -532,7 +532,7 @@ describe("lead_value_priority vs search_need_priority — separation", () => {
   test("company w/ portfolio + file phone → value=high, search_need=low", () => {
     const owners = [mkOwner({
       displayName: "ABC Immobilier Inc.",
-      phones: ["(514) 777-1234"],
+      phones: ["(514) 555-0142"],
       buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
     })];
     const [pkg] = buildSearchPackages(owners);
@@ -570,7 +570,7 @@ describe("lead_value_priority vs search_need_priority — separation", () => {
   test("reason string includes both axes", () => {
     const owners = [mkOwner({
       displayName: "ABC Immobilier Inc.",
-      phones: ["(514) 777-1234"],
+      phones: ["(514) 555-0142"],
       buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
     })];
     const [pkg] = buildSearchPackages(owners);
@@ -585,7 +585,7 @@ describe("aggregateSearchPackageStats", () => {
     return [
       mkOwner({
         displayName: "ABC Immobilier Inc.",
-        phones: ["514-777-1234"],
+        phones: ["514-555-0142"],
         emails: ["abc@example.com"],
         websites: ["abc.com"],
         buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
@@ -646,7 +646,7 @@ describe("formatSearchPackageRow + formatSearchPackageReport", () => {
   test("row carries name, category, value, priority, strategy, props, phones, queries", () => {
     const owners = [mkOwner({
       displayName: "ABC Immobilier Inc.",
-      phones: ["514-777-1234"],
+      phones: ["514-555-0142"],
       buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
     })];
     const [pkg] = buildSearchPackages(owners);
@@ -726,18 +726,18 @@ describe("empty / edge cases", () => {
 describe("auditSearchPackages — targeted dev-CLI buckets", () => {
   function fixture() {
     const fileOwnerCand = makePhoneCandidate({
-      phone: "514-777-1234", source: "file", source_column: "Téléphone Propriétaire",
+      phone: "514-555-0142", source: "file", source_column: "Téléphone Propriétaire",
       relationship_to_lead_owner: "owner",
     });
     const fileBuildingCand = makePhoneCandidate({
-      phone: "438-823-9876", source: "file", source_column: "Téléphone Immeuble",
+      phone: "438-555-0143", source: "file", source_column: "Téléphone Immeuble",
       relationship_to_lead_owner: "building",
     });
     return [
       // ABC Immobilier — high value, has owner file phone (no enrichment needed).
       mkOwner({
         displayName: "ABC Immobilier Inc.",
-        phones: ["(514) 777-1234"], candidatePhones: [fileOwnerCand],
+        phones: ["(514) 555-0142"], candidatePhones: [fileOwnerCand],
         buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
       }),
       // Numbered company w/ mailing, no phone.
@@ -779,7 +779,7 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
       mkOwner({
         displayName: "Acme Realty Holdings Ltd.",
         candidatePhones: [fileBuildingCand],
-        phones: ["(438) 823-9876"], // simulates roleImport's flatten behavior
+        phones: ["(438) 555-0143"], // simulates roleImport's flatten behavior
         postalAddress: { street: "10 Wellington", city: "Toronto", province: "ON", postalCode: "M5K 1A2" },
         buildings: [{ id: "b10", address: "800 Taschereau" }],
       }),

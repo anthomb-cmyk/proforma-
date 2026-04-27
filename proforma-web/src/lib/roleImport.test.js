@@ -438,22 +438,22 @@ describe("buildOwnersAndLeadsFromRole", () => {
         "Propriétaire": "Jean Tremblay",
         "Statut aux fins d'imposition scolaire": "Personne physique",
         "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
-        "Téléphone": "514-777-1234",
+        "Téléphone": "514-555-0142",
       }),
     ];
     const parsed = extractRoleData({ headers, rows });
     const { newOwners, leads } = buildOwnersAndLeadsFromRole(parsed, [], { sourceFile: "longueuil.xlsx" });
     const [owner] = newOwners;
     expect(owner.candidatePhones).toHaveLength(1);
-    expect(owner.candidatePhones[0].phone).toBe("(514) 777-1234");
+    expect(owner.candidatePhones[0].phone).toBe("(514) 555-0142");
     expect(owner.candidatePhones[0].source).toBe("file");
     expect(owner.candidatePhones[0].source_column).toBe("Téléphone");
     expect(owner.candidatePhones[0].relationship_to_lead_owner).toBe("owner");
     expect(owner.candidatePhones[0].phone_owner_name).toBe("Jean Tremblay");
     // Lead carries the same candidate.
     expect(leads[0].candidatePhones).toHaveLength(1);
-    expect(leads[0].phone).toBe("(514) 777-1234");
-    expect(leads[0].phones).toContain("(514) 777-1234");
+    expect(leads[0].phone).toBe("(514) 555-0142");
+    expect(leads[0].phones).toContain("(514) 555-0142");
   });
 
   test("two slots = two phones with distinct source columns", () => {
@@ -466,13 +466,13 @@ describe("buildOwnersAndLeadsFromRole", () => {
         "Propriétaire Nom": "Tremblay",
         "Statut aux fins d'imposition scolaire": "Personne physique",
         "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
-        "Téléphone": "514-777-1234",
+        "Téléphone": "514-555-0142",
         "Propriétaire 2": "Marie Côté",
         "Propriétaire 2 Prénom": "Marie",
         "Propriétaire 2 Nom": "Côté",
         "Statut aux fins d'imposition scolaire 2": "Personne physique",
         "Adresse postale 2": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
-        "Téléphone 2": "514-823-9999",
+        "Téléphone 2": "514-555-0147",
       }),
     ];
     const parsed = extractRoleData({ headers, rows });
@@ -493,7 +493,7 @@ describe("buildOwnersAndLeadsFromRole", () => {
         "Propriétaire": "Jean Tremblay",
         "Statut aux fins d'imposition scolaire": "Personne physique",
         "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
-        "Téléphone": "514-777-1234",
+        "Téléphone": "514-555-0142",
       }),
     ];
     const parsed = extractRoleData({ headers, rows });

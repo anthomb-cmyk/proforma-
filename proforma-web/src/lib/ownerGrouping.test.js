@@ -274,7 +274,7 @@ describe("mergeOwners", () => {
       confidence: 85, evidence: "from file", status: "unverified",
     };
     const onlineCand = {
-      phone: "(438) 823-9999", source: "google_places", source_column: "",
+      phone: "(438) 555-0144", source: "google_places", source_column: "",
       phone_owner_name: "ABC Inc.", relationship_to_lead_owner: "owner",
       confidence: 70, evidence: "Places match", status: "unverified",
     };
@@ -522,19 +522,19 @@ describe("applyLookupResultsToOwners", () => {
 
   test("online lookup adds candidatePhones without overwriting file ones", () => {
     const fileCand = {
-      phone: "(514) 777-1234", source: "file", source_column: "Téléphone",
+      phone: "(514) 555-0142", source: "file", source_column: "Téléphone",
       phone_owner_name: "Jean Tremblay", relationship_to_lead_owner: "owner",
       confidence: 85, evidence: "from longueuil.xlsx", status: "unverified",
     };
     const owners = [{
-      ...mkOwner("o1", "k1", ["(514) 777-1234"]),
+      ...mkOwner("o1", "k1", ["(514) 555-0142"]),
       candidatePhones: [fileCand],
       candidateEmails: [],
       candidateWebsites: [],
     }];
     const rowLookup = [{ row: {}, ownerId: "o1", ownerKey: "k1" }];
     const results = [{
-      phone: "514-823-9999",
+      phone: "514-555-0147",
       status: "found",
       candidates: [],
       source: "google_places",
@@ -552,7 +552,7 @@ describe("applyLookupResultsToOwners", () => {
     // New online candidate appears alongside the file one.
     const onlinePresent = o1.candidatePhones.find(c => c.source === "google_places");
     expect(onlinePresent).toBeTruthy();
-    expect(onlinePresent.phone).toBe("(514) 823-9999");
+    expect(onlinePresent.phone).toBe("(514) 555-0147");
     // Online website surfaced as a candidate.
     expect(o1.candidateWebsites.find(c => c.website === "abc-inc.com")).toBeTruthy();
   });
