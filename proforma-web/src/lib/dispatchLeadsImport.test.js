@@ -1,5 +1,7 @@
 import {
   detectHeaders,
+  detectHeadersForSlot,
+  detectOwnerSlots,
   dispatchRowToLeadLike,
   parseDispatchLeadsCsv,
 } from "./dispatchLeadsImport.js";
@@ -248,5 +250,206 @@ describe("integration: synthetic CSV → buildSearchPackages → audit", () => {
     // Suspicious: individual_high_value flag for Jean.
     const indHigh = audit.suspicious.find((s) => s.kind === "individual_high_value");
     expect(indHigh.package.lead_owner_name).toBe("Jean Tremblay");
+  });
+});
+
+describe("multi-owner detection — slot 1, 2, 3, …", () => {
+  test("detectOwnerSlots returns every slot present", () => {
+    expect(detectOwnerSlots([
+      "Propriétaire", "Propriétaire 2", "Propriétaire 3",
+      "Adresse postale", "Adresse postale 2", "Adresse postale 3",
+    ])).toEqual([1, 2, 3]);
+  });
+
+  test("detectHeadersForSlot returns per-slot per-owner fields + shared row fields", () => {
+    const headers = [
+      "Propriétaire", "Propriétaire 2",
+      "Adresse postale", "Adresse postale 2",
+      "Téléphone Propriétaire", "Téléphone Propriétaire 2",
+      "Adresse Immeuble", "Nb Logements",
+      "Téléphone Immeuble",
+    ];
+    const slot1 = detectHeadersForSlot(headers, 1);
+    const slot2 = detectHeadersForSlot(headers, 2);
+    expect(slot1.lead_owner_name).toBe("Propriétaire");
+    expect(slot2.lead_owner_name).toBe("Propriétaire 2");
+    expect(slot1.mailing_street).toBe("Adresse postale");
+    expect(slot2.mailing_street).toBe("Adresse postale 2");
+    // Per-owner phones split by slot.
+    expect(slot1.owner_phone).toBe("Téléphone Propriétaire");
+    expect(slot2.owner_phone).toBe("Téléphone Propriétaire 2");
+    // Row-level fields are inherited from slot 1 for every slot.
+    expect(slot1.property_address).toBe("Adresse Immeuble");
+    expect(slot2.property_address).toBe("Adresse Immeuble");
+    expect(slot1.units).toBe("Nb Logements");
+    expect(slot2.units).toBe("Nb Logements");
+    expect(slot1.building_phone).toBe("Téléphone Immeuble");
+    expect(slot2.building_phone).toBe("Téléphone Immeuble");
+  });
+
+  test("one CSV row with two owners → two lead-like records, each carrying the other as alias", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Adresse postale,Adresse postale 2,Téléphone Propriétaire,Téléphone Propriétaire 2,Adresse Immeuble,Nb Logements,Téléphone Immeuble",
+      '"Jean Tremblay","Marie Côté","217 Saint-Jacques, Montréal","217 Saint-Jacques, Montréal","514-777-1234","","100 Elm","6","450-823-9876"',
+    ].join("\n");
+    const { rows, slots } = parseDispatchLeadsCsv(CSV);
+    expect(slots).toEqual([1, 2]);
+    expect(rows).toHaveLength(2);
+
+    const jean = rows.find((r) => r.companyName === "Jean Tremblay");
+    const marie = rows.find((r) => r.companyName === "Marie Côté");
+    // Jean has his own owner phone; Marie has none.
+    expect(jean.candidatePhones.find((c) => c.relationship_to_lead_owner === "owner").phone)
+      .toBe("(514) 777-1234");
+    expect(marie.candidatePhones.filter((c) => c.relationship_to_lead_owner === "owner")).toEqual([]);
+    // Building phone is row-level → shared between the two records.
+    for (const r of rows) {
+      expect(r.candidatePhones.find((c) => c.relationship_to_lead_owner === "building").phone)
+        .toBe("(450) 823-9876");
+    }
+    // Each record carries the OTHER owner as a co-owner alias.
+    expect(jean.aliases).toContain("Marie Côté");
+    expect(marie.aliases).toContain("Jean Tremblay");
+  });
+});
+
+describe("address-aware duplicates via Dispatch CSV", () => {
+  test("same name + same mailing across two rows → 1 package, no flag", () => {
+    const CSV = [
+      "lead_owner_name,mailing_address,mailing_city,mailing_postal_code,property_address,units",
+      '"ABC Immobilier Inc.","217 Saint-Jacques","Montréal","H2Y 1M6","100 Elm","6"',
+      '"ABC Immobilier Inc.","217 Saint-Jacques","Montréal","H2Y 1M6","200 Oak","8"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    expect(pkgs).toHaveLength(1);
+    expect(pkgs[0].associated_properties).toHaveLength(2);
+    expect(pkgs[0].duplicate_different_address).toBe(false);
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.duplicate_different_address).toEqual([]);
+    // No suspicious split flag either.
+    expect(audit.suspicious.find((s) => s.kind === "dup_split_by_name")).toBeUndefined();
+  });
+
+  test("same name + DIFFERENT mailing → 2 packages, duplicate_different_address=true on both", () => {
+    const CSV = [
+      "lead_owner_name,mailing_address,mailing_city,mailing_postal_code,property_address,units",
+      '"ABC Immobilier Inc.","217 Saint-Jacques","Montréal","H2Y 1M6","100 Elm","6"',
+      '"ABC Immobilier Inc.","999 Other","Laval","H7A 1A1","200 Oak","8"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    expect(pkgs).toHaveLength(2);
+    for (const p of pkgs) {
+      expect(p.duplicate_different_address).toBe(true);
+      expect(p.address_variant_packages).toHaveLength(1);
+    }
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.duplicate_different_address).toHaveLength(2);
+    // Audit doesn't classify these as suspicious.
+    const susp = audit.suspicious.map((s) => s.kind);
+    expect(susp).not.toContain("dup_split_by_name");
+    expect(susp).not.toContain("duplicate_different_address");
+  });
+
+  test("multi-owner row + same-mailing collapse: one package per distinct owner, none flagged dup", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Adresse postale,Adresse postale 2,Téléphone Propriétaire,Adresse Immeuble,Nb Logements",
+      '"Jean Tremblay","Marie Côté","217 Saint-Jacques, Montréal","217 Saint-Jacques, Montréal","514-777-1234","100 Elm","6"',
+      '"Jean Tremblay","Marie Côté","217 Saint-Jacques, Montréal","217 Saint-Jacques, Montréal","514-777-1234","200 Oak","8"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    // Jean and Marie are distinct names → two packages.
+    expect(pkgs).toHaveLength(2);
+    const jean = pkgs.find((p) => p.lead_owner_name === "Jean Tremblay");
+    const marie = pkgs.find((p) => p.lead_owner_name === "Marie Côté");
+    expect(jean).toBeTruthy();
+    expect(marie).toBeTruthy();
+    // Both rows merge into each owner's package: 2 properties each.
+    expect(jean.associated_properties).toHaveLength(2);
+    expect(marie.associated_properties).toHaveLength(2);
+    // Co-owners preserved on each package.
+    expect(jean.co_owners).toContain("Marie Côté");
+    expect(marie.co_owners).toContain("Jean Tremblay");
+    // Same-mailing across rows → no dup_diff_addr flag.
+    expect(jean.duplicate_different_address).toBe(false);
+    expect(marie.duplicate_different_address).toBe(false);
+  });
+
+  test("numbered companies + multi-owner: each numbered name remains searchable", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Adresse postale,Adresse postale 2,Adresse Immeuble,Nb Logements",
+      '"9338-8387 QUEBEC INC.","9111-1111 CANADA INC.","1500 Industriel, Boucherville","1500 Industriel, Boucherville","100 Elm","12"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    expect(pkgs).toHaveLength(2);
+    for (const p of pkgs) {
+      expect(p.legal_entity_category).toBe("numbered_company");
+      expect(p.is_searchable_entity).toBe(true);
+      expect(p.search_strategy).toBe("mailing_address_only");
+    }
+  });
+
+  test("multi-property individual stays high-value across multi-owner rows", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Adresse postale,Adresse postale 2,Adresse Immeuble,Nb Logements",
+      '"Jean Tremblay","Marie Côté","55 Pionniers, Longueuil","55 Pionniers, Longueuil","700 Spruce","6"',
+      '"Jean Tremblay","Marie Côté","55 Pionniers, Longueuil","55 Pionniers, Longueuil","701 Spruce","8"',
+      '"Jean Tremblay","Marie Côté","55 Pionniers, Longueuil","55 Pionniers, Longueuil","702 Spruce","4"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    const jean = pkgs.find((p) => p.lead_owner_name === "Jean Tremblay");
+    expect(jean.legal_entity_category).toBe("individual");
+    expect(jean.lead_value_priority).toBe("high");
+    expect(jean.associated_properties).toHaveLength(3);
+  });
+
+  test("file owner phone/email/website preserved on per-slot records", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Téléphone Propriétaire,Téléphone Propriétaire 2,Courriel,Courriel 2,Site web,Adresse postale,Adresse postale 2,Adresse Immeuble",
+      '"Jean Tremblay","Marie Côté","514-777-1234","438-823-9876","jean@x.com","marie@y.com","https://x.com","217 Saint-Jacques, Montréal","217 Saint-Jacques, Montréal","100 Elm"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    const jean = pkgs.find((p) => p.lead_owner_name === "Jean Tremblay");
+    const marie = pkgs.find((p) => p.lead_owner_name === "Marie Côté");
+    // Each owner's own phone is owner-relationship.
+    const jeanOwn = jean.candidatePhones.find((c) =>
+      c.source === "file" && c.relationship_to_lead_owner === "owner");
+    const marieOwn = marie.candidatePhones.find((c) =>
+      c.source === "file" && c.relationship_to_lead_owner === "owner");
+    expect(jeanOwn.phone).toBe("(514) 777-1234");
+    expect(marieOwn.phone).toBe("(438) 823-9876");
+    // Each owner has their own email.
+    expect(jean.existing_emails).toContain("jean@x.com");
+    expect(marie.existing_emails).toContain("marie@y.com");
+    // Website was on slot 1 only — Jean has it, Marie doesn't.
+    expect(jean.existing_websites).toContain("x.com");
+    expect(marie.existing_websites).toEqual([]);
+  });
+
+  test("building phone shared across multi-owner rows stays building-relationship", () => {
+    const CSV = [
+      "Propriétaire,Propriétaire 2,Téléphone Immeuble,Adresse postale,Adresse postale 2,Adresse Immeuble",
+      '"Jean Tremblay","Marie Côté","450-823-9876","217 Saint-Jacques, Montréal","217 Saint-Jacques, Montréal","100 Elm"',
+    ].join("\n");
+    const { rows } = parseDispatchLeadsCsv(CSV);
+    const pkgs = buildSearchPackages(rows);
+    for (const p of pkgs) {
+      const bldg = p.candidatePhones.find((c) =>
+        c.source === "file" && c.relationship_to_lead_owner === "building");
+      expect(bldg).toBeTruthy();
+      expect(bldg.phone).toBe("(450) 823-9876");
+      const ownerCands = p.candidatePhones.filter((c) =>
+        c.source === "file" && c.relationship_to_lead_owner === "owner");
+      expect(ownerCands).toEqual([]);
+    }
+    // Audit catches both owners as building_phone_only.
+    const audit = auditSearchPackages(pkgs);
+    const leak = audit.suspicious.filter((s) => s.kind === "building_phone_only");
+    expect(leak).toHaveLength(2);
   });
 });

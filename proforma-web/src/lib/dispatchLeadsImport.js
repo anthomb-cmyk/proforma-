@@ -110,8 +110,79 @@ const HEADER_CANDIDATES = {
   ],
 };
 
+// Per-owner fields. When the CSV ships multiple owner slots
+// (Propriétaire / Propriétaire 2 / Propriétaire 3, …), these are the columns
+// that vary between slots. Row-level fields (property_address, units,
+// building_phone, …) stay shared across every owner emitted from that row.
+const PER_OWNER_FIELDS = new Set([
+  "lead_owner_name", "status",
+  "mailing_street", "mailing_city", "mailing_province", "mailing_postal_code",
+  "owner_phone", "owner_email", "website",
+]);
+
+// Match a header against the candidate list, allowing an optional numeric
+// slot suffix ("Propriétaire 2", "lead_owner_name_3", "tel proprietaire 4").
+// Returns { field, slot } when a match is found, else null. Slot 1 is the
+// unsuffixed/no-suffix-or-suffix=1 case.
+function classifyHeader(rawHeader) {
+  const norm = normHeader(rawHeader);
+  if (!norm) return null;
+  // Strip a trailing _<digits> if present.
+  let base = norm;
+  let slot = 1;
+  const m = norm.match(/^(.+?)_(\d+)$/);
+  if (m) {
+    base = m[1].replace(/_+$/, "");
+    slot = Number(m[2]) || 1;
+  }
+  for (const [field, candidates] of Object.entries(HEADER_CANDIDATES)) {
+    for (const cand of candidates) {
+      if (normHeader(cand) === base) return { field, slot };
+    }
+  }
+  return null;
+}
+
+// Detect every owner slot present in the CSV. Returns the slot indices
+// found (sorted), e.g. [1] for a single-owner CSV, [1, 2, 3] for a
+// multi-slot rôle-style CSV. The slot list is anchored on lead_owner_name —
+// other per-owner fields (mailing_*, owner_phone, ...) attach to the same
+// slot but only matter if the slot has a name column.
+export function detectOwnerSlots(headers) {
+  const slots = new Set();
+  for (const h of (Array.isArray(headers) ? headers : [])) {
+    const c = classifyHeader(h);
+    if (c && c.field === "lead_owner_name") slots.add(c.slot);
+  }
+  return [...slots].sort((a, b) => a - b);
+}
+
+// Build a per-slot headerMap. Per-owner fields are looked up at the requested
+// slot; row-level fields are inherited from slot 1 (the row-level columns are
+// shared across every owner).
+export function detectHeadersForSlot(headers, slot = 1) {
+  const indexed = (Array.isArray(headers) ? headers : [])
+    .map((h) => ({ raw: h, info: classifyHeader(h) }));
+  const used = new Set();
+  const map = {};
+  for (const field of Object.keys(HEADER_CANDIDATES)) {
+    const wantedSlot = PER_OWNER_FIELDS.has(field) ? slot : 1;
+    const hit = indexed.find((h) =>
+      h.info && h.info.field === field && h.info.slot === wantedSlot && !used.has(h.raw)
+    );
+    if (hit) {
+      map[field] = hit.raw;
+      used.add(hit.raw);
+    }
+  }
+  return map;
+}
+
 // Inspect the CSV header row and return a { field → raw-header } map.
 // Missing fields are simply absent from the returned object.
+//
+// This is the single-slot view of the headers (slot 1). Use detectOwnerSlots
+// + detectHeadersForSlot for multi-slot CSVs.
 export function detectHeaders(headers) {
   const list = Array.isArray(headers) ? headers : [];
   const indexed = list.map((h) => ({ raw: h, norm: normHeader(h) }));
@@ -247,12 +318,59 @@ export function dispatchRowToLeadLike(row, headerMap = {}) {
   };
 }
 
-// End-to-end CSV → array<lead-like>. Returns { headers, headerMap, rows }
-// so the caller can report on header detection (handy for debugging when
-// the CSV uses unfamiliar column names).
+// End-to-end CSV → array<lead-like>. Returns { headers, headerMap, slots, rows }.
+//
+// MULTI-OWNER FAN-OUT: when the CSV exposes multiple owner slots
+// (Propriétaire / Propriétaire 2 / Propriétaire 3, …), each CSV row is
+// fanned out into one lead-like record per non-empty owner slot. Each
+// emitted record carries:
+//   • the slot's own name + mailing + owner_phone + owner_email
+//   • the row-level property/building fields (shared across all slots)
+//   • aliases listing every OTHER non-empty owner name on the same row,
+//     so buildSearchPackages can preserve them as co_owners
+//
+// Single-slot CSVs (the current Dispatch output) emit one record per CSV
+// row exactly as before — behavior unchanged.
+//
+// `headerMap` is the slot-1 view of the headers (kept for backward compat
+// with callers that don't care about slots). `slots` is the list of slot
+// indices found in the CSV (e.g. [1, 2, 3]).
 export function parseDispatchLeadsCsv(text) {
   const parsed = parseCSV(text);
-  const headerMap = detectHeaders(parsed.headers || []);
-  const rows = (parsed.rows || []).map((r) => dispatchRowToLeadLike(r, headerMap));
-  return { headers: parsed.headers || [], headerMap, rows };
+  const headers = parsed.headers || [];
+  const csvRows = parsed.rows || [];
+  const slots = detectOwnerSlots(headers);
+  const slotMaps = (slots.length ? slots : [1]).map((s) => ({
+    slot: s,
+    map: detectHeadersForSlot(headers, s),
+  }));
+  const headerMap = slotMaps[0]?.map || {};
+
+  const rows = [];
+  for (const r of csvRows) {
+    // Resolve every non-empty slot for this row. We need this twice: once
+    // to know which names exist (for the co-owner aliases on each emit),
+    // and once to actually emit the lead-like records.
+    const presentSlots = slotMaps
+      .map(({ slot, map }) => {
+        const name = String(r?.[map.lead_owner_name] || "").trim();
+        return name ? { slot, map, name } : null;
+      })
+      .filter(Boolean);
+    if (!presentSlots.length) continue;
+    for (const { slot, map, name } of presentSlots) {
+      const coOwnerNames = presentSlots
+        .filter((p) => p.slot !== slot)
+        .map((p) => p.name);
+      const lead = dispatchRowToLeadLike(r, map);
+      if (coOwnerNames.length) {
+        // buildSearchPackages collects co_owners from contactNames + aliases
+        // (excluding the chosen lead_owner_name). Push co-owners into aliases
+        // so they show up regardless of person/company classification.
+        lead.aliases = [...(lead.aliases || []), ...coOwnerNames];
+      }
+      rows.push(lead);
+    }
+  }
+  return { headers, headerMap, slots: slots.length ? slots : [1], rows };
 }

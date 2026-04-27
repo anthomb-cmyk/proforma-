@@ -263,6 +263,11 @@ function main() {
     audit.companies_with_mailing_no_phone,
     args.topN,
   );
+  printAuditDetail(
+    "Same name across DIFFERENT mailing addresses (informational)",
+    audit.duplicate_different_address,
+    args.topN,
+  );
 
   console.log("");
   console.log(`=== Suspicious / classification flags (${audit.suspicious.length}) ===`);

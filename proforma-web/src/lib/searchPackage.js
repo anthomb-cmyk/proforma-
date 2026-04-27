@@ -626,6 +626,46 @@ export function buildSearchPackages(inputRows, options = {}) {
     packages.push(pkg);
   }
 
+  // Second pass: address-aware duplicate detection. Same-address duplicates
+  // are already collapsed by the grouping above (they share groupKey), so a
+  // package's ownerKey is unique-by-mailing. Two packages can still share the
+  // same `normalized_owner_name` only when their MAILING ADDRESSES differ —
+  // that's the legitimate "same name, different address" case (e.g. an
+  // investor with two operating companies under the same person's name, OR
+  // two unrelated people with the same name living in different cities).
+  //
+  // We expose this as `duplicate_different_address: true` + a list of
+  // sibling packages' mailing descriptors. This is INFORMATIONAL — it's not
+  // a "suspicious split". Same-address duplicates never reach this branch.
+  const byNormName = new Map();
+  for (const p of packages) {
+    const key = p.normalized_owner_name;
+    if (!key) continue;
+    if (!byNormName.has(key)) byNormName.set(key, []);
+    byNormName.get(key).push(p);
+  }
+  for (const p of packages) {
+    p.duplicate_different_address = false;
+    p.address_variant_packages = [];
+  }
+  for (const [, group] of byNormName) {
+    if (group.length < 2) continue;
+    for (const p of group) {
+      p.duplicate_different_address = true;
+      p.address_variant_packages = group
+        .filter((q) => q !== p)
+        .map((q) => ({
+          mailing_address: q.mailing_address || "",
+          mailing_city: q.mailing_city || "",
+          mailing_province: q.mailing_province || "",
+          mailing_postal_code: q.mailing_postal_code || "",
+          source_row_indices: (q.source_row_indices || []).slice(),
+        }));
+      // Refresh the reason so it carries the new flag.
+      p.reason = buildReason(p);
+    }
+  }
+
   // Stable ordering: by source_row_indices[0] so callers can map packages
   // back to input order. Empty-index groups sink to the bottom.
   packages.sort((a, b) => {
@@ -659,6 +699,10 @@ function buildReason(pkg) {
     .reduce((s, p) => s + (Number(p?.units) || 0), 0);
   if (totalUnits) parts.push(`units=${totalUnits}`);
   parts.push(`mailing=${mailingAddressQuality(pkg)}`);
+  if (pkg.duplicate_different_address) {
+    const n = (pkg.address_variant_packages || []).length;
+    parts.push(`dup_diff_addr=${n + 1}`);
+  }
   if ((pkg.warnings || []).length) parts.push(`warn=${pkg.warnings.join("|")}`);
   return parts.join(" · ");
 }
@@ -903,24 +947,17 @@ export function auditSearchPackages(packages, options = {}) {
     }
   }
 
-  // Possible owner duplicates split by name/address variations: same
-  // normalized owner name appearing in more than one package.
-  const byNormName = new Map();
-  for (const p of list) {
-    const key = (p.normalized_owner_name || "").trim();
-    if (!key) continue;
-    if (!byNormName.has(key)) byNormName.set(key, []);
-    byNormName.get(key).push(p);
-  }
-  for (const [name, group] of byNormName) {
-    if (group.length < 2) continue;
-    suspicious.push({
-      kind: "dup_split_by_name",
-      package: group[0],
-      detail: `${group.length} packages share normalized name "${name}" — possible owner accidentally split across mailing variants`,
-      otherPackages: group.slice(1),
-    });
-  }
+  // Address-aware duplicate detection: same-name packages at DIFFERENT
+  // mailing addresses. This is INFORMATIONAL, not suspicious — it's the
+  // legitimate "two entities share a name but mail to different places"
+  // case. Same-address duplicates never appear here because they're already
+  // merged into a single package upstream by buildSearchPackages.
+  //
+  // Surfaced via package.duplicate_different_address (set in
+  // buildSearchPackages's second pass), and re-exposed here as a top-level
+  // audit field so the dev CLI can list them under their own header rather
+  // than mixed into "suspicious".
+  const duplicateDifferentAddress = list.filter((p) => p.duplicate_different_address);
 
   // Numbered company with no mailing address — fully unsearchable.
   for (const p of list) {
@@ -954,6 +991,7 @@ export function auditSearchPackages(packages, options = {}) {
     numbered_companies_without_phone: numberedNoPhone,
     trusts_without_phone: trustsNoPhone,
     companies_with_mailing_no_phone: companiesWithMailingNoPhone,
+    duplicate_different_address: duplicateDifferentAddress,
     suspicious,
   };
 }

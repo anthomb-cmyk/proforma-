@@ -124,6 +124,11 @@ function main() {
   printAuditDetail("Numbered companies without phone", audit.numbered_companies_without_phone, args.topN);
   printAuditDetail("Trusts / fiducies without phone", audit.trusts_without_phone, args.topN);
   printAuditDetail("Companies with mailing address but no phone", audit.companies_with_mailing_no_phone, args.topN);
+  printAuditDetail(
+    "Same name across DIFFERENT mailing addresses (informational)",
+    audit.duplicate_different_address,
+    args.topN,
+  );
 
   console.log("");
   console.log(`=== Suspicious / classification flags (${audit.suspicious.length}) ===`);

@@ -855,7 +855,7 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
     expect(noMail.package.lead_owner_name).toBe("1111-2222 CANADA INC.");
   });
 
-  test("dup_split_by_name fires when same normalized name appears twice", () => {
+  test("duplicate_different_address: same name + different mailing flagged INFORMATIONALLY (not suspicious)", () => {
     const pkgs = buildSearchPackages([
       mkOwner({
         displayName: "ABC Immobilier Inc.",
@@ -863,14 +863,43 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
       }),
       mkOwner({
         displayName: "ABC Immobilier Inc.",
-        // Different mailing → different ownerKey grouping → split.
+        // Different mailing → different ownerKey grouping → kept separate.
         postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
       }),
     ]);
+    expect(pkgs).toHaveLength(2);
+    // Each package carries the flag + a list of variant mailing descriptors.
+    for (const p of pkgs) {
+      expect(p.duplicate_different_address).toBe(true);
+      expect(p.address_variant_packages).toHaveLength(1);
+      expect(p.address_variant_packages[0].mailing_address).toBeTruthy();
+    }
+    // Audit exposes them as a dedicated top-level list, NOT suspicious.
     const audit = auditSearchPackages(pkgs);
-    const dups = audit.suspicious.filter((s) => s.kind === "dup_split_by_name");
-    expect(dups).toHaveLength(1);
-    expect(dups[0].detail).toContain("2 packages");
+    expect(audit.duplicate_different_address).toHaveLength(2);
+    expect(audit.suspicious.find((s) => s.kind === "dup_split_by_name")).toBeUndefined();
+  });
+
+  test("same name + same mailing collapses to ONE package (no flag)", () => {
+    const pkgs = buildSearchPackages([
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        postalAddress: { street: "217 St-Jacques", city: "Montréal", province: "QC", postalCode: "H2Y 1M6" },
+        buildings: [{ id: "b1", address: "100 Elm" }],
+      }),
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        postalAddress: { street: "217 St-Jacques", city: "Montréal", province: "QC", postalCode: "H2Y 1M6" },
+        buildings: [{ id: "b2", address: "200 Oak" }],
+      }),
+    ]);
+    expect(pkgs).toHaveLength(1);
+    expect(pkgs[0].duplicate_different_address).toBe(false);
+    expect(pkgs[0].address_variant_packages).toEqual([]);
+    // Properties from both rows merged into the one package.
+    expect(pkgs[0].associated_properties).toHaveLength(2);
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.duplicate_different_address).toHaveLength(0);
   });
 
   test("empty input → all zeros", () => {
@@ -881,6 +910,7 @@ describe("auditSearchPackages — targeted dev-CLI buckets", () => {
       numbered_companies_without_phone: [],
       trusts_without_phone: [],
       companies_with_mailing_no_phone: [],
+      duplicate_different_address: [],
       suspicious: [],
     });
   });
