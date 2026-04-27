@@ -8,8 +8,12 @@
 // lib/searchPackageDebug.js#buildSearchPackagePreviewData so the tests can
 // run without @testing-library/react.
 
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
+import {
+  isContactEnrichmentDebugEnabled,
+  runContactEnrichmentPreview,
+} from "../lib/contactEnrichmentPreview.js";
 import { CloseIcon } from "./Icons.jsx";
 
 const cellLabel = { fontSize: 11, color: "var(--text3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
@@ -46,11 +50,57 @@ function Bucket({ entries }) {
   );
 }
 
+// Status badge styling
+const STATUS_COLORS = {
+  ready_to_call: { background: "#DCFCE7", color: "#166534" },
+  needs_review: { background: "#FEF9C3", color: "#854D0E" },
+  ready_to_email: { background: "#DBEAFE", color: "#1E40AF" },
+  no_contact_found: { background: "#F3F4F6", color: "#6B7280" },
+  skipped_existing_phone: { background: "#F3F4F6", color: "#6B7280" },
+};
+
+function StatusBadge({ status }) {
+  const style = STATUS_COLORS[status] || STATUS_COLORS.no_contact_found;
+  return (
+    <span style={{
+      ...style,
+      borderRadius: 4,
+      padding: "2px 6px",
+      fontSize: 10,
+      fontWeight: 600,
+      whiteSpace: "nowrap",
+    }}>{status?.replace(/_/g, " ")}</span>
+  );
+}
+
 export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
   const data = useMemo(
     () => buildSearchPackagePreviewData(rows, { topN }),
     [rows, topN],
   );
+
+  const enrichEnabled = useMemo(() => isContactEnrichmentDebugEnabled(), []);
+
+  const [enrichState, setEnrichState] = useState(
+    /** @type {"idle"|"loading"|"done"|"error"} */ "idle"
+  );
+  const [enrichResults, setEnrichResults] = useState(/** @type {object[]|null} */ null);
+  const [enrichError, setEnrichError] = useState(/** @type {string|null} */ null);
+
+  const handleEnrich = useCallback(async () => {
+    const pkgs = data.topHighValueWithoutPhonePackages;
+    if (!pkgs?.length) return;
+    setEnrichState("loading");
+    setEnrichError(null);
+    const res = await runContactEnrichmentPreview(pkgs, { limit: Math.min(pkgs.length, 5) });
+    if (res.ok) {
+      setEnrichResults(res.results);
+      setEnrichState("done");
+    } else {
+      setEnrichError(res.error || "Unknown error");
+      setEnrichState("error");
+    }
+  }, [data.topHighValueWithoutPhonePackages]);
 
   return (
     <div className="mo" onClick={onClose}>
@@ -151,6 +201,100 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
             </table>
           )}
         </div>
+
+        {/* ── Contact-enrichment preview (pf_websearch_debug flag) ─────────── */}
+        {enrichEnabled && data.topHighValueWithoutPhonePackages?.length > 0 && (
+          <div style={{ ...card, padding: "12px 14px", marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                Contact enrichment
+                <span style={{ marginLeft: 6, fontSize: 10, color: "var(--text3)", fontWeight: 500 }}>
+                  dev only · web search
+                </span>
+              </div>
+              {enrichState !== "loading" && (
+                <button
+                  className="btn btn-sm"
+                  onClick={handleEnrich}
+                  disabled={enrichState === "loading"}
+                >
+                  {enrichState === "idle"
+                    ? `Test enrichment on top ${Math.min(data.topHighValueWithoutPhonePackages.length, 5)} packages`
+                    : "Re-run enrichment"}
+                </button>
+              )}
+              {enrichState === "loading" && (
+                <span style={{ fontSize: 11, color: "var(--text3)" }}>Running…</span>
+              )}
+            </div>
+
+            {enrichState === "error" && (
+              <div style={{ fontSize: 12, color: "#B91C1C", marginBottom: 8 }}>
+                Error: {enrichError}
+              </div>
+            )}
+
+            {enrichState === "done" && enrichResults && (
+              enrichResults.length === 0 ? (
+                <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results)</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--text3)" }}>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Owner</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Status</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Best phone</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Belongs to</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Relationship</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Email</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Website</th>
+                      <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Conf.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrichResults.map((r, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontWeight: 600, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.lead_owner_name || "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>
+                          <StatusBadge status={r.status} />
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontFamily: "monospace" }}>
+                          {r.bestPhone || "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.bestPhoneBelongsTo || "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text3)" }}>
+                          {r.phoneRelationship || "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)" }}>
+                          {r.bestEmail || "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text2)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.bestWebsite
+                            ? <a href={r.bestWebsite} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>{r.bestWebsite}</a>
+                            : "—"}
+                        </td>
+                        <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text3)" }}>
+                          {r.confidence || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            )}
+
+            {enrichState === "idle" && (
+              <div style={{ fontSize: 11, color: "var(--text3)" }}>
+                Requires <code>pf_websearch_debug=1</code> + backend env vars{" "}
+                <code>WEB_SEARCH_PROVIDER</code> / <code>BRAVE_SEARCH_API_KEY</code>.
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)" }}>
           To toggle this preview: <code>localStorage.setItem("pf_spdebug", "1")</code> · refresh

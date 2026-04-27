@@ -184,6 +184,9 @@ export function buildSearchPackagePreviewData(rows, options = {}) {
     duplicateDifferentAddress: audit.duplicate_different_address.length,
     suspiciousCount: audit.suspicious.length,
     topHighValueWithoutPhone: topRows,
+    // Raw package objects for the top-N list — used by the contact-enrichment
+    // preview button to POST to /api/contact-enrichment/preview.
+    topHighValueWithoutPhonePackages: audit.top_high_value_without_phone.slice(0, topN),
     // The full lists are exposed too in case callers want to drill down or
     // export. Kept as plain arrays so React can map them directly.
     numberedCompaniesWithoutPhone: audit.numbered_companies_without_phone,

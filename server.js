@@ -16,6 +16,8 @@ import webpush from "web-push";
 import multer from "multer";
 import { createChatRouter } from "./routes/chat.js";
 import { createListingsRouter } from "./routes/listings.js";
+import { createContactEnrichmentRouter } from "./routes/contactEnrichment.js";
+import { createWebSearchProvider } from "./services/webSearchProvider.js";
 import { createOpenAIService } from "./services/openaiService.js";
 import { createListingsService } from "./services/listingsService.js";
 import { createQualificationService } from "./services/qualificationService.js";
@@ -5070,6 +5072,20 @@ app.get("/api/phone-lookup/cache-stats", (_req, res) => {
 
 app.use("/api/listings", createListingsRouter({
   listingsService
+}));
+
+// Dev-only: contact-enrichment preview (web-search-backed, no CRM write).
+app.use("/api/contact-enrichment", createContactEnrichmentRouter({
+  createSearchFn: () => createWebSearchProvider(),
+  fetchPageFn: async (url) => {
+    try {
+      const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; ProformaBot/1.0)" }, signal: AbortSignal.timeout(8000) });
+      if (!resp.ok) return null;
+      return await resp.text();
+    } catch {
+      return null;
+    }
+  },
 }));
 
 app.use("/api/chat", createChatRouter({
