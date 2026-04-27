@@ -8,7 +8,7 @@
 // lib/searchPackageDebug.js#buildSearchPackagePreviewData so the tests can
 // run without @testing-library/react.
 
-import { useMemo, useState, useCallback, useRef } from "react";
+import { useMemo, useState, useCallback, Fragment } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
 import {
   isContactEnrichmentDebugEnabled,
@@ -99,8 +99,8 @@ function EnrichResultsTable({ results }) {
       </thead>
       <tbody>
         {results.map((r, i) => (
-          <>
-            <tr key={`row-${i}`} style={{ cursor: "pointer" }} onClick={() => toggle(i)}>
+          <Fragment key={i}>
+            <tr style={{ cursor: "pointer" }} onClick={() => toggle(i)}>
               <TD style={{ color: "var(--text3)", userSelect: "none" }}>
                 {openIdx === i ? "▼" : "▶"}
               </TD>
@@ -125,7 +125,7 @@ function EnrichResultsTable({ results }) {
             </tr>
 
             {openIdx === i && (
-              <tr key={`ev-${i}`}>
+              <tr>
                 <td colSpan={9} style={{ padding: "6px 12px 10px 28px", borderBottom: "1px solid var(--border)", background: "var(--surface2, #F9F9F7)" }}>
                   {/* Evidence log */}
                   <div style={{ marginBottom: 4, fontSize: 10, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -160,7 +160,7 @@ function EnrichResultsTable({ results }) {
                 </td>
               </tr>
             )}
-          </>
+          </Fragment>
         ))}
       </tbody>
     </table>
