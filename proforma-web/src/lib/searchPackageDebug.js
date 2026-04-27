@@ -20,7 +20,6 @@ import {
 import {
   normalizeHeaderKey,
   extractRoleData,
-  buildOwnersAndLeadsFromRole,
 } from "./roleImport.js";
 
 const FLAG_KEY = "pf_spdebug";
@@ -65,19 +64,64 @@ function isRoleFormat(rows) {
   return sample.some((row) => isRoleStyleRow(getRawRow(row)));
 }
 
-// Convert a batch of raw rôle rows (or PF-wrapped rôle rows) to Owner-shaped
-// records ready for buildSearchPackages. Uses the same extraction pipeline as
-// the full rôle import so every owner slot is included, mailing addresses are
-// parsed, and phones are correctly tagged by relationship (owner vs. building).
-function adaptRoleRowsToOwners(rows) {
+// Convert a batch of raw rôle rows (or PF-wrapped rôle rows) to lead-like
+// records for buildSearchPackages, emitting ONE record per owner-slot draft.
+//
+// Why not reuse buildOwnersAndLeadsFromRole here: that function groups by
+// mailing address (one Owner per unique ownerKey), so two different owners
+// sharing an address — e.g. a person and a fiducie co-owning a building —
+// collapse into a single Owner record. The chosen displayName drives
+// classification, hiding the fiducie/company under the person's name.
+//
+// By emitting one record per draft we give buildSearchPackages the raw
+// (name, mailing) pairs it needs to:
+//   • group correctly by (normalized_name | normalized_postal)
+//   • classify each owner independently
+//   • collapse same-name-same-mailing across property rows into one package
+//   • flag same-name-different-mailing as duplicate_different_address
+function adaptRoleRowsToLeadLike(rows) {
   const rawRows = rows.map(getRawRow).filter((r) => r && typeof r === "object");
   if (!rawRows.length) return [];
-  // Collect all unique header names across every row so extractRoleData can
-  // find slot columns regardless of which row was examined first.
+  // Collect all unique header names so extractRoleData finds every slot column.
   const headers = [...new Set(rawRows.flatMap((r) => Object.keys(r)))];
   const parsed = extractRoleData({ rows: rawRows, headers });
-  const { allOwners } = buildOwnersAndLeadsFromRole(parsed, []);
-  return allOwners;
+  if (!parsed.ownersMap.size) return [];
+
+  const propById = new Map(parsed.properties.map((p) => [p.id, p]));
+  const records = [];
+
+  for (const [, drafts] of parsed.ownersMap) {
+    for (const draft of drafts) {
+      const postal = draft.postalAddress || {};
+      const prop = propById.get(draft.propertyId);
+      // Append building-level candidates (relationship: "building") from the
+      // property row; buildSearchPackages will deduplicate via
+      // mergePhoneCandidates when it flattens the group's candidatePhones.
+      const candidatePhones = [
+        ...(draft.candidatePhones || []),
+        ...(prop?.candidatePhones || []),
+      ];
+      records.push({
+        companyName: draft.name,
+        address: prop?.adresseImmeuble || "",
+        city: prop?.ville || "",
+        province: "QC",
+        postalCode: prop?.codePostalImmeuble || "",
+        mailing_address: postal.street || "",
+        mailing_city: postal.city || "",
+        mailing_province: postal.province || "QC",
+        mailing_postal_code: postal.postalCode || "",
+        phones: draft.phones || [],
+        phone: (draft.phones || [])[0] || "",
+        candidatePhones,
+        units: prop ? (prop.nbTotalUnites || prop.nbLogements || 0) : 0,
+        utilisation: prop?.utilisation || "",
+        status: draft.status || "",
+      });
+    }
+  }
+
+  return records;
 }
 
 // Build the data shape consumed by the preview panel from a list of
@@ -86,9 +130,10 @@ function adaptRoleRowsToOwners(rows) {
 // pre-formatted row strings for the top high-value-no-phone list.
 //
 // When the input looks like raw rôle rows (have "Propriétaire" columns),
-// the rows are first adapted to Owner-shaped records via the rôle import
-// pipeline so that all owner slots, mailing addresses, and file phones are
-// correctly mapped before package-building runs.
+// every populated owner slot is fanned out to its own lead-like record
+// before package-building runs so that each owner is classified and scored
+// independently — including slot-2+ owners and fiducies/companies that
+// share a mailing address with an individual.
 //
 // Pure — no localStorage / DOM / network. Testable in isolation.
 export function buildSearchPackagePreviewData(rows, options = {}) {
@@ -96,14 +141,13 @@ export function buildSearchPackagePreviewData(rows, options = {}) {
   const topN = Number.isFinite(options.topN) ? options.topN : 25;
 
   // Detect raw rôle rows (directly or wrapped inside Phone Finder rows) and
-  // convert them to Owner-shaped records so buildSearchPackages sees the
-  // correct owner/mailing/phone structure. Without this step Phone Finder
-  // rows have the wrong shape: phones are in `inputPhones` not `phones`,
-  // names are in `name` not `companyName`, and slots beyond slot 0 are
-  // invisible to the package builder.
+  // fan out every owner slot to a lead-like record so buildSearchPackages
+  // sees correct per-owner name/mailing/phone data. Without this step Phone
+  // Finder rows carry `inputPhones` not `phones`, `name` not `companyName`,
+  // and slots beyond slot 0 are invisible.
   const packagableRows =
     safeRows.length > 0 && isRoleFormat(safeRows)
-      ? adaptRoleRowsToOwners(safeRows)
+      ? adaptRoleRowsToLeadLike(safeRows)
       : safeRows;
 
   const packages = buildSearchPackages(packagableRows);
