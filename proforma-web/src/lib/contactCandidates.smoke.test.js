@@ -86,8 +86,8 @@ describe("smoke: file → re-import merge → online enrichment", () => {
       "Statut aux fins d'imposition scolaire": "Personne physique",
       // SAME mailing postal as existingOwners → grouped into the same Owner.
       "Adresse postale": "217 rue Saint-Jacques, Montréal (Québec) H2Y 1M6",
-      "Téléphone": "514-777-1234",
-      "Téléphone Immeuble": "438-823-9876",
+      "Téléphone": "514-555-0142",
+      "Téléphone Immeuble": "438-555-0143",
       "Courriel": "jean@tremblay.com",
       "Courriel Immeuble": "concierge@immeuble.com",
       "Site web": "https://tremblay.com",
@@ -137,11 +137,11 @@ describe("smoke: file → re-import merge → online enrichment", () => {
     // ── primary fields populated for the lead generated from this property ──
     const lead = leads.find((l) => l.ownerIds?.includes(owner.id));
     expect(lead).toBeTruthy();
-    expect(lead.phone).toBe("(514) 777-1234");
+    expect(lead.phone).toBe("(514) 555-0142");
     expect(lead.email).toBe("jean@tremblay.com");
     expect(lead.website).toBe("tremblay.com");
     // Flat arrays carry every distinct value.
-    expect(lead.phones).toEqual(expect.arrayContaining(["(514) 777-1234", "(438) 823-9876"]));
+    expect(lead.phones).toEqual(expect.arrayContaining(["(514) 555-0142", "(438) 555-0143"]));
     expect(lead.emails).toEqual(expect.arrayContaining(["jean@tremblay.com", "concierge@immeuble.com"]));
     expect(lead.websites).toEqual(["tremblay.com"]);
 
@@ -149,7 +149,7 @@ describe("smoke: file → re-import merge → online enrichment", () => {
     //     phone + website (Google Places). File candidates must survive.
     const rowLookup = [{ row: {}, ownerId: owner.id, ownerKey: owner.ownerKey }];
     const results = [{
-      phone: "514-823-9555",
+      phone: "514-555-0146",
       status: "found",
       candidates: [],
       source: "google_places",
@@ -170,7 +170,7 @@ describe("smoke: file → re-import merge → online enrichment", () => {
     // ── online phone appended (not overwriting) ──
     const onlineP = o.candidatePhones.find((c) => c.source === "google_places");
     expect(onlineP).toBeTruthy();
-    expect(onlineP.phone).toBe("(514) 823-9555");
+    expect(onlineP.phone).toBe("(514) 555-0146");
     // Total = 3 file + 1 online with no dupes.
     expect(o.candidatePhones).toHaveLength(4);
 
@@ -190,8 +190,8 @@ describe("smoke: file → re-import merge → online enrichment", () => {
     const ownerPhoneKeys = o.phones.map(normalizePhoneKey).sort();
     expect(ownerPhoneKeys).toEqual([
       "4505550142", // existing
-      "5147771234", // new file owner phone
-      "5148239555", // online (Places)
+      "5145550142", // new file owner phone
+      "5145550146", // online (Places)
     ]);
     // No duplicates in the deduped phones array.
     expect(new Set(ownerPhoneKeys).size).toBe(ownerPhoneKeys.length);
@@ -200,6 +200,6 @@ describe("smoke: file → re-import merge → online enrichment", () => {
     // already exposes the building phone in its flat phones[] (lead.phones is
     // the union of owner + building file candidates).
     const leadPhoneKeys = lead.phones.map(normalizePhoneKey).sort();
-    expect(leadPhoneKeys).toEqual(["4388239876", "5147771234"]);
+    expect(leadPhoneKeys).toEqual(["4385550143", "5145550142"]);
   });
 });
