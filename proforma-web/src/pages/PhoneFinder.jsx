@@ -22,6 +22,8 @@ import {
   normalizeHeader as normalizeHeaderKey,
 } from "../lib/tableImport.js";
 import PhoneResultRow from "../components/PhoneResultRow.jsx";
+import SearchPackagePreview from "../components/SearchPackagePreview.jsx";
+import { isSearchPackageDebugEnabled } from "../lib/searchPackageDebug.js";
 import { PhoneIcon, GlobeIcon, FolderIcon, BookIcon, PencilIcon, FileIcon, DownloadIcon, CloseIcon } from "../components/Icons.jsx";
 import {
   loadRunsFromStorage,
@@ -181,12 +183,20 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // finishes so the user sees their spend climb in near-real-time.
   const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
 
+  // Dev-only search-package preview. Gated on a localStorage flag so the
+  // button stays invisible to normal users (see lib/searchPackageDebug.js).
+  // Read once at mount — the flag isn't expected to flip mid-session.
+  const [spDebugEnabled] = useState(() => isSearchPackageDebugEnabled());
+  // When non-null, holds the rows currently being previewed in the modal.
+  const [searchPackagePreviewRows, setSearchPackagePreviewRows] = useState(null);
+
   // Esc dismisses whichever modal is open. The hook only attaches its
   // keydown listener while `active` is truthy, so we never intercept
   // Escape when nothing's on screen.
   useEscapeKey(() => setReviewRow(null), Boolean(reviewRow));
   useEscapeKey(() => setShowColMap(false), showColMap);
   useEscapeKey(() => { setPendingLookup(null); setPlanResult(null); }, Boolean(pendingLookup));
+  useEscapeKey(() => setSearchPackagePreviewRows(null), Boolean(searchPackagePreviewRows));
 
   const activeRun = useMemo(() => resultRuns.find(run => run.id === activeRunId) || null, [resultRuns, activeRunId]);
   const results = activeRun?.rows || [];
@@ -1456,6 +1466,23 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 <button className="btn" onClick={cancel} disabled={planningBusy}>
                   {t("pf_confirm_cancel")}
                 </button>
+                {/* Dev-only: previews the search packages buildSearchPackages
+                    would produce for the loaded rows. No API call. Hidden
+                    when localStorage.pf_spdebug !== "1". */}
+                {spDebugEnabled && (
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => setSearchPackagePreviewRows([
+                      ...(pendingLookup.rows || []),
+                      ...(pendingLookup.skippedWithPhone || []),
+                    ])}
+                    disabled={planningBusy}
+                    title="Inspect generated search packages — no API call"
+                  >
+                    Preview packages (dev)
+                  </button>
+                )}
                 <button
                   className="btn btn-gold"
                   onClick={confirmPendingLookup}
@@ -1470,6 +1497,15 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
           </div>
         );
       })()}
+
+      {/* Dev-only modal — renders only when the Preview packages button
+          fires it. Pure-presentational; no API call, no state mutation. */}
+      {searchPackagePreviewRows && (
+        <SearchPackagePreview
+          rows={searchPackagePreviewRows}
+          onClose={() => setSearchPackagePreviewRows(null)}
+        />
+      )}
 
       {/* ── Header ───────────────────────────────────────────────────── */}
       <div style={{background:"var(--card)",borderBottom:"1px solid var(--border)",padding:"14px 22px 0",flexShrink:0}}>
