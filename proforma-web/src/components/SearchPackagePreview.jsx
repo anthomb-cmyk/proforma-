@@ -167,7 +167,20 @@ function EnrichResultsTable({ results }) {
   );
 }
 
-export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
+// Transform a single enrichment result into a candidatePhones entry for leads.
+function enrichResultToCandidatePhone(r) {
+  return {
+    phone: r.bestPhone,
+    source: "enrichment_web_search",
+    phone_owner_name: r.bestPhoneBelongsTo || "",
+    relationship_to_lead_owner: r.phoneRelationship || "enrichment",
+    confidence: r.confidence || "low",
+    evidence: (r.evidence || []).slice(-4).join(" | "),
+    status: r.status,
+  };
+}
+
+export default function SearchPackagePreview({ rows, onClose, onExportToLeads, topN = 25 }) {
   const data = useMemo(
     () => buildSearchPackagePreviewData(rows, { topN }),
     [rows, topN],
@@ -181,11 +194,18 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
   const [enrichResults, setEnrichResults] = useState(/** @type {object[]|null} */ null);
   const [enrichError, setEnrichError] = useState(/** @type {string|null} */ null);
 
+  const [exportState, setExportState] = useState(
+    /** @type {"idle"|"loading"|"done"|"error"} */ "idle"
+  );
+  const [exportSummary, setExportSummary] = useState(/** @type {object|null} */ null);
+
   const handleEnrich = useCallback(async () => {
     const pkgs = data.topHighValueWithoutPhonePackages;
     if (!pkgs?.length) return;
     setEnrichState("loading");
     setEnrichError(null);
+    setExportState("idle");
+    setExportSummary(null);
     const res = await runContactEnrichmentPreview(pkgs, { limit: Math.min(pkgs.length, 5) });
     if (res.ok) {
       setEnrichResults(res.results);
@@ -195,6 +215,43 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
       setEnrichState("error");
     }
   }, [data.topHighValueWithoutPhonePackages]);
+
+  const handleExportToLeads = useCallback(async () => {
+    if (!enrichResults?.length || typeof onExportToLeads !== "function") return;
+    setExportState("loading");
+
+    const readyRows = enrichResults.filter((r) => r.status === "ready_to_call");
+    const skippedReview = enrichResults.filter((r) => r.status === "needs_review").length;
+    const skippedNoContact = enrichResults.filter(
+      (r) => r.status === "no_contact_found" || r.status === "skipped_existing_phone",
+    ).length;
+
+    const exportRows = readyRows.map((r) => ({
+      companyName: r.lead_owner_name || "",
+      mailing_address: r.mailing_address || "",
+      mailing_city: r.mailing_city || "",
+      phone: r.bestPhone || "",
+      email: r.bestEmail || "",
+      website: r.bestWebsite || "",
+      candidatePhones: r.bestPhone ? [enrichResultToCandidatePhone(r)] : [],
+      candidateEmails: r.bestEmail ? [{ email: r.bestEmail, source: "enrichment_web_search" }] : [],
+      candidateWebsites: r.bestWebsite ? [{ website: r.bestWebsite, source: "enrichment_web_search" }] : [],
+    }));
+
+    try {
+      const result = await Promise.resolve(onExportToLeads(exportRows, { ownerGrouped: false }));
+      setExportSummary({
+        exported: readyRows.length,
+        updated: result?.count ?? readyRows.length,
+        skippedReview,
+        skippedNoContact,
+      });
+      setExportState("done");
+    } catch (err) {
+      setExportState("error");
+      setExportSummary({ error: String(err?.message || err) });
+    }
+  }, [enrichResults, onExportToLeads]);
 
   return (
     <div className="mo" onClick={onClose}>
@@ -346,7 +403,43 @@ export default function SearchPackagePreview({ rows, onClose, topN = 25 }) {
               enrichResults.length === 0 ? (
                 <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results)</div>
               ) : (
-                <EnrichResultsTable results={enrichResults} />
+                <>
+                  <EnrichResultsTable results={enrichResults} />
+
+                  {/* Export to Leads — only when callback is wired */}
+                  {typeof onExportToLeads === "function" && exportState !== "done" && (
+                    <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                      <button
+                        className="btn btn-sm btn-gold"
+                        onClick={handleExportToLeads}
+                        disabled={exportState === "loading"}
+                      >
+                        {exportState === "loading"
+                          ? "Exporting…"
+                          : `Export ${enrichResults.filter((r) => r.status === "ready_to_call").length} ready contacts to Leads`}
+                      </button>
+                      {enrichResults.filter((r) => r.status === "needs_review").length > 0 && (
+                        <span style={{ fontSize: 11, color: "var(--text3)" }}>
+                          {enrichResults.filter((r) => r.status === "needs_review").length} needs_review skipped
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {exportState === "done" && exportSummary && (
+                    <div style={{ marginTop: 10, fontSize: 12, padding: "6px 10px", background: "#DCFCE7", borderRadius: 6, color: "#166534" }}>
+                      Exported {exportSummary.exported} contacts to Leads
+                      {exportSummary.skippedReview > 0 && ` · ${exportSummary.skippedReview} needs_review skipped`}
+                      {exportSummary.skippedNoContact > 0 && ` · ${exportSummary.skippedNoContact} no-contact skipped`}
+                    </div>
+                  )}
+
+                  {exportState === "error" && exportSummary?.error && (
+                    <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>
+                      Export error: {exportSummary.error}
+                    </div>
+                  )}
+                </>
               )
             )}
 

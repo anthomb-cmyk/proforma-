@@ -11,12 +11,15 @@
 //   - Does NOT write to the CRM, does NOT call /api/phone-lookup, does NOT
 //     use Google Places.
 //
-// Scoring rules (tightened in v2):
+// Scoring rules (tightened in v2, status semantics revised in v3):
 //   - Junk/directory/municipal results are rejected before any phone is recorded.
 //   - Individual owners never receive mailing-address business phones.
-//   - A phone only becomes bestPhone when confidence ≥ medium (score ≥ 3).
-//   - ready_to_call requires direct_entity or page source + name match.
-//   - Mailing/related phones stay at needs_review even when accepted.
+//   - Direct/page sources require score ≥ 3 (medium confidence) to become bestPhone.
+//   - Mailing/related sources are always promoted — same mailing address is a strong signal.
+//   - ready_to_call: direct/page + nameMatch, OR any mailing/related source,
+//     OR directory (pages_jaunes/411) + nameMatch.
+//   - phoneRelationship semantic values: direct_entity_match, same_mailing_address_contact,
+//     related_company_same_mailing_address, directory_match.
 
 import { isValidNanpPhone, normalizePhoneKey, normalizeKey } from "./phoneEnrichment.js";
 
@@ -374,8 +377,20 @@ async function processSinglePackage(pkg, opts) {
     .map((c) => ({ ...c, score: scorePhoneCandidate(c) }))
     .sort((a, b) => b.score - a.score);
 
-  // Only accept bestPhone if confidence ≥ medium (score ≥ 3).
-  const bestCand = scored.find((c) => c.score >= 3) || null;
+  // Three selection tracks with different confidence bars:
+  //   direct/page: requires score ≥ 3 (medium confidence)
+  //   mailing/related: always promoted — same-address co-location is a strong signal
+  //   directory: pages_jaunes / 411.ca with explicit name match
+  const directBest = scored.find(
+    (c) => c.score >= 3 && (c.source === "direct_entity" || c.source === "page"),
+  ) || null;
+  const mailingBest = scored
+    .filter((c) => c.source === "mailing" || c.source === "related")
+    .sort((a, b) => b.score - a.score)[0] || null;
+  const directoryBest = scored.find(
+    (c) => (c.source === "pages_jaunes" || c.source === "411") && c.nameMatch,
+  ) || null;
+  const bestCand = directBest || mailingBest || directoryBest || null;
 
   let bestPhone = null;
   let bestPhoneBelongsTo = null;
@@ -384,30 +399,44 @@ async function processSinglePackage(pkg, opts) {
   let status = "no_contact_found";
 
   if (bestCand) {
-    confidence = confidenceFromScore(bestCand.score);
     bestPhone = bestCand.raw;
     bestPhoneBelongsTo = bestCand.belongsTo || null;
-    phoneRelationship = bestCand.source;
 
-    // ready_to_call only when the phone came directly from a named entity
-    // (not just a mailing-address neighbour) and that entity name overlaps
-    // with the owner we searched for.
-    const isDirectOrPage = bestCand.source === "direct_entity" || bestCand.source === "page";
-    if (isDirectOrPage && bestCand.nameMatch) {
+    if (bestCand.source === "direct_entity" || bestCand.source === "page") {
+      if (bestCand.nameMatch) {
+        status = "ready_to_call";
+        confidence = confidenceFromScore(bestCand.score);
+        phoneRelationship = "direct_entity_match";
+      } else {
+        status = "needs_review";
+        confidence = "low";
+        phoneRelationship = bestCand.source;
+      }
+    } else if (bestCand.source === "mailing" || bestCand.source === "related") {
+      // Same mailing address is a strong match — no nameMatch required.
       status = "ready_to_call";
-    } else {
-      status = "needs_review";
+      const isREContext = hasRealEstateKeyword(bestCand.belongsTo || "");
+      confidence = isREContext ? "high" : "medium";
+      phoneRelationship = isREContext
+        ? "related_company_same_mailing_address"
+        : "same_mailing_address_contact";
+    } else if (bestCand.source === "pages_jaunes" || bestCand.source === "411") {
+      status = "ready_to_call";
+      confidence = "medium";
+      phoneRelationship = "directory_match";
     }
+
     evidence.push(
       `best_phone: ${bestPhone} from "${bestPhoneBelongsTo}" ` +
-      `(score=${bestCand.score}, nameMatch=${bestCand.nameMatch}, source=${bestCand.source})`
+      `(score=${bestCand.score}, nameMatch=${bestCand.nameMatch}, source=${bestCand.source}, ` +
+      `relationship=${phoneRelationship})`,
     );
   } else if (scored.length > 0) {
-    // Candidates exist but none met the medium-confidence bar.
+    // Direct/page candidates exist but none met the medium-confidence bar; no mailing match.
     status = "needs_review";
     confidence = "low";
     evidence.push(
-      `low_confidence_only: ${scored.length} candidate(s), best score=${scored[0].score} — bestPhone withheld`
+      `low_confidence_only: ${scored.length} candidate(s), best score=${scored[0].score} — bestPhone withheld`,
     );
   } else if (emailCands.length > 0) {
     status = "ready_to_email";
