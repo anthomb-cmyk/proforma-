@@ -400,4 +400,103 @@ describe("buildSearchPackagePreviewData — raw rôle rows", () => {
     expect(data.packageCount).toBeGreaterThan(0);
     expect(data.numberedCompanies).toBe(1);
   });
+
+  // ── Fan-out regression tests (added after observing that the previous
+  //    adapter collapsed co-owners at the same address into one package) ──
+
+  test("Propriétaire + Propriétaire 2 on one row fan out to two separate packages", () => {
+    // Each slot has a distinct mailing address so they must stay separate.
+    const rows = [
+      makeRoleRow({
+        "Propriétaire": "Gestion Fictive Inc.",
+        "Statut aux fins d'imposition scolaire": "Personne morale",
+        "Adresse postale": "100 rue A, Longueuil (Québec) J4K 1A1",
+        "Propriétaire 2": "Marie Fictive",
+        "Statut aux fins d'imposition scolaire 2": "Personne physique",
+        "Adresse postale 2": "200 rue B, Longueuil (Québec) J4L 2B2",
+        "Numéro de matricule": "73-101-001",
+      }),
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.packageCount).toBe(2);
+    // The company should be a searchable entity (medium or high lead value).
+    expect(data.leadValue.medium + data.leadValue.high).toBeGreaterThan(0);
+  });
+
+  test("same owner + same mailing on two rows combines into one package with two properties", () => {
+    const rows = [
+      makeRoleRow({
+        "Propriétaire": "René Fictif",
+        "Adresse postale": "55 Pionniers, Longueuil (Québec) J4M 2N3",
+        "Adresse Immeuble": "400 rue Elm",
+        "Numéro de matricule": "73-102-001",
+      }),
+      makeRoleRow({
+        "Propriétaire": "René Fictif",
+        "Adresse postale": "55 Pionniers, Longueuil (Québec) J4M 2N3",
+        "Adresse Immeuble": "500 rue Oak",
+        "Numéro de matricule": "73-102-002",
+      }),
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.packageCount).toBe(1);
+    expect(data.totalProperties).toBe(2);
+    expect(data.duplicateDifferentAddress).toBe(0);
+  });
+
+  test("same owner + different mailing on two rows stays separate and flags duplicate_different_address", () => {
+    const rows = [
+      makeRoleRow({
+        "Propriétaire": "Luc Fictif",
+        "Adresse postale": "10 rue X, Montréal (Québec) H1A 1A1",
+        "Numéro de matricule": "73-103-001",
+      }),
+      makeRoleRow({
+        "Propriétaire": "Luc Fictif",
+        "Adresse postale": "20 rue Y, Laval (Québec) H7A 2B2",
+        "Numéro de matricule": "73-103-002",
+      }),
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.packageCount).toBe(2);
+    expect(data.duplicateDifferentAddress).toBe(2);
+  });
+
+  test("FIDUCIE in Propriétaire 2 is classified as trust even when co-owner is an individual", () => {
+    const rows = [
+      makeRoleRow({
+        "Propriétaire": "Jean Fictif",
+        "Statut aux fins d'imposition scolaire": "Personne physique",
+        "Adresse postale": "100 rue A, Longueuil (Québec) J4K 1A1",
+        "Propriétaire 2": "FIDUCIE DE CAPITAL DU MONT",
+        "Statut aux fins d'imposition scolaire 2": "Personne morale",
+        "Adresse postale 2": "200 rue B, Longueuil (Québec) J4L 2B2",
+        "Numéro de matricule": "73-104-001",
+      }),
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.packageCount).toBe(2);
+    expect(data.trusts).toBe(1);
+    expect(data.trustsWithoutPhone.map((p) => p.lead_owner_name))
+      .toContain("FIDUCIE DE CAPITAL DU MONT");
+  });
+
+  test("INC company in Propriétaire 1 is classified as a searchable entity", () => {
+    const rows = [
+      makeRoleRow({
+        "Propriétaire": "YK REALTIES INC.",
+        "Statut aux fins d'imposition scolaire": "Personne morale",
+        "Adresse postale": "300 rue C, Longueuil (Québec) J4H 3C3",
+        "Numéro de matricule": "73-105-001",
+      }),
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.packageCount).toBe(1);
+    // Must be searchable (inc_ltee) with mailing address → medium or high lead value.
+    expect(data.leadValue.medium + data.leadValue.high).toBeGreaterThan(0);
+    // Appears in companiesWithMailingNoPhone since it has a mailing address but no phone.
+    expect(
+      data.companiesWithMailingNoPhone.map((p) => p.lead_owner_name),
+    ).toContain("YK REALTIES INC.");
+  });
 });
