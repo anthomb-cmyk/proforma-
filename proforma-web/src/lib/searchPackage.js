@@ -828,3 +828,132 @@ export function formatSearchPackageReport(packages, options = {}) {
   }
   return lines.join("\n");
 }
+
+// ─── Targeted audits ───────────────────────────────────────────────────────
+//
+// auditSearchPackages slices a SearchPackage[] into the focused buckets the
+// process-role-file dev CLI prints — top high-value packages without a phone,
+// numbered companies / trusts without a phone, companies with a mailing
+// address but no phone, and a list of suspicious classification/grouping
+// issues that warrant manual review.
+//
+// Pure / zero-network / no I/O — same as the rest of the module.
+
+function pkgHasAnyPhone(pkg) {
+  for (const p of pkg.existing_phones || []) {
+    if (normalizePhoneKey(p)) return true;
+  }
+  for (const c of pkg.candidatePhones || []) {
+    if (normalizePhoneKey(c?.phone)) return true;
+  }
+  return false;
+}
+
+function pkgHasOwnerFilePhone(pkg) {
+  for (const c of pkg.candidatePhones || []) {
+    if (c?.source !== "file") continue;
+    if (c?.relationship_to_lead_owner !== "owner") continue;
+    if (normalizePhoneKey(c?.phone)) return true;
+  }
+  return false;
+}
+
+export function auditSearchPackages(packages, options = {}) {
+  const list = Array.isArray(packages) ? packages : [];
+  const topN = Number.isFinite(options.topN) ? options.topN : 25;
+
+  const withoutPhone = list.filter((p) => !pkgHasAnyPhone(p));
+  const withPhone = list.filter((p) => pkgHasAnyPhone(p));
+
+  const topHighValueNoPhone = withoutPhone
+    .filter((p) => p.lead_value_priority === "high")
+    // Sort by property count then unit count so the largest portfolios float up.
+    .sort((a, b) => {
+      const ap = (a.associated_properties || []).length;
+      const bp = (b.associated_properties || []).length;
+      if (bp !== ap) return bp - ap;
+      const au = (a.associated_properties || []).reduce((s, x) => s + (Number(x?.units) || 0), 0);
+      const bu = (b.associated_properties || []).reduce((s, x) => s + (Number(x?.units) || 0), 0);
+      return bu - au;
+    })
+    .slice(0, topN);
+
+  const numberedNoPhone = withoutPhone.filter((p) => p.legal_entity_category === "numbered_company");
+  const trustsNoPhone = withoutPhone.filter((p) => p.legal_entity_category === "trust");
+  const companiesWithMailingNoPhone = withoutPhone.filter(
+    (p) => p.is_searchable_entity && (p.mailing_address || p.mailing_postal_code),
+  );
+
+  // ─ Suspicious / classification issues ─
+  const suspicious = [];
+
+  // Building-phone leak: package has file phones but ALL of them are
+  // building-relationship — the search-strategy might use_file_phone even
+  // though we don't actually have an owner-direct line.
+  for (const p of list) {
+    const fileCands = (p.candidatePhones || []).filter((c) => c?.source === "file");
+    if (!fileCands.length) continue;
+    const ownerFile = fileCands.filter((c) => c.relationship_to_lead_owner === "owner");
+    if (ownerFile.length === 0) {
+      suspicious.push({
+        kind: "building_phone_only",
+        package: p,
+        detail: `only building-relationship file phones (${fileCands.length}); no owner-direct file phone`,
+      });
+    }
+  }
+
+  // Possible owner duplicates split by name/address variations: same
+  // normalized owner name appearing in more than one package.
+  const byNormName = new Map();
+  for (const p of list) {
+    const key = (p.normalized_owner_name || "").trim();
+    if (!key) continue;
+    if (!byNormName.has(key)) byNormName.set(key, []);
+    byNormName.get(key).push(p);
+  }
+  for (const [name, group] of byNormName) {
+    if (group.length < 2) continue;
+    suspicious.push({
+      kind: "dup_split_by_name",
+      package: group[0],
+      detail: `${group.length} packages share normalized name "${name}" — possible owner accidentally split across mailing variants`,
+      otherPackages: group.slice(1),
+    });
+  }
+
+  // Numbered company with no mailing address — fully unsearchable.
+  for (const p of list) {
+    if (p.legal_entity_category !== "numbered_company") continue;
+    if (p.mailing_address || p.mailing_postal_code) continue;
+    suspicious.push({
+      kind: "numbered_company_no_mailing",
+      package: p,
+      detail: "numbered company with no mailing address — needs manual review",
+    });
+  }
+
+  // Individual flagged high-value — usually intentional (portfolio individual)
+  // but worth surfacing so the user can sanity-check.
+  for (const p of list) {
+    if (p.legal_entity_category !== "individual") continue;
+    if (p.lead_value_priority !== "high") continue;
+    suspicious.push({
+      kind: "individual_high_value",
+      package: p,
+      detail: `individual marked high-value due to portfolio size (${(p.associated_properties || []).length} properties)`,
+    });
+  }
+
+  return {
+    total: list.length,
+    with_phone: withPhone.length,
+    without_phone: withoutPhone.length,
+    with_owner_file_phone: list.filter(pkgHasOwnerFilePhone).length,
+    top_high_value_without_phone: topHighValueNoPhone,
+    numbered_companies_without_phone: numberedNoPhone,
+    trusts_without_phone: trustsNoPhone,
+    companies_with_mailing_no_phone: companiesWithMailingNoPhone,
+    suspicious,
+  };
+}

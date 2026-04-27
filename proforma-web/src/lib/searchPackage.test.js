@@ -11,6 +11,7 @@ import {
   aggregateSearchPackageStats,
   formatSearchPackageRow,
   formatSearchPackageReport,
+  auditSearchPackages,
 } from "./searchPackage.js";
 import {
   makePhoneCandidate,
@@ -719,5 +720,168 @@ describe("empty / edge cases", () => {
     expect(pkg.warnings).toEqual(expect.arrayContaining(["missing_owner_name", "missing_mailing_address"]));
     expect(pkg.search_priority).toBe("skip");
     expect(pkg.search_strategy).toBe("skip_low_value");
+  });
+});
+
+describe("auditSearchPackages — targeted dev-CLI buckets", () => {
+  function fixture() {
+    const fileOwnerCand = makePhoneCandidate({
+      phone: "514-777-1234", source: "file", source_column: "Téléphone Propriétaire",
+      relationship_to_lead_owner: "owner",
+    });
+    const fileBuildingCand = makePhoneCandidate({
+      phone: "438-823-9876", source: "file", source_column: "Téléphone Immeuble",
+      relationship_to_lead_owner: "building",
+    });
+    return [
+      // ABC Immobilier — high value, has owner file phone (no enrichment needed).
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        phones: ["(514) 777-1234"], candidatePhones: [fileOwnerCand],
+        buildings: [{ id: "b1", address: "100 Elm" }, { id: "b2", address: "200 Oak" }],
+      }),
+      // Numbered company w/ mailing, no phone.
+      mkOwner({
+        displayName: "9338-8387 QUEBEC INC.",
+        postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
+        buildings: [{ id: "b3", address: "300 Pine" }],
+      }),
+      // Numbered company without mailing → suspicious.
+      mkOwner({
+        displayName: "1111-2222 CANADA INC.",
+        postalAddress: { street: "", city: "", province: "", postalCode: "" },
+        buildings: [{ id: "b3a", address: "350 Maple" }],
+      }),
+      // Trust w/ mailing, no phone.
+      mkOwner({
+        displayName: "Fiducie Famille Tremblay",
+        postalAddress: { street: "1500 Fiducie", city: "Montréal", province: "QC", postalCode: "H2Z 1M1" },
+        buildings: [{ id: "b4", address: "400 Birch" }, { id: "b5", address: "500 Cedar" }],
+      }),
+      // Generic company w/ mailing, no phone.
+      mkOwner({
+        displayName: "Acme Holdings Ltd.",
+        postalAddress: { street: "10 Wellington", city: "Toronto", province: "ON", postalCode: "M5K 1A1" },
+        buildings: [{ id: "b6", address: "600 Maple" }],
+      }),
+      // Individual w/ portfolio → high lead_value, no phone.
+      mkOwner({
+        displayName: "Jean Tremblay",
+        contactNames: ["Jean Tremblay"],
+        postalAddress: { street: "55 Pionniers", city: "Longueuil", province: "QC", postalCode: "J4M 2N3" },
+        buildings: [
+          { id: "b7", address: "700 Spruce" },
+          { id: "b8", address: "701 Spruce" },
+          { id: "b9", address: "702 Spruce" },
+        ],
+      }),
+      // Building-phone-only leak — owner phone column empty, building phone present.
+      mkOwner({
+        displayName: "Acme Realty Holdings Ltd.",
+        candidatePhones: [fileBuildingCand],
+        phones: ["(438) 823-9876"], // simulates roleImport's flatten behavior
+        postalAddress: { street: "10 Wellington", city: "Toronto", province: "ON", postalCode: "M5K 1A2" },
+        buildings: [{ id: "b10", address: "800 Taschereau" }],
+      }),
+    ];
+  }
+
+  test("counts with_phone / without_phone / with_owner_file_phone", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.total).toBe(7);
+    // With phone: ABC + Acme Realty (building leak counts as "has any phone").
+    expect(audit.with_phone).toBe(2);
+    expect(audit.without_phone).toBe(5);
+    // Owner-direct file phone: only ABC.
+    expect(audit.with_owner_file_phone).toBe(1);
+  });
+
+  test("top_high_value_without_phone is sorted by portfolio size", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const audit = auditSearchPackages(pkgs);
+    const top = audit.top_high_value_without_phone;
+    expect(top.length).toBeGreaterThan(0);
+    // Highest-portfolio package (Jean Tremblay w/ 3 properties) should rank ahead
+    // of single-property entries.
+    expect(top[0].lead_owner_name).toBe("Jean Tremblay");
+    // None should have a phone.
+    for (const p of top) {
+      expect(p.existing_phones || []).toEqual([]);
+    }
+    // All flagged high value.
+    for (const p of top) expect(p.lead_value_priority).toBe("high");
+  });
+
+  test("numbered_companies_without_phone + trusts_without_phone", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const audit = auditSearchPackages(pkgs);
+    expect(audit.numbered_companies_without_phone.map((p) => p.lead_owner_name).sort()).toEqual([
+      "1111-2222 CANADA INC.",
+      "9338-8387 QUEBEC INC.",
+    ]);
+    expect(audit.trusts_without_phone.map((p) => p.lead_owner_name)).toEqual([
+      "Fiducie Famille Tremblay",
+    ]);
+  });
+
+  test("companies_with_mailing_no_phone excludes individuals + unknown + no-mailing", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const audit = auditSearchPackages(pkgs);
+    const names = audit.companies_with_mailing_no_phone.map((p) => p.lead_owner_name).sort();
+    expect(names).toEqual([
+      "9338-8387 QUEBEC INC.",
+      "Acme Holdings Ltd.",
+      "Fiducie Famille Tremblay",
+    ]);
+    // 1111-2222 has no mailing → excluded.
+    expect(names).not.toContain("1111-2222 CANADA INC.");
+  });
+
+  test("suspicious flags building_phone_only + numbered_company_no_mailing + individual_high_value", () => {
+    const pkgs = buildSearchPackages(fixture());
+    const audit = auditSearchPackages(pkgs);
+    const kinds = audit.suspicious.map((s) => s.kind);
+    expect(kinds).toEqual(expect.arrayContaining([
+      "building_phone_only",
+      "numbered_company_no_mailing",
+      "individual_high_value",
+    ]));
+    // Building leak picks the right package.
+    const leak = audit.suspicious.find((s) => s.kind === "building_phone_only");
+    expect(leak.package.lead_owner_name).toBe("Acme Realty Holdings Ltd.");
+    // Numbered without mailing picks the right one.
+    const noMail = audit.suspicious.find((s) => s.kind === "numbered_company_no_mailing");
+    expect(noMail.package.lead_owner_name).toBe("1111-2222 CANADA INC.");
+  });
+
+  test("dup_split_by_name fires when same normalized name appears twice", () => {
+    const pkgs = buildSearchPackages([
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        postalAddress: { street: "217 St-Jacques", city: "Montréal", province: "QC", postalCode: "H2Y 1M6" },
+      }),
+      mkOwner({
+        displayName: "ABC Immobilier Inc.",
+        // Different mailing → different ownerKey grouping → split.
+        postalAddress: { street: "999 Other", city: "Laval", province: "QC", postalCode: "H7A 1A1" },
+      }),
+    ]);
+    const audit = auditSearchPackages(pkgs);
+    const dups = audit.suspicious.filter((s) => s.kind === "dup_split_by_name");
+    expect(dups).toHaveLength(1);
+    expect(dups[0].detail).toContain("2 packages");
+  });
+
+  test("empty input → all zeros", () => {
+    const audit = auditSearchPackages([]);
+    expect(audit).toEqual({
+      total: 0, with_phone: 0, without_phone: 0, with_owner_file_phone: 0,
+      top_high_value_without_phone: [],
+      numbered_companies_without_phone: [],
+      trusts_without_phone: [],
+      companies_with_mailing_no_phone: [],
+      suspicious: [],
+    });
   });
 });
