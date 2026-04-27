@@ -1504,6 +1504,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         <SearchPackagePreview
           rows={searchPackagePreviewRows}
           onClose={() => setSearchPackagePreviewRows(null)}
+          onExportToLeads={typeof onExportFoundToLeads === "function" ? onExportFoundToLeads : undefined}
         />
       )}
 

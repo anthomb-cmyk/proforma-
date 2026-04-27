@@ -329,13 +329,14 @@ test("exact company name in search result produces high confidence ready_to_call
 });
 
 /* ------------------------------------------------------------------ *
- *  15. Fiducie + related real-estate company at same address → needs_review, not ready_to_call
+ *  15. Fiducie + related real-estate company at same address → ready_to_call
+ *      (same-address is a strong signal; no nameMatch required)
  * ------------------------------------------------------------------ */
 
-test("fiducie with related RE company phone stays needs_review, not ready_to_call", async () => {
-  // The mailing query returns a real-estate company co-located with the fiducie.
-  // Score for a mailing-sourced phone (even with nameMatch) is max 2 (low) per
-  // single occurrence, so it must NOT become bestPhone and MUST NOT be ready_to_call.
+test("fiducie with related RE company at same mailing address → ready_to_call", async () => {
+  // A real-estate company co-located with the fiducie is found via the mailing query.
+  // Under the revised rules, same-address contact always produces ready_to_call;
+  // an RE keyword in the entity name classifies it as related_company_same_mailing_address.
   const snippet = `Immobilier Dupont Inc. — ${PHONE_555}`;
   const pkg = makePkg({
     lead_owner_name: "FIDUCIE DUPONT",
@@ -345,17 +346,95 @@ test("fiducie with related RE company phone stays needs_review, not ready_to_cal
   });
   const results = await runContactEnrichmentPreview({
     packages: [pkg],
-    // First call: mailing query → returns RE company
-    // Second call: related company search → returns same phone again
     searchFn: okSearch([
       { title: "Immobilier Dupont Inc.", snippet, url: "https://immodupont.ca" },
     ]),
   });
   assert.equal(results.length, 1);
   const r = results[0];
-  assert.notEqual(r.status, "ready_to_call", "fiducie related-company phone must not be ready_to_call");
-  // Candidate may or may not have been found, but if bestPhone is set it must be needs_review
-  if (r.bestPhone !== null) {
-    assert.equal(r.status, "needs_review");
-  }
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.phoneRelationship, "related_company_same_mailing_address");
+  assert.equal(r.bestPhone, PHONE_555);
+});
+
+/* ------------------------------------------------------------------ *
+ *  16. Direct entity result without name match → needs_review, not ready_to_call
+ * ------------------------------------------------------------------ */
+
+test("direct-entity result without name overlap produces needs_review", async () => {
+  // The search returns a result with a phone but the title does not overlap
+  // with the owner name — direct track requires nameMatch for ready_to_call.
+  // bestPhone is still set (score ≥ 3) but status is needs_review, not ready_to_call.
+  const snippet = `Appelez-nous au ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "Gestion Tremblay Inc.",
+    legal_entity_category: "gestion",
+    search_strategy: "direct_entity",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([
+      { title: "Service Unrelated XYZ", snippet, url: "https://unrelated.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  // Score = 3*1*1 = 3 (source=direct_entity, 1 occurrence, no nameBonus)
+  // → directBest is found, nameMatch=false → needs_review with phone set for human review
+  assert.equal(r.status, "needs_review");
+  assert.notEqual(r.status, "ready_to_call");
+  assert.equal(r.bestPhone, PHONE_555, "phone is set but flagged for human review");
+});
+
+/* ------------------------------------------------------------------ *
+ *  17. Mailing-address contact without RE keyword → same_mailing_address_contact
+ * ------------------------------------------------------------------ */
+
+test("mailing-address contact without RE keyword → same_mailing_address_contact, medium confidence", async () => {
+  // A generic business (not RE-related) appears at the mailing address.
+  // Should still be ready_to_call with same_mailing_address_contact relationship.
+  const snippet = `Boulangerie Fictive — ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "GESTION FICTIVE INC.",
+    legal_entity_category: "gestion",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: ["123 rue Fictive, Montréal, QC"],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([
+      { title: "Boulangerie Fictive", snippet, url: "https://boulangeriefictive.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.phoneRelationship, "same_mailing_address_contact");
+  assert.equal(r.confidence, "medium");
+  assert.equal(r.bestPhone, PHONE_555);
+});
+
+/* ------------------------------------------------------------------ *
+ *  18. Direct entity name match → direct_entity_match relationship
+ * ------------------------------------------------------------------ */
+
+test("direct entity name match produces direct_entity_match relationship", async () => {
+  const snippet = `Placement Lafleur Inc. — ${PHONE_555}`;
+  const pkg = makePkg({
+    lead_owner_name: "Placement Lafleur Inc.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "direct_entity",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([
+      { title: "Placement Lafleur Inc.", snippet, url: "https://lafleur.ca" },
+    ]),
+  });
+  assert.equal(results.length, 1);
+  const r = results[0];
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.phoneRelationship, "direct_entity_match");
 });
