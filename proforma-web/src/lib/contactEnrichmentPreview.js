@@ -25,18 +25,25 @@ export function isContactEnrichmentDebugEnabled() {
 /**
  * POST the given search packages to the backend enrichment preview endpoint.
  *
+ * Pass `options.signal` (an AbortSignal) to make the request cancellable —
+ * when aborted the returned object has `cancelled: true` so the caller can
+ * distinguish a user cancel from a network/server error.
+ *
  * @param {object[]} packages  Raw search-package objects (from buildSearchPackagePreviewData).
  * @param {object}  [options]
  * @param {number}  [options.limit=5]  How many packages to process (max 100).
- * @returns {Promise<{ ok: boolean, results?: object[], error?: string }>}
+ * @param {AbortSignal} [options.signal]  Abort signal to cancel the in-flight request.
+ * @returns {Promise<{ ok: boolean, results?: object[], error?: string, cancelled?: boolean }>}
  */
 export async function runContactEnrichmentPreview(packages, options = {}) {
   const limit = Number.isFinite(options.limit) ? options.limit : 5;
+  const signal = options.signal;
   try {
     const resp = await fetch("/api/contact-enrichment/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ packages, limit }),
+      signal,
     });
     const json = await resp.json();
     if (!resp.ok) {
@@ -44,6 +51,11 @@ export async function runContactEnrichmentPreview(packages, options = {}) {
     }
     return json;
   } catch (err) {
+    // AbortController-driven cancel surfaces as DOMException name "AbortError"
+    // (browser fetch) or err.name === "AbortError" in jsdom. Treat as cancel.
+    if (err && (err.name === "AbortError" || signal?.aborted)) {
+      return { ok: false, cancelled: true, error: "Cancelled" };
+    }
     return { ok: false, error: String(err?.message || err) };
   }
 }
