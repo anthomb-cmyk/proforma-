@@ -19,16 +19,16 @@ function resetStorage() {
 describe("searchBudget", () => {
   beforeEach(resetStorage);
 
-  test("getBudgetState defaults to { used: 0, cap: 200, exhausted: false }", () => {
+  test("getBudgetState defaults to { used: 0, cap: 500, exhausted: false }", () => {
     const state = getBudgetState();
     expect(state.used).toBe(0);
-    expect(state.cap).toBe(200);
-    expect(state.remaining).toBe(200);
+    expect(state.cap).toBe(500);
+    expect(state.remaining).toBe(500);
     expect(state.exhausted).toBe(false);
   });
 
-  test("defaultCap returns 200", () => {
-    expect(defaultCap()).toBe(200);
+  test("defaultCap returns 500", () => {
+    expect(defaultCap()).toBe(500);
   });
 
   test("incrementUsed increments used and recomputes exhausted", () => {
@@ -38,7 +38,7 @@ describe("searchBudget", () => {
 
     state = incrementUsed(5);
     expect(state.used).toBe(6);
-    expect(state.remaining).toBe(194);
+    expect(state.remaining).toBe(494);
 
     // Verify persistence across getBudgetState call
     const loaded = getBudgetState();
@@ -58,11 +58,11 @@ describe("searchBudget", () => {
     expect(state.used).toBe(0);
   });
 
-  test("cap defaults to 200; once 200 calls used, exhausted=true", () => {
-    // Use incrementUsed(200) to reach the cap in one call
-    const state = incrementUsed(200);
-    expect(state.used).toBe(200);
-    expect(state.cap).toBe(200);
+  test("cap defaults to 500; once 500 calls used, exhausted=true", () => {
+    // Use incrementUsed(500) to reach the cap in one call
+    const state = incrementUsed(500);
+    expect(state.used).toBe(500);
+    expect(state.cap).toBe(500);
     expect(state.exhausted).toBe(true);
     expect(state.remaining).toBe(0);
 
