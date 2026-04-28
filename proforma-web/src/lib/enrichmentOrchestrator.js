@@ -14,12 +14,27 @@
  * @returns {Promise<{ ok: boolean, result?: object, error?: string, cancelled?: boolean }>}
  */
 export async function postEnrichmentSingle(pkg, signal) {
+  // Compose the caller-provided signal with a 90-second internal timeout so a
+  // hung server call cannot block a worker slot indefinitely.
+  let composed;
+  const timeout = AbortSignal.timeout(90_000);
+  if (typeof AbortSignal.any === "function") {
+    composed = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  } else {
+    // Polyfill for environments that lack AbortSignal.any (Safari < 17.4).
+    const controller = new AbortController();
+    const done = () => controller.abort();
+    timeout.addEventListener("abort", done, { once: true });
+    if (signal) signal.addEventListener("abort", done, { once: true });
+    composed = controller.signal;
+  }
+
   try {
     const resp = await fetch("/api/contact-enrichment/single", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ package: pkg }),
-      signal,
+      signal: composed,
     });
     const json = await resp.json();
     if (!resp.ok) {
@@ -27,8 +42,13 @@ export async function postEnrichmentSingle(pkg, signal) {
     }
     return json;
   } catch (err) {
-    if (err && (err.name === "AbortError" || signal?.aborted)) {
-      return { ok: false, cancelled: true, error: "Cancelled" };
+    if (err && err.name === "AbortError") {
+      // Distinguish user-cancel from timeout abort.
+      if (signal?.aborted) {
+        return { ok: false, cancelled: true, error: "Cancelled" };
+      }
+      // Timeout fired (or composed abort without user signal).
+      return { ok: false, error: "Request timed out (90s)" };
     }
     return { ok: false, error: String(err?.message || err) };
   }
@@ -100,16 +120,18 @@ export async function runEnrichmentOrchestrator({
       try {
         const res = await callSingle(pkg, signal);
 
-        if (signal?.aborted || res?.cancelled) {
+        if (signal?.aborted) {
           cancelled = true;
-          // Record the cancellation but keep going so other in-flight workers
-          // can finish their current item — they will see signal.aborted on
-          // their next iteration and drain.
           errors.set(packageKey, "Cancelled");
           notify(packageKey, "error", { error: "Cancelled" });
-          // Clear queue to stop new dispatches
           queue.length = 0;
           return;
+        }
+        if (res?.cancelled) {
+          // Per-call abort (e.g., timeout) — record error and continue the queue.
+          errors.set(packageKey, res.error || "Cancelled");
+          notify(packageKey, "error", { error: res.error || "Cancelled" });
+          continue;
         }
 
         if (res?.ok) {
