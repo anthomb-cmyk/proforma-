@@ -259,6 +259,8 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   const [perPkgMode, setPerPkgMode] = useState(true);
   // Concurrency for the orchestrator (1–5, default 1 recommended for free Brave tier)
   const [concurrency, setConcurrency] = useState(1);
+  // Phase 4: Google Places fallback for no_contact_found packages (default OFF — costs ~$0.05/call)
+  const [placesFallback, setPlacesFallback] = useState(false);
   // Dedup toast shown once per session
   const [dedupToast, setDedupToast] = useState(/** @type {string|null} */ null);
   // Per-package progress tracking: how many of the representatives completed
@@ -448,7 +450,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     const res = await runEnrichmentOrchestrator({
       packages: representatives,
       concurrency,
-      callSingle: postEnrichmentSingle,
+      callSingle: (pkg, signal) => postEnrichmentSingle(pkg, signal, { placesFallbackEnabled: placesFallback }),
       signal: controller?.signal,
       onProgress: ({ packageKey, phase, result, error }) => {
         if (phase === "done" && result) {
@@ -944,6 +946,20 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                     disabled={enrichState === "loading"}
                   />
                   Per-package mode
+                </label>
+                {/* Phase 4: Google Places fallback toggle */}
+                <label style={{ fontSize: 11, color: "var(--text3)", display: "inline-flex", alignItems: "center", gap: 4 }}
+                  title="Costs ~$0.05 per no_contact_found package — only triggered when Brave finds nothing">
+                  <input
+                    type="checkbox"
+                    checked={placesFallback}
+                    onChange={(e) => setPlacesFallback(e.target.checked)}
+                    disabled={enrichState === "loading"}
+                  />
+                  Use Google Places as fallback
+                  <span style={{ fontSize: 10, color: "var(--text3)", fontStyle: "italic" }}>
+                    (~$0.05/miss)
+                  </span>
                 </label>
                 {perPkgMode ? (
                   <label style={{ fontSize: 11, color: "var(--text3)" }}>

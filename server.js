@@ -5075,8 +5075,12 @@ app.use("/api/listings", createListingsRouter({
 }));
 
 // Dev-only: contact-enrichment preview (web-search-backed, no CRM write).
+// Phase 4: also pass googlePlacesApiKey so the route can build a Places client
+// when the caller opts in (placesFallbackEnabled). The same env var powers the
+// old /api/phone-lookup flow — the two paths use independent clients.
 app.use("/api/contact-enrichment", createContactEnrichmentRouter({
   createSearchFn: () => createWebSearchProvider(),
+  googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY,
   fetchPageFn: async (url) => {
     try {
       const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; ProformaBot/1.0)" }, signal: AbortSignal.timeout(8000) });
