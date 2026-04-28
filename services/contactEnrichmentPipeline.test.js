@@ -151,14 +151,14 @@ test("limit=2 processes only the first 2 packages", async () => {
  *  7. Max limit is capped at 10
  * ------------------------------------------------------------------ */
 
-test("limit above 10 is capped at 10", async () => {
-  const pkgs = Array.from({ length: 15 }, () => makePkg());
+test("limit above 100 is capped at 100", async () => {
+  const pkgs = Array.from({ length: 120 }, () => makePkg());
   const results = await runContactEnrichmentPreview({
     packages: pkgs,
-    limit: 15,
+    limit: 120,
     searchFn: okSearch([]),
   });
-  assert.equal(results.length, 10);
+  assert.equal(results.length, 100);
 });
 
 /* ------------------------------------------------------------------ *

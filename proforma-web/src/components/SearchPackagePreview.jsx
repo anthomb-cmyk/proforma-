@@ -167,6 +167,15 @@ function EnrichResultsTable({ results }) {
   );
 }
 
+// Stable key for deduplicating enriched packages across batches.
+function makePackageKey(pkg) {
+  return [
+    String(pkg?.lead_owner_name || "").toLowerCase().trim(),
+    String(pkg?.mailing_address || "").toLowerCase().trim(),
+    String(pkg?.mailing_city || "").toLowerCase().trim(),
+  ].join("|");
+}
+
 // Transform a single enrichment result into a candidatePhones entry for leads.
 function enrichResultToCandidatePhone(r) {
   return {
@@ -180,6 +189,8 @@ function enrichResultToCandidatePhone(r) {
   };
 }
 
+const BATCH_SIZES = [5, 10, 25, 50, 100];
+
 export default function SearchPackagePreview({ rows, onClose, onExportToLeads, topN = 25 }) {
   const data = useMemo(
     () => buildSearchPackagePreviewData(rows, { topN }),
@@ -188,45 +199,95 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
 
   const enrichEnabled = useMemo(() => isContactEnrichmentDebugEnabled(), []);
 
+  // Batch size selector (5 / 10 / 25 / 50 / 100)
+  const [batchSize, setBatchSize] = useState(5);
+
+  // Run state for the active network call
   const [enrichState, setEnrichState] = useState(
     /** @type {"idle"|"loading"|"done"|"error"} */ "idle"
   );
-  const [enrichResults, setEnrichResults] = useState(/** @type {object[]|null} */ null);
   const [enrichError, setEnrichError] = useState(/** @type {string|null} */ null);
 
+  // Session-level tracking — survives across multiple batches
+  const [enrichedKeys, setEnrichedKeys] = useState(() => new Set());
+  const [allEnrichedResults, setAllEnrichedResults] = useState(() => new Map());
+  const [exportedKeys, setExportedKeys] = useState(() => new Set());
+
+  // Most-recent batch tracking (for table display + re-run)
+  const [currentBatch, setCurrentBatch] = useState(/** @type {object[]|null} */ null);
+  const [currentBatchRange, setCurrentBatchRange] = useState(
+    /** @type {{start:number,end:number}|null} */ null
+  );
+  const [currentBatchResults, setCurrentBatchResults] = useState(/** @type {object[]|null} */ null);
+
+  // Export state
   const [exportState, setExportState] = useState(
     /** @type {"idle"|"loading"|"done"|"error"} */ "idle"
   );
   const [exportSummary, setExportSummary] = useState(/** @type {object|null} */ null);
 
-  const handleEnrich = useCallback(async () => {
-    const pkgs = data.topHighValueWithoutPhonePackages;
-    if (!pkgs?.length) return;
+  const allPkgs = data.topHighValueWithoutPhonePackages || [];
+  const unenrichedPkgs = allPkgs.filter((p) => !enrichedKeys.has(makePackageKey(p)));
+  const nextBatchPkgs = unenrichedPkgs.slice(0, batchSize);
+  const hasAnyResults = allEnrichedResults.size > 0;
+
+  // Core batch runner — uses functional setState to avoid stale closures.
+  const runBatch = useCallback(async (batch) => {
+    if (!batch?.length) return;
     setEnrichState("loading");
     setEnrichError(null);
-    setExportState("idle");
-    setExportSummary(null);
-    const res = await runContactEnrichmentPreview(pkgs, { limit: Math.min(pkgs.length, 5) });
+    setCurrentBatchResults(null);
+    const res = await runContactEnrichmentPreview(batch, { limit: batch.length });
     if (res.ok) {
-      setEnrichResults(res.results);
+      setAllEnrichedResults((prev) => {
+        const next = new Map(prev);
+        batch.forEach((pkg, i) => next.set(makePackageKey(pkg), res.results[i]));
+        return next;
+      });
+      setEnrichedKeys((prev) => {
+        const next = new Set(prev);
+        batch.forEach((pkg) => next.add(makePackageKey(pkg)));
+        return next;
+      });
+      setCurrentBatchResults(res.results);
       setEnrichState("done");
     } else {
       setEnrichError(res.error || "Unknown error");
       setEnrichState("error");
     }
-  }, [data.topHighValueWithoutPhonePackages]);
+  }, []);
+
+  const handleEnrichNext = useCallback(() => {
+    if (!nextBatchPkgs.length) return;
+    // Count how many allPkgs are already enriched to compute the 1-based range.
+    const doneCount = allPkgs.filter((p) => enrichedKeys.has(makePackageKey(p))).length;
+    setCurrentBatch(nextBatchPkgs);
+    setCurrentBatchRange({ start: doneCount + 1, end: doneCount + nextBatchPkgs.length });
+    runBatch(nextBatchPkgs);
+  }, [nextBatchPkgs, allPkgs, enrichedKeys, runBatch]);
+
+  const handleRerunBatch = useCallback(() => {
+    if (!currentBatch?.length) return;
+    runBatch(currentBatch);
+  }, [currentBatch, runBatch]);
 
   const handleExportToLeads = useCallback(async () => {
-    if (!enrichResults?.length || typeof onExportToLeads !== "function") return;
+    if (!allEnrichedResults.size || typeof onExportToLeads !== "function") return;
     setExportState("loading");
 
-    const readyRows = enrichResults.filter((r) => r.status === "ready_to_call");
-    const skippedReview = enrichResults.filter((r) => r.status === "needs_review").length;
-    const skippedNoContact = enrichResults.filter(
+    const readyUnexported = [...allEnrichedResults.entries()].filter(
+      ([key, r]) => r.status === "ready_to_call" && !exportedKeys.has(key),
+    );
+    const allValues = [...allEnrichedResults.values()];
+    const skippedReview = allValues.filter((r) => r.status === "needs_review").length;
+    const skippedNoContact = allValues.filter(
       (r) => r.status === "no_contact_found" || r.status === "skipped_existing_phone",
     ).length;
+    const skippedAlreadyExported = [...allEnrichedResults.entries()].filter(
+      ([key, r]) => r.status === "ready_to_call" && exportedKeys.has(key),
+    ).length;
 
-    const exportRows = readyRows.map((r) => ({
+    const exportRows = readyUnexported.map(([, r]) => ({
       companyName: r.lead_owner_name || "",
       mailing_address: r.mailing_address || "",
       mailing_city: r.mailing_city || "",
@@ -240,18 +301,24 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
 
     try {
       const result = await Promise.resolve(onExportToLeads(exportRows, { ownerGrouped: false }));
+      setExportedKeys((prev) => {
+        const next = new Set(prev);
+        readyUnexported.forEach(([key]) => next.add(key));
+        return next;
+      });
       setExportSummary({
-        exported: readyRows.length,
-        updated: result?.count ?? readyRows.length,
+        exported: readyUnexported.length,
+        updated: result?.count ?? readyUnexported.length,
         skippedReview,
         skippedNoContact,
+        skippedAlreadyExported,
       });
       setExportState("done");
     } catch (err) {
       setExportState("error");
       setExportSummary({ error: String(err?.message || err) });
     }
-  }, [enrichResults, onExportToLeads]);
+  }, [allEnrichedResults, exportedKeys, onExportToLeads]);
 
   return (
     <div className="mo" onClick={onClose}>
@@ -368,8 +435,10 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
         </div>
 
         {/* ── Contact-enrichment preview (pf_websearch_debug flag) ─────────── */}
-        {enrichEnabled && data.topHighValueWithoutPhonePackages?.length > 0 && (
+        {enrichEnabled && allPkgs.length > 0 && (
           <div style={{ ...card, padding: "12px 14px", marginTop: 12 }}>
+
+            {/* Header row: title + batch size selector */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
                 Contact enrichment
@@ -377,21 +446,67 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                   dev only · web search
                 </span>
               </div>
-              {enrichState !== "loading" && (
-                <button
-                  className="btn btn-sm"
-                  onClick={handleEnrich}
-                  disabled={enrichState === "loading"}
-                >
-                  {enrichState === "idle"
-                    ? `Test enrichment on top ${Math.min(data.topHighValueWithoutPhonePackages.length, 5)} search-priority targets`
-                    : "Re-run enrichment"}
-                </button>
-              )}
-              {enrichState === "loading" && (
-                <span style={{ fontSize: 11, color: "var(--text3)" }}>Running…</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 11, color: "var(--text3)" }}>
+                  Batch:&nbsp;
+                  <select
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(Number(e.target.value))}
+                    disabled={enrichState === "loading"}
+                    style={{ fontSize: 11, padding: "1px 4px" }}
+                  >
+                    {BATCH_SIZES.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {/* Session progress bar */}
+            <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 8, display: "flex", gap: 14, flexWrap: "wrap" }}>
+              <span>
+                <strong style={{ color: enrichedKeys.size > 0 ? "var(--text)" : "var(--text3)" }}>
+                  {enrichedKeys.size}
+                </strong>{" "}enriched this session
+              </span>
+              <span>
+                <strong style={{ color: "var(--text)" }}>{unenrichedPkgs.length}</strong>{" "}remaining
+              </span>
+              <span>next batch: <strong>{Math.min(nextBatchPkgs.length, batchSize)}</strong></span>
+              {currentBatchRange && (
+                <span style={{ color: "var(--accent)" }}>
+                  current: {currentBatchRange.start}–{currentBatchRange.end}
+                </span>
               )}
             </div>
+
+            {/* Action buttons */}
+            {enrichState !== "loading" && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <button
+                  className="btn btn-sm"
+                  onClick={handleEnrichNext}
+                  disabled={!nextBatchPkgs.length}
+                >
+                  {hasAnyResults
+                    ? `Enrich next ${nextBatchPkgs.length} target${nextBatchPkgs.length !== 1 ? "s" : ""}`
+                    : `Enrich first ${nextBatchPkgs.length} target${nextBatchPkgs.length !== 1 ? "s" : ""}`}
+                </button>
+                {hasAnyResults && currentBatch?.length > 0 && (
+                  <button
+                    className="btn btn-sm"
+                    style={{ color: "var(--text3)" }}
+                    onClick={handleRerunBatch}
+                  >
+                    Re-run current batch ({currentBatch.length})
+                  </button>
+                )}
+              </div>
+            )}
+            {enrichState === "loading" && (
+              <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 8 }}>Running…</div>
+            )}
 
             {enrichState === "error" && (
               <div style={{ fontSize: 12, color: "#B91C1C", marginBottom: 8 }}>
@@ -399,54 +514,66 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               </div>
             )}
 
-            {enrichState === "done" && enrichResults && (
-              enrichResults.length === 0 ? (
-                <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results)</div>
-              ) : (
-                <>
-                  <EnrichResultsTable results={enrichResults} />
-
-                  {/* Export to Leads — only when callback is wired */}
-                  {typeof onExportToLeads === "function" && exportState !== "done" && (
-                    <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
-                      <button
-                        className="btn btn-sm btn-gold"
-                        onClick={handleExportToLeads}
-                        disabled={exportState === "loading"}
-                      >
-                        {exportState === "loading"
-                          ? "Exporting…"
-                          : `Export ${enrichResults.filter((r) => r.status === "ready_to_call").length} ready contacts to Leads`}
-                      </button>
-                      {enrichResults.filter((r) => r.status === "needs_review").length > 0 && (
-                        <span style={{ fontSize: 11, color: "var(--text3)" }}>
-                          {enrichResults.filter((r) => r.status === "needs_review").length} needs_review skipped
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {exportState === "done" && exportSummary && (
-                    <div style={{ marginTop: 10, fontSize: 12, padding: "6px 10px", background: "#DCFCE7", borderRadius: 6, color: "#166534" }}>
-                      Exported {exportSummary.exported} contacts to Leads
-                      {exportSummary.skippedReview > 0 && ` · ${exportSummary.skippedReview} needs_review skipped`}
-                      {exportSummary.skippedNoContact > 0 && ` · ${exportSummary.skippedNoContact} no-contact skipped`}
-                    </div>
-                  )}
-
-                  {exportState === "error" && exportSummary?.error && (
-                    <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>
-                      Export error: {exportSummary.error}
-                    </div>
-                  )}
-                </>
-              )
+            {/* Current batch results table */}
+            {enrichState === "done" && currentBatchResults && (
+              currentBatchResults.length === 0
+                ? <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results in batch)</div>
+                : <EnrichResultsTable results={currentBatchResults} />
             )}
 
-            {enrichState === "idle" && (
+            {!hasAnyResults && enrichState === "idle" && (
               <div style={{ fontSize: 11, color: "var(--text3)" }}>
                 Requires <code>pf_websearch_debug=1</code> + backend env vars{" "}
                 <code>WEB_SEARCH_PROVIDER</code> / <code>BRAVE_SEARCH_API_KEY</code>.
+              </div>
+            )}
+
+            {/* Export — accumulates all session results, deduped */}
+            {hasAnyResults && typeof onExportToLeads === "function" && (
+              <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                {(() => {
+                  const allVals = [...allEnrichedResults.values()];
+                  const readyUnexportedCount = [...allEnrichedResults.entries()].filter(
+                    ([key, r]) => r.status === "ready_to_call" && !exportedKeys.has(key),
+                  ).length;
+                  const alreadyExportedCount = [...allEnrichedResults.entries()].filter(
+                    ([key, r]) => r.status === "ready_to_call" && exportedKeys.has(key),
+                  ).length;
+                  const reviewCount = allVals.filter((r) => r.status === "needs_review").length;
+                  return (
+                    <>
+                      <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6 }}>
+                        Session total: {allEnrichedResults.size} enriched
+                        {alreadyExportedCount > 0 && ` · ${alreadyExportedCount} already exported`}
+                        {reviewCount > 0 && ` · ${reviewCount} needs_review (skipped)`}
+                      </div>
+                      {exportState !== "done" && (
+                        <button
+                          className="btn btn-sm btn-gold"
+                          onClick={handleExportToLeads}
+                          disabled={exportState === "loading" || readyUnexportedCount === 0}
+                        >
+                          {exportState === "loading"
+                            ? "Exporting…"
+                            : `Export ${readyUnexportedCount} ready contact${readyUnexportedCount !== 1 ? "s" : ""} to Leads`}
+                        </button>
+                      )}
+                      {exportState === "done" && exportSummary && !exportSummary.error && (
+                        <div style={{ fontSize: 12, padding: "6px 10px", background: "#DCFCE7", borderRadius: 6, color: "#166534" }}>
+                          Exported {exportSummary.exported} contact{exportSummary.exported !== 1 ? "s" : ""} to Leads
+                          {exportSummary.skippedReview > 0 && ` · ${exportSummary.skippedReview} needs_review skipped`}
+                          {exportSummary.skippedNoContact > 0 && ` · ${exportSummary.skippedNoContact} no-contact skipped`}
+                          {exportSummary.skippedAlreadyExported > 0 && ` · ${exportSummary.skippedAlreadyExported} already exported`}
+                        </div>
+                      )}
+                      {exportState === "error" && exportSummary?.error && (
+                        <div style={{ fontSize: 12, color: "#B91C1C" }}>
+                          Export error: {exportSummary.error}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>

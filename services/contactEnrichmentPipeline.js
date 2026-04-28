@@ -26,7 +26,7 @@ import { isValidNanpPhone, normalizePhoneKey, normalizeKey } from "./phoneEnrich
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
 const DEFAULT_LIMIT = 5;
-const MAX_LIMIT = 10;
+const MAX_LIMIT = 100;
 const MAX_DIRECT_QUERIES = 3;
 const MAX_MAILING_QUERIES = 2;
 const MAX_RELATED_COMPANIES = 2;

@@ -27,7 +27,7 @@ export function isContactEnrichmentDebugEnabled() {
  *
  * @param {object[]} packages  Raw search-package objects (from buildSearchPackagePreviewData).
  * @param {object}  [options]
- * @param {number}  [options.limit=5]  How many packages to process (max 10).
+ * @param {number}  [options.limit=5]  How many packages to process (max 100).
  * @returns {Promise<{ ok: boolean, results?: object[], error?: string }>}
  */
 export async function runContactEnrichmentPreview(packages, options = {}) {
