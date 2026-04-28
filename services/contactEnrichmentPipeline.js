@@ -22,6 +22,16 @@
 //     related_company_same_mailing_address, directory_match.
 
 import { isValidNanpPhone, normalizePhoneKey, normalizeKey } from "./phoneEnrichment.js";
+import { classifySource, isRejectedSource } from "./sourceQualityClassifier.js";
+import {
+  isCompanyProfileUrl,
+  extractCompanyProfile,
+  buildProfileExpansionQueries,
+} from "./companyProfileExtractor.js";
+import {
+  validateCoOwnerMatch,
+  isStrongCoOwnerMatch,
+} from "./coOwnerValidator.js";
 
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
@@ -31,6 +41,8 @@ const MAX_DIRECT_QUERIES = 3;
 const MAX_MAILING_QUERIES = 2;
 const MAX_RELATED_COMPANIES = 2;
 const MAX_PAGES_PER_SITE = 2;
+const MAX_ADDRESS_DISCOVERY_QUERIES = 7;
+const MAX_PROFILE_EXPANSION_QUERIES = 5;
 
 /* ─── Phone / email / URL extraction from free text ───────────────────────── */
 
@@ -208,6 +220,12 @@ export async function runContactEnrichmentPreview({
   const maxPages = Number.isFinite(options.maxPagesPerSite)
     ? Math.min(options.maxPagesPerSite, MAX_PAGES_PER_SITE)
     : MAX_PAGES_PER_SITE;
+  const maxAddressDiscovery = Number.isFinite(options.maxAddressDiscoveryQueries)
+    ? Math.min(options.maxAddressDiscoveryQueries, MAX_ADDRESS_DISCOVERY_QUERIES)
+    : MAX_ADDRESS_DISCOVERY_QUERIES;
+  const maxProfileExpansion = Number.isFinite(options.maxProfileExpansionQueries)
+    ? Math.min(options.maxProfileExpansionQueries, MAX_PROFILE_EXPANSION_QUERIES)
+    : MAX_PROFILE_EXPANSION_QUERIES;
 
   const batch = packages.slice(0, limit);
   const results = [];
@@ -220,6 +238,8 @@ export async function runContactEnrichmentPreview({
       maxMailing,
       maxRelated,
       maxPages,
+      maxAddressDiscovery,
+      maxProfileExpansion,
     });
     results.push(result);
   }
@@ -262,6 +282,9 @@ async function processSinglePackage(pkg, opts) {
   const websiteCands = [];
   const relatedCompanies = [];
   const evidence = [];
+  // Company-profile (B2BHint / registre / OpenCorporates) results gathered
+  // across all tracks. Used in Step 4b for director / related-company expansion.
+  const profileResults = [];
 
   const strategy = pkg.search_strategy || "direct_entity";
   const useDirectQueries = strategy !== "mailing_address_only" && strategy !== "skip_low_value";
@@ -279,17 +302,42 @@ async function processSinglePackage(pkg, opts) {
       }
       evidence.push(`direct_query: "${q}" → ${res.results.length} results`);
       for (const r of res.results) {
+        // Source-quality first — gives government/junk a specific evidence
+        // line. Falls through to the legacy isJunkResult catch for any
+        // patterns the classifier doesn't cover (e.g. municipal title text
+        // without a municipal domain).
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality}: ${cls.reasons.join(",")})`);
+          continue;
+        }
         if (isJunkResult(r.title, r.url)) {
           evidence.push(`rejected: "${r.title}" (junk_business)`);
           continue;
         }
+        if (cls.quality === "company_profile") {
+          profileResults.push(r);
+          evidence.push(`direct_profile: "${r.title}" at ${r.url}`);
+        }
         const nameMatch = hasNameOverlap(ownerName, r.title);
         const combined = `${r.title} ${r.snippet}`;
         for (const p of extractPhones(combined)) {
-          recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch);
+          recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch, {
+            sourceQuality: cls.quality,
+          });
         }
         for (const e of extractEmails(combined)) {
-          recordEmail(emailCands, e, "direct_entity", r.url);
+          const conf = nameMatch
+            ? "high"
+            : (cls.quality === "real_estate" || cls.quality === "private_business")
+              ? "medium"
+              : "low";
+          recordEmail(emailCands, e, "direct_entity", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            confidence: conf,
+            evidence: `direct: ${cls.quality}`,
+          });
         }
         if (r.url) recordWebsite(websiteCands, r.url, "direct_entity", nameMatch);
         for (const u of extractUrls(combined)) {
@@ -312,7 +360,13 @@ async function processSinglePackage(pkg, opts) {
         recordPhone(phoneCands, p, "page", pageUrl, pageUrl, topWebsite.nameMatch);
       }
       for (const e of extractEmails(text)) {
-        recordEmail(emailCands, e, "page", pageUrl);
+        // Official website / contact page → high confidence per email rules.
+        recordEmail(emailCands, e, "page", pageUrl, {
+          belongsTo: topWebsite.nameMatch ? ownerName : pageUrl,
+          nameMatch: !!topWebsite.nameMatch,
+          confidence: topWebsite.nameMatch ? "high" : "medium",
+          evidence: "official-website-page",
+        });
       }
     }
   }
@@ -346,7 +400,15 @@ async function processSinglePackage(pkg, opts) {
         }
 
         for (const e of extractEmails(combined)) {
-          recordEmail(emailCands, e, "mailing", r.url);
+          const conf = nameMatch
+            ? "medium"
+            : (hasRealEstateKeyword(r.title) ? "medium-high" : "low");
+          recordEmail(emailCands, e, "mailing", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            confidence: conf,
+            evidence: "legacy-mailing-discovery",
+          });
         }
         if (r.title && relatedCompanies.length < opts.maxRelated) {
           relatedCompanies.push({ name: r.title, url: r.url });
@@ -368,6 +430,231 @@ async function processSinglePackage(pkg, opts) {
         for (const p of extractPhones(`${r.title} ${r.snippet}`)) {
           recordPhone(phoneCands, p, "related", r.url, rel.name, nameMatch);
         }
+      }
+    }
+  }
+
+  // Step 4a — address-discovery track.
+  //
+  // Runs B2BHint-style queries against each mailing address to surface
+  // companies/entities co-located there. Capped at MAX_ADDRESS_DISCOVERY_QUERIES
+  // (7) per package across all addresses. Results pass through the source
+  // quality classifier; government and junk sources are rejected outright.
+  // Phones/emails picked up here get the "company_discovered_from_same_mailing_address"
+  // relationship label so downstream callers can distinguish them from
+  // direct-name matches.
+  if (useMailingQueries || strategy === "mailing_address_only") {
+    const addrQueries = buildAddressDiscoveryQueriesLocal(pkg, opts.maxAddressDiscovery);
+    for (const q of addrQueries) {
+      const res = await opts.searchFn(q);
+      if (!res.ok) {
+        evidence.push(`addr_discovery_failed: ${res.error}`);
+        continue;
+      }
+      evidence.push(`addr_discovery: "${q}" → ${res.results.length} results`);
+      for (const r of res.results) {
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality}: ${cls.reasons.join(",")})`);
+          continue;
+        }
+
+        if (cls.quality === "company_profile") {
+          profileResults.push(r);
+          evidence.push(`addr_profile: "${r.title}" at ${r.url}`);
+          // Profile results without explicit phone in snippet are evidence-only.
+          // Still extract any phone/email that happens to appear in the snippet,
+          // labeled as company_profile_expansion.
+        }
+
+        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const combined = `${r.title} ${r.snippet}`;
+
+        // Individual owners: only accept address-discovery phones with nameMatch.
+        if (!isIndividual || nameMatch) {
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, "mailing", r.url, r.title, nameMatch, {
+              relationship: cls.quality === "company_profile"
+                ? "company_profile_expansion"
+                : "company_discovered_from_same_mailing_address",
+              sourceQuality: cls.quality,
+            });
+          }
+        }
+
+        for (const e of extractEmails(combined)) {
+          const emailConfidence =
+            (cls.quality === "real_estate" || cls.quality === "private_business") && nameMatch
+              ? "high"
+              : (cls.quality === "real_estate" || cls.quality === "private_business")
+                ? "medium-high"
+                : nameMatch ? "medium" : "low";
+          recordEmail(emailCands, e, "mailing", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            relationship: cls.quality === "company_profile"
+              ? "company_profile_expansion"
+              : "company_discovered_from_same_mailing_address",
+            confidence: emailConfidence,
+            evidence: `address-discovery: ${cls.quality}`,
+          });
+        }
+
+        if (r.title && relatedCompanies.length < opts.maxRelated) {
+          relatedCompanies.push({ name: r.title, url: r.url });
+        }
+      }
+    }
+  }
+
+  // Step 4b — company-profile expansion.
+  //
+  // For every B2BHint / registre / OpenCorporates result captured in Step 1
+  // or Step 4a, extract structured profile data and run expansion queries
+  // for each director and related company anchored at the mailing address.
+  // Profile pages without an explicit phone in their snippet contribute
+  // evidence + expansion targets only — never a contact result on their own.
+  if (profileResults.length > 0) {
+    const mailingAnchor = [
+      pkg.mailing_address,
+      pkg.mailing_city,
+      pkg.mailing_province,
+    ].filter(Boolean).join(", ");
+
+    const expansionQueriesSet = new Set();
+    const profiles = [];
+    for (const r of profileResults) {
+      const profile = extractCompanyProfile(r);
+      if (!profile) continue;
+      profiles.push(profile);
+      evidence.push(
+        `company_profile: "${profile.companyName}" NEQ=${profile.enterpriseNumber || "?"}`
+        + ` directors=${profile.directors.length} related=${profile.relatedCompanies.length}`,
+      );
+
+      // Legal-address corroboration: when the profile's legal address contains
+      // the mailing street/postal, every existing candidate from this profile
+      // gains a "legal_address_match" hint.
+      if (profile.legalAddress && pkg.mailing_address) {
+        const la = profile.legalAddress.toLowerCase();
+        const ma = String(pkg.mailing_address || "").toLowerCase();
+        if (la.includes(ma) || ma.includes(la)) {
+          evidence.push(`legal_address_match: "${profile.legalAddress}" ↔ "${pkg.mailing_address}"`);
+        }
+      }
+
+      for (const q of buildProfileExpansionQueries(profile, mailingAnchor)) {
+        expansionQueriesSet.add(q);
+      }
+    }
+
+    const expansionQueries = [...expansionQueriesSet].slice(0, opts.maxProfileExpansion);
+    for (const q of expansionQueries) {
+      const res = await opts.searchFn(q);
+      if (!res.ok) {
+        evidence.push(`profile_expansion_failed: "${q}" → ${res.error}`);
+        continue;
+      }
+      evidence.push(`profile_expansion: "${q}" → ${res.results.length} results`);
+      for (const r of res.results) {
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality})`);
+          continue;
+        }
+        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const combined = `${r.title} ${r.snippet}`;
+
+        // Exact-director check: does any extracted director name match the
+        // result name? When it does, this is an exact_director_match — the
+        // strongest possible same-mailing signal.
+        let isExactDirector = false;
+        for (const profile of profiles) {
+          for (const dir of profile.directors || []) {
+            const dm = validateCoOwnerMatch(r.title, [dir]);
+            if (dm.matchType === "exact_full_name" || dm.matchType === "token_overlap") {
+              isExactDirector = true;
+              break;
+            }
+          }
+          if (isExactDirector) break;
+        }
+
+        const relationship = isExactDirector
+          ? "exact_director_match"
+          : (nameMatch ? "company_profile_expansion" : "related_company_from_profile");
+
+        if (!isIndividual || nameMatch || isExactDirector) {
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, "direct_entity", r.url, r.title,
+              nameMatch || isExactDirector, {
+                relationship,
+                sourceQuality: cls.quality,
+              });
+          }
+        }
+        for (const e of extractEmails(combined)) {
+          const conf = isExactDirector
+            ? "high"
+            : (nameMatch ? "medium" : "low");
+          recordEmail(emailCands, e, "direct_entity", r.url, {
+            belongsTo: r.title,
+            nameMatch: nameMatch || isExactDirector,
+            relationship,
+            confidence: conf,
+            evidence: `profile_expansion: ${cls.quality}`,
+          });
+        }
+      }
+    }
+  }
+
+  // Step 4.5 — co-owner validation pass.
+  //
+  // Walk every candidate (phones + emails) and check whether its result name
+  // matches any of the lead owner's co-owners. A strong match (exact full
+  // name OR ≥ 2-token overlap) upgrades nameMatch and tags the candidate with
+  // a co_owner_match relationship — so a numbered company's co-owner mentioned
+  // on a real-estate site can be promoted to ready_to_call. A weak (last-name
+  // only) match never upgrades on its own; it gets recorded for needs_review.
+  const coOwnerNames = Array.isArray(pkg.coOwnerNames) && pkg.coOwnerNames.length
+    ? pkg.coOwnerNames
+    : (Array.isArray(pkg.co_owners) ? pkg.co_owners : []);
+  if (coOwnerNames.length > 0) {
+    for (const c of phoneCands) {
+      if (c.nameMatch) continue;
+      const m = validateCoOwnerMatch(c.belongsTo || "", coOwnerNames);
+      if (isStrongCoOwnerMatch(m)) {
+        c.nameMatch = true;
+        c.coOwnerMatch = m;
+        // co_owner_match is the most-specific relationship label — it overrides
+        // generic same-mailing labels like company_discovered_from_same_mailing_address.
+        c.relationship = "co_owner_match";
+        evidence.push(
+          `co_owner_upgrade: phone "${c.belongsTo}" → "${m.matchedName}" (${m.matchType})`,
+        );
+      } else if (m.match === "weak") {
+        c.weakCoOwnerMatch = m.matchedName;
+        evidence.push(
+          `co_owner_weak: phone "${c.belongsTo}" shares only last name with "${m.matchedName}"`,
+        );
+      }
+    }
+    for (const e of emailCands) {
+      if (e.nameMatch) continue;
+      const m = validateCoOwnerMatch(e.email_owner_name || "", coOwnerNames);
+      if (isStrongCoOwnerMatch(m)) {
+        e.nameMatch = true;
+        e.coOwnerMatch = m;
+        e.relationship_to_lead_owner = e.relationship_to_lead_owner === e.source
+          ? "co_owner_match"
+          : e.relationship_to_lead_owner;
+        if (e.confidence === "low") e.confidence = "medium";
+        evidence.push(
+          `co_owner_upgrade: email "${e.email_owner_name}" → "${m.matchedName}" (${m.matchType})`,
+        );
+      } else if (m.match === "weak") {
+        e.weakCoOwnerMatch = m.matchedName;
       }
     }
   }
@@ -406,24 +693,32 @@ async function processSinglePackage(pkg, opts) {
       if (bestCand.nameMatch) {
         status = "ready_to_call";
         confidence = confidenceFromScore(bestCand.score);
-        phoneRelationship = "direct_entity_match";
+        phoneRelationship = bestCand.relationship || "direct_entity_match";
       } else {
         status = "needs_review";
         confidence = "low";
-        phoneRelationship = bestCand.source;
+        phoneRelationship = bestCand.relationship || bestCand.source;
       }
     } else if (bestCand.source === "mailing" || bestCand.source === "related") {
       // Same mailing address is a strong match — no nameMatch required.
       status = "ready_to_call";
       const isREContext = hasRealEstateKeyword(bestCand.belongsTo || "");
       confidence = isREContext ? "high" : "medium";
-      phoneRelationship = isREContext
+      phoneRelationship = bestCand.relationship || (isREContext
         ? "related_company_same_mailing_address"
-        : "same_mailing_address_contact";
+        : "same_mailing_address_contact");
     } else if (bestCand.source === "pages_jaunes" || bestCand.source === "411") {
       status = "ready_to_call";
       confidence = "medium";
-      phoneRelationship = "directory_match";
+      phoneRelationship = bestCand.relationship || "directory_match";
+    }
+
+    // Co-owner-only matches downgrade-protect: if the only signal was a weak
+    // last-name match (no upgrade), force needs_review. Strong co-owner matches
+    // already had nameMatch upgraded above, so they pass through normally.
+    if (bestCand.weakCoOwnerMatch && !bestCand.nameMatch) {
+      status = "needs_review";
+      confidence = "low";
     }
 
     evidence.push(
@@ -438,9 +733,33 @@ async function processSinglePackage(pkg, opts) {
     evidence.push(
       `low_confidence_only: ${scored.length} candidate(s), best score=${scored[0].score} — bestPhone withheld`,
     );
-  } else if (emailCands.length > 0) {
-    status = "ready_to_email";
-    confidence = "medium";
+  }
+
+  // Email selection — confidence-ranked. Tie-broken by nameMatch.
+  const EMAIL_RANK = { high: 4, "medium-high": 3, medium: 2, low: 1 };
+  const sortedEmails = [...emailCands].sort((a, b) => {
+    const ra = EMAIL_RANK[a.confidence] || 0;
+    const rb = EMAIL_RANK[b.confidence] || 0;
+    if (rb !== ra) return rb - ra;
+    return (b.nameMatch ? 1 : 0) - (a.nameMatch ? 1 : 0);
+  });
+  const bestEmailCand = sortedEmails[0] || null;
+
+  // ready_to_email: only when there's no usable phone AND there's a strong
+  // (medium or higher) email with nameMatch or strong source attribution.
+  // Weak / generic emails alone keep status at no_contact_found / needs_review.
+  if (!bestPhone && bestEmailCand) {
+    const ec = bestEmailCand.confidence;
+    const strongEmail = ec === "high" || ec === "medium-high"
+      || (ec === "medium" && bestEmailCand.nameMatch);
+    if (strongEmail) {
+      status = (status === "needs_review") ? "needs_review" : "ready_to_email";
+      confidence = ec === "high" ? "high" : (ec === "medium-high" ? "medium" : "medium");
+    } else if (status === "no_contact_found") {
+      // Low-confidence email only — leave for human review.
+      status = "needs_review";
+      confidence = "low";
+    }
   }
 
   return {
@@ -448,10 +767,13 @@ async function processSinglePackage(pkg, opts) {
     bestPhone,
     bestPhoneBelongsTo,
     phoneRelationship,
-    bestEmail: emailCands[0]?.email || null,
+    bestEmail: bestEmailCand?.email || null,
+    bestEmailOwner: bestEmailCand?.email_owner_name || null,
+    bestEmailRelationship: bestEmailCand?.relationship_to_lead_owner || null,
+    bestEmailConfidence: bestEmailCand?.confidence || null,
     bestWebsite: websiteCands[0]?.url || null,
     phoneCandidates: scored,
-    emailCandidates: emailCands,
+    emailCandidates: sortedEmails,
     websiteCandidates: websiteCands,
     relatedCompanies,
     evidence,
@@ -462,24 +784,54 @@ async function processSinglePackage(pkg, opts) {
 
 /* ─── Candidate list helpers ─────────────────────────────────────────────── */
 
-function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch) {
+function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch, opts = {}) {
   const existing = list.find((c) => c.digits === digits && c.source === source);
   if (existing) {
     existing.occurrences = (existing.occurrences || 1) + 1;
     if (nameMatch) existing.nameMatch = true;
+    // First-set wins for relationship/sourceQuality so the legacy mailing
+    // track (Step 3) keeps its un-labeled candidates intact when the
+    // address-discovery track (Step 4a) would otherwise relabel them.
   } else {
     list.push({
       digits, raw, source,
       url: url || "", belongsTo: belongsTo || "",
       occurrences: 1, nameMatch: !!nameMatch,
+      relationship: opts.relationship || null,
+      sourceQuality: opts.sourceQuality || null,
     });
   }
 }
 
-function recordEmail(list, email, source, url) {
-  if (!list.some((c) => c.email === email)) {
-    list.push({ email, source, url: url || "" });
-  }
+// Email-prefix patterns that we always reject (privacy/legal/system mailboxes).
+// Generic mailboxes like info@, contact@, admin@ are intentionally NOT in this
+// set — they are valid contact addresses for many small businesses and the
+// caller decides their confidence level.
+const JUNK_EMAIL_PREFIX_RE =
+  /^(?:noreply|no-reply|no_reply|privacy|abuse|legal|webmaster|unsubscribe|bounce|postmaster|mailer-daemon|spam|phishing)$/i;
+
+export function isJunkEmail(email) {
+  const e = String(email || "").toLowerCase().trim();
+  if (!e.includes("@")) return true;
+  const local = e.split("@")[0] || "";
+  return JUNK_EMAIL_PREFIX_RE.test(local);
+}
+
+function recordEmail(list, email, source, url, opts = {}) {
+  const lower = String(email || "").toLowerCase().trim();
+  if (!lower || isJunkEmail(lower)) return;
+  if (list.some((c) => c.email === lower)) return;
+  list.push({
+    email: lower,
+    source,
+    source_url: url || "",
+    url: url || "", // legacy alias kept for existing callers
+    email_owner_name: opts.belongsTo || "",
+    relationship_to_lead_owner: opts.relationship || source,
+    confidence: opts.confidence || "low",
+    evidence: opts.evidence || "",
+    nameMatch: !!opts.nameMatch,
+  });
 }
 
 function recordWebsite(list, url, source, nameMatch) {
@@ -494,6 +846,67 @@ const JUNK_NAME_RE = /^(?:\d{6,8}|[\d\-]{10,30}|[a-z]{0,3}\d+[a-z]{0,3})$/i;
 function looksLikeJunkLocal(name) {
   if (!name) return true;
   return JUNK_NAME_RE.test(String(name).trim());
+}
+
+/**
+ * Build address-discovery queries — up to maxQueries (default 7) per package.
+ * For packages with mailingAddresses[] populated, queries are generated for
+ * each address until the cap is reached. Falls back to flat mailing_* fields
+ * for legacy lead-like packages.
+ *
+ * Templates (in priority order — most specific first):
+ *   "<addr> b2bhint"
+ *   "\"<addr>\" Québec Inc"
+ *   "\"<addr>\" company"
+ *   "\"<addr>\" immobilier gestion"
+ *   "\"<addr>\" site:b2bhint.com"
+ *   "\"<addr>\" entreprise"
+ *   "\"<addr>\" gestion immobilière"
+ */
+export function buildAddressDiscoveryQueriesLocal(pkg, maxQueries = MAX_ADDRESS_DISCOVERY_QUERIES) {
+  const cap = Math.min(maxQueries, MAX_ADDRESS_DISCOVERY_QUERIES);
+  const sources = [];
+
+  if (Array.isArray(pkg.mailingAddresses) && pkg.mailingAddresses.length > 0) {
+    for (const a of pkg.mailingAddresses) {
+      const street = String(a.street || "").trim();
+      const city = String(a.city || "").trim();
+      const addrStr = [street, city].filter(Boolean).join(", ");
+      if (addrStr) sources.push(addrStr);
+    }
+  } else {
+    const street = String(pkg.mailing_address || "").trim();
+    const city = String(pkg.mailing_city || "").trim();
+    const addrStr = [street, city].filter(Boolean).join(", ");
+    if (addrStr) sources.push(addrStr);
+  }
+
+  if (!sources.length) return [];
+
+  const TEMPLATES = [
+    (a) => `${a} b2bhint`,
+    (a) => `"${a}" Québec Inc`,
+    (a) => `"${a}" company`,
+    (a) => `"${a}" immobilier gestion`,
+    (a) => `"${a}" site:b2bhint.com`,
+    (a) => `"${a}" entreprise`,
+    (a) => `"${a}" gestion immobilière`,
+  ];
+
+  const seen = new Set();
+  const out = [];
+  for (const addr of sources) {
+    for (const tmpl of TEMPLATES) {
+      if (out.length >= cap) return out;
+      const q = tmpl(addr);
+      const k = q.toLowerCase().trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(q);
+    }
+    if (out.length >= cap) return out;
+  }
+  return out;
 }
 
 function buildDirectEntityQueriesLocal(pkg) {
