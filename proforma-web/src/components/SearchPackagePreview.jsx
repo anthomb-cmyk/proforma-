@@ -33,6 +33,12 @@ import {
   postEnrichmentSingle,
 } from "../lib/enrichmentOrchestrator.js";
 import {
+  getBudgetState,
+  incrementUsed,
+  setCap,
+  defaultCap,
+} from "../lib/searchBudget.js";
+import {
   groupPackagesByOwner,
   fanOutResult,
 } from "../lib/ownerDeduplication.js";
@@ -233,6 +239,11 @@ function enrichResultToCandidatePhone(r) {
 
 const BATCH_SIZES = [5, 10, 25, 50, 100];
 
+// Maximum enrichment attempts per package before treating as permanently failed.
+// After MAX_ATTEMPTS errors, the package is added to enrichedKeys so auto-advance
+// does NOT retry it infinitely — the root cause of the credit-burn loop.
+const MAX_ATTEMPTS = 2;
+
 export default function SearchPackagePreview({ rows, onClose, onExportToLeads, topN = 25 }) {
   const data = useMemo(
     () => buildSearchPackagePreviewData(rows, { topN }),
@@ -271,6 +282,8 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   // Session-level tracking — survives across multiple batches
   const [enrichedKeys, setEnrichedKeys] = useState(() => new Set());
   const [allEnrichedResults, setAllEnrichedResults] = useState(() => new Map());
+  // Per-package attempt counts — prevents infinite retry on persistently erroring packages.
+  const [enrichmentAttempts, setEnrichmentAttempts] = useState(() => new Map());
   const [exportedKeys, setExportedKeys] = useState(() => new Set());
 
   // Most-recent batch tracking (for table display + re-run)
@@ -293,6 +306,9 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   // Auto-advance kicks off the next batch when the current one finishes.
   const [autoAdvance, setAutoAdvance] = useState(true);
   const [paused, setPaused] = useState(false);
+  // Budget guard — mirrors searchBudget.js state, refreshed on each render cycle.
+  const [budgetState, setBudgetState] = useState(() => getBudgetState());
+  const [budgetBannerDismissed, setBudgetBannerDismissed] = useState(false);
   // Per-package decisions made in the review queue.
   const [reviewDecisions, setReviewDecisions] = useState(() => new Map());
   // Session id derived from the imported dataset signature.
@@ -434,10 +450,12 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
       concurrency,
       callSingle: postEnrichmentSingle,
       signal: controller?.signal,
-      onProgress: ({ packageKey, phase, result }) => {
+      onProgress: ({ packageKey, phase, result, error }) => {
         if (phase === "done" && result) {
           completedCount++;
           setPkgDone(completedCount);
+          // Increment budget counter on successful call.
+          setBudgetState(incrementUsed(1));
 
           // Fan out to all grouped members
           const group = groups.get(packageKey) || [];
@@ -457,6 +475,63 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
           cacheResult(representatives.find((e) => e.packageKey === packageKey)?.package || {}, result);
         } else if (phase === "error") {
           setPkgDone((d) => d + 1);
+          // Increment budget counter on error (still cost a Brave query).
+          setBudgetState(incrementUsed(1));
+
+          // Retry-cap: track attempts per package. After MAX_ATTEMPTS errors,
+          // mark the package as "done" so auto-advance stops retrying it.
+          setEnrichmentAttempts((prev) => {
+            const next = new Map(prev);
+            const prevCount = next.get(packageKey) || 0;
+            const newCount = prevCount + 1;
+            next.set(packageKey, newCount);
+
+            if (newCount >= MAX_ATTEMPTS) {
+              // Permanently mark as failed — add to enrichedKeys so auto-advance skips it.
+              const rep = representatives.find((e) => e.packageKey === packageKey);
+              const syntheticResult = {
+                status: "enrichment_failed",
+                lead_owner_name: rep?.package?.lead_owner_name || packageKey,
+                evidence: [`enrichment_failed: tried ${newCount} times, last error: ${error || "unknown"}`],
+                phoneCandidates: [],
+                emailCandidates: [],
+                websiteCandidates: [],
+                confidence: "low",
+              };
+              // Store synthetic result so the table can display it.
+              setAllEnrichedResults((prev2) => {
+                const next2 = new Map(prev2);
+                const group = groups.get(packageKey) || [];
+                if (group.length > 0) {
+                  for (const entry of group) {
+                    next2.set(entry.packageKey, {
+                      ...syntheticResult,
+                      lead_owner_name: entry.package?.lead_owner_name || syntheticResult.lead_owner_name,
+                    });
+                  }
+                } else {
+                  next2.set(packageKey, syntheticResult);
+                }
+                return next2;
+              });
+              setEnrichedKeys((prev2) => {
+                const next2 = new Set(prev2);
+                const group = groups.get(packageKey) || [];
+                if (group.length > 0) {
+                  for (const entry of group) next2.add(entry.packageKey);
+                } else {
+                  next2.add(packageKey);
+                }
+                return next2;
+              });
+              // Persist to cross-session cache so future sessions don't retry either.
+              if (rep?.package) {
+                cacheResult(rep.package, syntheticResult);
+              }
+            }
+
+            return next;
+          });
         }
       },
     });
@@ -475,11 +550,13 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
 
   // Auto-advance: when a batch finishes successfully and auto-advance is
   // enabled and we're not paused, automatically queue the next batch.
+  // Budget guard: do NOT fire if the session budget is exhausted.
   const handleEnrichNextRef = useRef(null);
   useEffect(() => {
     if (enrichState !== "done") return;
     if (!autoAdvance || paused) return;
     if (!nextBatchPkgs.length) return;
+    if (getBudgetState().exhausted) return;
     const t = setTimeout(() => { handleEnrichNextRef.current?.(); }, 250);
     return () => clearTimeout(t);
   }, [enrichState, autoAdvance, paused, nextBatchPkgs.length]);
@@ -559,6 +636,14 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     }
 
     if (perPkgMode) {
+      const budget = getBudgetState();
+      setBudgetState(budget);
+      if (budget.exhausted) {
+        // Budget exhausted — show banner, do NOT fire the orchestrator.
+        setBudgetBannerDismissed(false);
+        setEnrichState("idle");
+        return;
+      }
       runPerPkgMode(cacheMisses);
     } else {
       runBatch(cacheMisses);
@@ -967,6 +1052,42 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               </div>
             )}
 
+            {/* Budget exhausted banner */}
+            {budgetState.exhausted && !budgetBannerDismissed && (
+              <div style={{
+                fontSize: 11, color: "#92400E",
+                background: "#FEF3C7", borderRadius: 6,
+                padding: "6px 10px", marginBottom: 6,
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+              }}>
+                <span>
+                  Search budget reached ({budgetState.used} / {budgetState.cap} calls).
+                  Auto-advance is paused.
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ fontSize: 10 }}
+                  onClick={() => {
+                    setCap(budgetState.cap + defaultCap());
+                    setBudgetState(getBudgetState());
+                    setBudgetBannerDismissed(true);
+                  }}
+                >
+                  Extend by {defaultCap()} more
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ fontSize: 10, color: "var(--text3)" }}
+                  onClick={() => setBudgetBannerDismissed(true)}
+                  aria-label="Dismiss budget warning"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
             {/* Action buttons */}
             {enrichState !== "loading" && (
               <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -996,6 +1117,16 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                   />
                   Auto-advance
                 </label>
+                {/* Search budget readout */}
+                <span style={{
+                  fontSize: 10,
+                  color: budgetState.exhausted ? "#B91C1C"
+                    : budgetState.used >= budgetState.cap * 0.8 ? "#92400E"
+                    : "var(--text3)",
+                  marginLeft: 4,
+                }}>
+                  Budget: {budgetState.used} / {budgetState.cap} calls
+                </span>
                 {autoAdvance && (
                   <button
                     type="button"
