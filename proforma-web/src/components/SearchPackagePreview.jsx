@@ -8,7 +8,7 @@
 // lib/searchPackageDebug.js#buildSearchPackagePreviewData so the tests can
 // run without @testing-library/react.
 
-import { useMemo, useState, useCallback, Fragment } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
 import {
   isContactEnrichmentDebugEnabled,
@@ -208,6 +208,12 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   );
   const [enrichError, setEnrichError] = useState(/** @type {string|null} */ null);
 
+  // Progress UI state — ticks while a batch is running so the user gets
+  // visible feedback (enrichment can take 30s+ per 5-package batch).
+  const [enrichStartedAt, setEnrichStartedAt] = useState(/** @type {number|null} */ null);
+  const [enrichElapsedMs, setEnrichElapsedMs] = useState(0);
+  const enrichAbortRef = useRef(/** @type {AbortController|null} */ (null));
+
   // Session-level tracking — survives across multiple batches
   const [enrichedKeys, setEnrichedKeys] = useState(() => new Set());
   const [allEnrichedResults, setAllEnrichedResults] = useState(() => new Map());
@@ -234,10 +240,24 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   // Core batch runner — uses functional setState to avoid stale closures.
   const runBatch = useCallback(async (batch) => {
     if (!batch?.length) return;
+    // Abort any in-flight call before starting a new one (defensive: the
+    // button is disabled during loading, but a stray double-click race is
+    // possible and the existing controller would otherwise leak).
+    if (enrichAbortRef.current) enrichAbortRef.current.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    enrichAbortRef.current = controller;
     setEnrichState("loading");
     setEnrichError(null);
     setCurrentBatchResults(null);
-    const res = await runContactEnrichmentPreview(batch, { limit: batch.length });
+    setEnrichStartedAt(Date.now());
+    setEnrichElapsedMs(0);
+    const res = await runContactEnrichmentPreview(batch, {
+      limit: batch.length,
+      signal: controller?.signal,
+    });
+    // Drop stale callbacks — only the latest controller is the live one.
+    if (controller && enrichAbortRef.current !== controller) return;
+    enrichAbortRef.current = null;
     if (res.ok) {
       setAllEnrichedResults((prev) => {
         const next = new Map(prev);
@@ -251,11 +271,33 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
       });
       setCurrentBatchResults(res.results);
       setEnrichState("done");
+    } else if (res.cancelled) {
+      // User pressed Cancel — return to idle without surfacing an error.
+      setEnrichState("idle");
     } else {
       setEnrichError(res.error || "Unknown error");
       setEnrichState("error");
     }
   }, []);
+
+  // Cancel handler — aborts the in-flight fetch.
+  const handleCancelEnrich = useCallback(() => {
+    if (enrichAbortRef.current) {
+      enrichAbortRef.current.abort();
+      enrichAbortRef.current = null;
+    }
+    setEnrichState("idle");
+  }, []);
+
+  // Tick elapsed-time every 250ms while a batch is loading. Cleanup on
+  // state change or unmount so the timer never leaks.
+  useEffect(() => {
+    if (enrichState !== "loading" || enrichStartedAt == null) return undefined;
+    const id = setInterval(() => {
+      setEnrichElapsedMs(Date.now() - enrichStartedAt);
+    }, 250);
+    return () => clearInterval(id);
+  }, [enrichState, enrichStartedAt]);
 
   const handleEnrichNext = useCallback(() => {
     if (!nextBatchPkgs.length) return;
@@ -505,7 +547,59 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               </div>
             )}
             {enrichState === "loading" && (
-              <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 8 }}>Running…</div>
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  marginBottom: 10,
+                  padding: "10px 12px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg2, #fafafa)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    Enriching {currentBatch?.length || 0} package{(currentBatch?.length || 0) !== 1 ? "s" : ""}…
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={handleCancelEnrich}
+                    style={{ color: "var(--text3)" }}
+                    aria-label="Cancel enrichment"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "relative",
+                    height: 6,
+                    borderRadius: 3,
+                    overflow: "hidden",
+                    background: "var(--border)",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      bottom: 0,
+                      width: "30%",
+                      background: "var(--accent, #2563EB)",
+                      borderRadius: 3,
+                      animation: "pf-enrich-progress 1.4s ease-in-out infinite",
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--text3)", display: "flex", justifyContent: "space-between" }}>
+                  <span>{(enrichElapsedMs / 1000).toFixed(1)}s elapsed</span>
+                  <span>typically 30–90s for 5 packages — slower for large batches</span>
+                </div>
+                <style>{`@keyframes pf-enrich-progress { 0%{left:-30%} 50%{left:50%} 100%{left:100%} }`}</style>
+              </div>
             )}
 
             {enrichState === "error" && (
