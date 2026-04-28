@@ -204,4 +204,98 @@ describe("runEnrichmentOrchestrator", () => {
     expect(failEvents[0].phase).toBe("start");
     expect(failEvents[1].phase).toBe("error");
   });
+
+  // 7. signal.aborted=true mid-run drops queue and returns cancelled=true
+  test("signal.aborted=true mid-run drops queue and returns cancelled=true", async () => {
+    const controller = new AbortController();
+    const startedKeys = [];
+    const deferreds = [];
+
+    const packages = Array.from({ length: 5 }, (_, i) => ({
+      packageKey: `p${i}`,
+      package: { lead_owner_name: `p${i}` },
+    }));
+
+    const callSingle = jest.fn((p) => {
+      startedKeys.push(p.lead_owner_name);
+      const d = deferred();
+      deferreds.push(d);
+      return d.promise;
+    });
+
+    const runPromise = runEnrichmentOrchestrator({
+      packages,
+      concurrency: 1,
+      callSingle,
+      signal: controller.signal,
+    });
+
+    // Wait for first call to start
+    while (deferreds.length === 0) {
+      await Promise.resolve();
+    }
+
+    // Abort the session-level signal
+    controller.abort();
+
+    // Resolve the in-flight call with cancelled response
+    deferreds[0].resolve({ ok: false, cancelled: true, error: "Cancelled" });
+
+    const result = await runPromise;
+
+    expect(result.cancelled).toBe(true);
+    // Only 1 started — the rest were dropped from the queue
+    expect(startedKeys.length).toBe(1);
+    expect(startedKeys.length).toBeLessThan(5);
+  });
+
+  // 8. per-call cancel (res.cancelled=true) records error but queue continues
+  test("per-call cancel (res.cancelled=true) records error but queue continues", async () => {
+    const packages = [
+      { packageKey: "a", package: { lead_owner_name: "a" } },
+      { packageKey: "b", package: { lead_owner_name: "b" } },
+      { packageKey: "c", package: { lead_owner_name: "c" } },
+    ];
+    const progressLog = [];
+
+    // "b" returns a per-call cancelled response (e.g., timeout); "a" and "c" succeed
+    const callSingle = jest.fn((p) => {
+      if (p.lead_owner_name === "b") {
+        return Promise.resolve({ ok: false, cancelled: true, error: "Request timed out (90s)" });
+      }
+      return Promise.resolve({
+        ok: true,
+        result: { status: "ready_to_call", lead_owner_name: p.lead_owner_name },
+      });
+    });
+
+    const onProgress = jest.fn((evt) => {
+      progressLog.push({ packageKey: evt.packageKey, phase: evt.phase });
+    });
+
+    const result = await runEnrichmentOrchestrator({
+      packages,
+      concurrency: 1,
+      callSingle,
+      onProgress,
+    });
+
+    // NOT cancelled at session level
+    expect(result.cancelled).toBe(false);
+    // a and c succeeded
+    expect(result.completed).toBe(2);
+    expect(result.results.has("a")).toBe(true);
+    expect(result.results.has("c")).toBe(true);
+    // b got an error recorded
+    expect(result.errors.has("b")).toBe(true);
+    expect(result.errors.get("b")).toBe("Request timed out (90s)");
+
+    // All three packages had progress events
+    const aEvents = progressLog.filter((e) => e.packageKey === "a");
+    const bEvents = progressLog.filter((e) => e.packageKey === "b");
+    const cEvents = progressLog.filter((e) => e.packageKey === "c");
+    expect(aEvents.map((e) => e.phase)).toEqual(["start", "done"]);
+    expect(bEvents.map((e) => e.phase)).toEqual(["start", "error"]);
+    expect(cEvents.map((e) => e.phase)).toEqual(["start", "done"]);
+  });
 });
