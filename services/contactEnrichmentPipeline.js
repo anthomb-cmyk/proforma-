@@ -9,7 +9,8 @@
 //   - Hard limits guard against runaway API spend.
 //   - Skips packages that already have an owner-direct phone.
 //   - Does NOT write to the CRM, does NOT call /api/phone-lookup, does NOT
-//     use Google Places.
+//     use Google Places directly (optional Places fallback is injected via
+//     opts.placesFallbackFn when placesFallbackEnabled === true).
 //
 // Scoring rules (tightened in v2, status semantics revised in v3):
 //   - Junk/directory/municipal results are rejected before any phone is recorded.
@@ -249,6 +250,12 @@ export async function runContactEnrichmentPreview({
       maxProfileExpansion,
       // Fix 6: B2BHint page fetch is opt-in (default OFF).
       b2bhintFetchEnabled: options.b2bhintFetchEnabled === true,
+      // Phase 4: Places fallback — opt-in, injected as a function so tests
+      // can provide a mock without touching the real Places client.
+      placesFallbackEnabled: options.placesFallbackEnabled === true,
+      placesFallbackFn: typeof options.placesFallbackFn === "function"
+        ? options.placesFallbackFn
+        : null,
     });
     results.push(result);
   }
@@ -861,6 +868,49 @@ async function processSinglePackage(pkg, opts) {
       // Low-confidence email only — leave for human review.
       status = "needs_review";
       confidence = "low";
+    }
+  }
+
+  // ── Places fallback ──────────────────────────────────────────────────────
+  // Runs ONLY when:
+  //   (a) the web-search pipeline found nothing (status === "no_contact_found")
+  //   (b) the caller opted in (opts.placesFallbackEnabled === true)
+  //   (c) a placesFallbackFn was supplied (wraps runPlacesFallback with the
+  //       real Places client so tests can inject a mock)
+  //
+  // On success the result is promoted to needs_review (NOT ready_to_call —
+  // Places matches are external and may not match the entity exactly; human
+  // confirmation is required before calling).
+  if (
+    status === "no_contact_found" &&
+    opts.placesFallbackEnabled === true &&
+    typeof opts.placesFallbackFn === "function"
+  ) {
+    try {
+      const fbResult = await opts.placesFallbackFn(pkg);
+      if (fbResult.ok) {
+        bestPhone = fbResult.phone || null;
+        bestPhoneBelongsTo = fbResult.businessName || null;
+        phoneRelationship = "places_fallback";
+        confidence = "medium";
+        status = "needs_review";
+        evidence.push(
+          `places_fallback: phone ${bestPhone} from "${bestPhoneBelongsTo}" at "${fbResult.address || ""}"`,
+        );
+        // Carry over any evidence the fallback itself generated.
+        for (const e of (fbResult.evidence || [])) {
+          if (!evidence.includes(e)) evidence.push(e);
+        }
+      } else {
+        evidence.push(`places_fallback_skipped: ${fbResult.reason || "unknown"}`);
+        // Also carry detail evidence (e.g. places_blocked_type, places_no_results).
+        for (const e of (fbResult.evidence || [])) {
+          if (!evidence.includes(e)) evidence.push(e);
+        }
+      }
+    } catch (err) {
+      // Never let a Places error abort the pipeline result already in hand.
+      evidence.push(`places_fallback_error: ${String(err?.message || err)}`);
     }
   }
 

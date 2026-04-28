@@ -7,6 +7,8 @@
 
 import { Router } from "express";
 import { runContactEnrichmentPreview } from "../services/contactEnrichmentPipeline.js";
+import { runPlacesFallback } from "../services/placesFallback.js";
+import { createPlacesClient } from "../services/phoneEnrichment.js";
 
 /**
  * Returns true if at least one web-search provider appears to be configured
@@ -30,7 +32,7 @@ function isSearchConfigured(opts = {}) {
  * @param {Function} [deps.fetchPageFn]    async (url) => html | null
  * @returns {import("express").Router}
  */
-export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
+export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn, googlePlacesApiKey }) {
   const router = Router();
 
   router.post("/preview", async (req, res) => {
@@ -55,6 +57,16 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
 
     const searchFn = createSearchFn();
 
+    const previewPlacesFallbackEnabled = req.body?.placesFallbackEnabled === true;
+    let previewPlacesClient = null;
+    if (previewPlacesFallbackEnabled && googlePlacesApiKey) {
+      try {
+        previewPlacesClient = createPlacesClient({ apiKey: googlePlacesApiKey });
+      } catch {
+        // Key missing or invalid — fallback silently disabled for this request.
+      }
+    }
+
     try {
       const results = await runContactEnrichmentPreview({
         packages,
@@ -63,6 +75,10 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
         fetchPageFn,
         options: {
           b2bhintFetchEnabled: process.env.B2BHINT_FETCH_ENABLED === "true",
+          placesFallbackEnabled: !!(previewPlacesFallbackEnabled && previewPlacesClient),
+          placesFallbackFn: previewPlacesClient
+            ? (p) => runPlacesFallback({ pkg: p, placesClient: previewPlacesClient })
+            : null,
         },
       });
       return res.json({ ok: true, results });
@@ -98,6 +114,16 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
 
     const searchFn = createSearchFn();
 
+    const singlePlacesFallbackEnabled = req.body?.placesFallbackEnabled === true;
+    let singlePlacesClient = null;
+    if (singlePlacesFallbackEnabled && googlePlacesApiKey) {
+      try {
+        singlePlacesClient = createPlacesClient({ apiKey: googlePlacesApiKey });
+      } catch {
+        // Key missing or invalid — fallback silently disabled for this request.
+      }
+    }
+
     try {
       const results = await runContactEnrichmentPreview({
         packages: [pkg],
@@ -106,6 +132,10 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
         fetchPageFn,
         options: {
           b2bhintFetchEnabled: process.env.B2BHINT_FETCH_ENABLED === "true",
+          placesFallbackEnabled: !!(singlePlacesFallbackEnabled && singlePlacesClient),
+          placesFallbackFn: singlePlacesClient
+            ? (p) => runPlacesFallback({ pkg: p, placesClient: singlePlacesClient })
+            : null,
         },
       });
       // Always return the single result object directly so the client doesn't

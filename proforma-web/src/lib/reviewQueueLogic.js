@@ -94,3 +94,176 @@ export function pickPrimaryCandidate(result) {
   const cands = result.phoneCandidates || [];
   return cands[0] || null;
 }
+
+// ─── Phase 4: Visual signals + recommendation ────────────────────────────────
+
+// Stop words filtered out during name-token overlap checks.
+const NAME_STOP_WORDS = new Set([
+  "inc", "ltd", "ltee", "ltee.", "gestion", "immobilier", "immobiliere",
+  "immobilière", "holdings", "investments", "realty", "realties",
+  "properties", "proprietes", "propriétés", "group", "groupe", "de", "du",
+  "la", "le", "les", "et", "and", "or", "the", "a", "an",
+]);
+
+// Toll-free number prefixes (NANP area codes).
+const TOLL_FREE_RE = /^(?:\+?1[-.\s]?)?(?:800|888|866|877|855|844|833|822)/;
+
+// Generic listing/directory hostnames that are not direct business websites.
+const GENERIC_DIRECTORY_HOSTS = new Set([
+  "canpages.ca", "yellowpages.ca", "pagesjaunes.ca", "yelp.com",
+  "houzz.com", "showmelocal.com", "anugo.com", "zoominfo.com",
+  "bbb.org", "chamberofcommerce.com", "manta.com", "cylex.ca",
+  "411.ca", "canada411.ca", "whitepages.ca", "tupalo.ca",
+]);
+
+/**
+ * Normalize a string to lowercase ASCII tokens (≥ 1 char, strip diacritics).
+ * @param {string} v
+ * @returns {string[]}
+ */
+function nameTokens(v) {
+  if (!v) return [];
+  return String(v)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+/**
+ * Return true when the URL hostname belongs to a generic directory.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isGenericDirectoryUrl(url) {
+  if (!url) return false;
+  try {
+    const host = new URL(url.startsWith("http") ? url : `https://${url}`).hostname.replace(/^www\./, "");
+    return GENERIC_DIRECTORY_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return distinctive tokens (≥ 4 chars, not a stop word) from a string.
+ * @param {string} v
+ * @returns {string[]}
+ */
+function distinctiveTokens(v) {
+  return nameTokens(v).filter((t) => t.length >= 4 && !NAME_STOP_WORDS.has(t));
+}
+
+/**
+ * Compute visual signals + a recommendation for a single review-queue result.
+ *
+ * @param {object} result  A pipeline result object (bestPhone, bestPhoneBelongsTo, …)
+ * @returns {{
+ *   signals: Array<{kind: 'positive'|'negative'|'neutral', icon: string, text: string}>,
+ *   recommendation: 'accept'|'reject'|'verify'
+ * }}
+ */
+export function computeReviewSignals(result) {
+  if (!result || typeof result !== "object") {
+    return { signals: [], recommendation: "verify" };
+  }
+
+  const signals = [];
+
+  const ownerName = String(result.lead_owner_name || "").trim();
+  const belongsTo = String(result.bestPhoneBelongsTo || "").trim();
+  const bestPhone = String(result.bestPhone || "").trim();
+  const relationship = String(result.phoneRelationship || "").trim();
+  const bestWebsite = String(result.bestWebsite || "").trim();
+  const phoneCandidates = Array.isArray(result.phoneCandidates) ? result.phoneCandidates : [];
+
+  // ── Positive signals ──────────────────────────────────────────────────────
+
+  // 1. URL contains a non-stop-word token from owner name
+  if (bestWebsite && ownerName) {
+    const ownerToks = distinctiveTokens(ownerName);
+    if (ownerToks.length > 0) {
+      const urlLower = bestWebsite.toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "");
+      if (ownerToks.some((t) => urlLower.includes(t))) {
+        signals.push({ kind: "positive", icon: "✓", text: "URL matches owner name" });
+      }
+    }
+  }
+
+  // 2. bestPhoneBelongsTo shares ≥1 distinctive token with lead_owner_name
+  if (belongsTo && ownerName) {
+    const ownerDistinct = distinctiveTokens(ownerName);
+    const belongsDistinct = distinctiveTokens(belongsTo);
+    const ownerSet = new Set(ownerDistinct);
+    if (ownerDistinct.length > 0 && belongsDistinct.some((t) => ownerSet.has(t))) {
+      signals.push({ kind: "positive", icon: "✓", text: '"Belongs to" matches owner' });
+    }
+  }
+
+  // 3. Exact director / co-owner match
+  if (relationship === "exact_director_match" || relationship === "co_owner_match") {
+    signals.push({ kind: "positive", icon: "✓", text: "Exact director/co-owner match" });
+  }
+
+  // 4. Top candidate with nameMatch=true AND score >= 5
+  const topCand = phoneCandidates[0] || null;
+  if (topCand && topCand.nameMatch === true && (topCand.score || 0) >= 5) {
+    signals.push({ kind: "positive", icon: "✓", text: "High confidence match" });
+  }
+
+  // ── Negative signals ──────────────────────────────────────────────────────
+
+  // 5. Toll-free number
+  if (bestPhone && TOLL_FREE_RE.test(bestPhone.replace(/[\s.()\-]/g, ""))) {
+    signals.push({ kind: "negative", icon: "⚠", text: "Toll-free number" });
+  }
+
+  // 6. URL is a generic directory listing AND no name match
+  if (bestWebsite) {
+    const topNameMatch = phoneCandidates[0]?.nameMatch === true;
+    if (isGenericDirectoryUrl(bestWebsite) && !topNameMatch) {
+      signals.push({ kind: "negative", icon: "⚠", text: "Generic directory listing" });
+    }
+  }
+
+  // 7. No token overlap between owner name and bestPhoneBelongsTo (after stop words)
+  if (ownerName && belongsTo) {
+    const ownerDistinct = distinctiveTokens(ownerName);
+    const belongsDistinct = distinctiveTokens(belongsTo);
+    const ownerSet = new Set(ownerDistinct);
+    // Only fire when we have enough distinctive tokens to compare meaningfully.
+    if (ownerDistinct.length > 0 && belongsDistinct.length > 0) {
+      if (!belongsDistinct.some((t) => ownerSet.has(t))) {
+        signals.push({ kind: "negative", icon: "⚠", text: "No name overlap with owner" });
+      }
+    }
+  }
+
+  // ── Neutral signals ───────────────────────────────────────────────────────
+
+  // 8. Places fallback (external match — always needs a human eye)
+  if (relationship === "places_fallback") {
+    signals.push({ kind: "neutral", icon: "ⓘ", text: "Found via Places fallback" });
+  }
+
+  // ── Recommendation ────────────────────────────────────────────────────────
+
+  const hasPositive = signals.some((s) => s.kind === "positive");
+  const hasNegative = signals.some((s) => s.kind === "negative");
+
+  let recommendation;
+  if (hasPositive && !hasNegative) {
+    recommendation = "accept";
+  } else if (hasNegative && !hasPositive) {
+    recommendation = "reject";
+  } else {
+    recommendation = "verify";
+  }
+
+  return { signals, recommendation };
+}

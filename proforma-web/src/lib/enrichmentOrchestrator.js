@@ -11,9 +11,10 @@
  *
  * @param {{ lead_owner_name?: string, [k: string]: any }} pkg
  * @param {AbortSignal} [signal]
+ * @param {{ placesFallbackEnabled?: boolean }} [opts]
  * @returns {Promise<{ ok: boolean, result?: object, error?: string, cancelled?: boolean }>}
  */
-export async function postEnrichmentSingle(pkg, signal) {
+export async function postEnrichmentSingle(pkg, signal, opts = {}) {
   // Compose the caller-provided signal with a 90-second internal timeout so a
   // hung server call cannot block a worker slot indefinitely.
   let composed;
@@ -33,7 +34,10 @@ export async function postEnrichmentSingle(pkg, signal) {
     const resp = await fetch("/api/contact-enrichment/single", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ package: pkg }),
+      body: JSON.stringify({
+        package: pkg,
+        placesFallbackEnabled: opts.placesFallbackEnabled === true,
+      }),
       signal: composed,
     });
     const json = await resp.json();
