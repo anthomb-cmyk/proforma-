@@ -54,6 +54,18 @@ const SOURCE_CFG = {
   Migrated: { tkey: "src_migrated", bg: "#F0EDE3", color: "#7B7B7B" },
 };
 
+// Call-outcome buttons that appear under "Marquer appel maintenant".
+// Each entry sets owner.callStatus + lastCallAt and appends a dated
+// note. The `id` values match LeadsManager's CALL_STATUS_CFG keys so
+// downstream filters/badges keep working.
+const CALL_OUTCOMES = [
+  { id: "connected",    label: "Rejoint",       note: "Appel rejoint.",          bg: "#E0F4E6", color: "#2D8C4E" },
+  { id: "voicemail",    label: "Boîte vocale",  note: "Boîte vocale.",            bg: "#F5EDD6", color: "#8D742D" },
+  { id: "no_answer",    label: "Pas de réponse", note: "Pas de réponse.",         bg: "#ECECEC", color: "#6B6B6B" },
+  { id: "refused",      label: "Refus",         note: "Propriétaire a refusé.",  bg: "#FCE9E6", color: "#C0392B" },
+  { id: "wrong_number", label: "Mauvais #",     note: "Mauvais numéro.",          bg: "#FCE9E6", color: "#C0392B" },
+];
+
 function sourceFor(owner, phone) {
   const k = normalizePhoneKey(phone);
   if (!k) return "Migrated";
@@ -467,6 +479,27 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
     });
   }
 
+  // Outcome buttons that record what happened on the call. Each click
+  // stamps the lastCallAt, sets owner.callStatus, and appends a dated
+  // note to owner.callNotes so the timeline stays readable. callStatus
+  // values match the LeadsManager CALL_STATUS_CFG vocabulary so a lead
+  // exported into the deal pipeline keeps its label.
+  function markOwnerCallOutcome(owner, outcomeId) {
+    if (!owner?.id) return;
+    const outcome = CALL_OUTCOMES.find((o) => o.id === outcomeId);
+    if (!outcome) return;
+    const now = new Date();
+    const stamp = now.toISOString();
+    const stampLabel = now.toLocaleString("fr-CA", { dateStyle:"short", timeStyle:"short" });
+    const line = `[${stampLabel}] ${outcome.note}`;
+    const existing = String(owner.callNotes || "").trim();
+    updateOwner(owner.id, {
+      callStatus: outcome.id,
+      lastCallAt: stamp,
+      callNotes: existing ? `${existing}\n${line}` : line,
+    });
+  }
+
   // ── Rendering ──
 
   const activeSecondaryCount = (sourceFilter !== "all" ? 1 : 0) + (sortBy !== "buildings" ? 1 : 0);
@@ -713,6 +746,10 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                 zIndex:100,
                 display:"flex",
                 flexDirection:"column",
+                // Push the fixed sheet below the iPhone Dynamic Island /
+                // status bar so the back button isn't covered by the OS
+                // overlay (status pill, in-call indicator, etc.).
+                paddingTop:"env(safe-area-inset-top)",
                 paddingBottom:"env(safe-area-inset-bottom)",
               } : {}}
             >
@@ -738,6 +775,7 @@ export default function OwnersManager({ owners = [], setOwners, onAddLeads, t, l
                     onRunAI={runAI}
                     onClearAI={clearAI}
                     onMarkCall={markOwnerCallNow}
+                    onMarkCallOutcome={markOwnerCallOutcome}
                     aiBusy={aiBusy}
                     tr={tr}
                   />
@@ -859,7 +897,7 @@ function BuildingFinances({ building, onChange, tr }) {
   );
 }
 
-function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, onMarkCall, aiBusy, tr }) {
+function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClearAI, onMarkCall, onMarkCallOutcome, aiBusy, tr }) {
   const s = stageCfg(owner.stage || "new");
   const contactNames = Array.isArray(owner.contactNames) ? owner.contactNames : [];
   const primary = owner.displayName || "(Propriétaire inconnu)";
@@ -917,6 +955,33 @@ function OwnerFiche({ owner, onUpdate, onUpdateBuildingFinances, onRunAI, onClea
             <PhoneIcon size={12} style={{marginRight:4}} />Marquer appel maintenant
           </button>
           {owner.lastCallAt && <span style={{fontSize:11,color:"var(--text2)",marginLeft:6}}>Dernier: {new Date(owner.lastCallAt).toLocaleString("fr-CA",{dateStyle:"short",timeStyle:"short"})}</span>}
+          {/* Outcome row — wraps under the action button on narrow screens. */}
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8,width:"100%"}}>
+            <span style={{fontSize:11,fontWeight:600,color:"var(--text2)",alignSelf:"center",marginRight:2}}>Résultat:</span>
+            {CALL_OUTCOMES.map((o) => {
+              const active = owner.callStatus === o.id;
+              return (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => onMarkCallOutcome?.(owner, o.id)}
+                  style={{
+                    fontSize:12,
+                    fontWeight:600,
+                    padding:"5px 10px",
+                    borderRadius:999,
+                    border:active ? `1.5px solid ${o.color}` : "1px solid var(--border)",
+                    background: active ? o.bg : "#fff",
+                    color: active ? o.color : "var(--text2)",
+                    cursor:"pointer",
+                    minHeight:32,
+                  }}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
