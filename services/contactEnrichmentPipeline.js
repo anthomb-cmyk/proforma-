@@ -356,7 +356,13 @@ async function processSinglePackage(pkg, opts) {
         recordPhone(phoneCands, p, "page", pageUrl, pageUrl, topWebsite.nameMatch);
       }
       for (const e of extractEmails(text)) {
-        recordEmail(emailCands, e, "page", pageUrl);
+        // Official website / contact page → high confidence per email rules.
+        recordEmail(emailCands, e, "page", pageUrl, {
+          belongsTo: topWebsite.nameMatch ? ownerName : pageUrl,
+          nameMatch: !!topWebsite.nameMatch,
+          confidence: topWebsite.nameMatch ? "high" : "medium",
+          evidence: "official-website-page",
+        });
       }
     }
   }
@@ -390,7 +396,15 @@ async function processSinglePackage(pkg, opts) {
         }
 
         for (const e of extractEmails(combined)) {
-          recordEmail(emailCands, e, "mailing", r.url);
+          const conf = nameMatch
+            ? "medium"
+            : (hasRealEstateKeyword(r.title) ? "medium-high" : "low");
+          recordEmail(emailCands, e, "mailing", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            confidence: conf,
+            evidence: "legacy-mailing-discovery",
+          });
         }
         if (r.title && relatedCompanies.length < opts.maxRelated) {
           relatedCompanies.push({ name: r.title, url: r.url });
@@ -713,9 +727,33 @@ async function processSinglePackage(pkg, opts) {
     evidence.push(
       `low_confidence_only: ${scored.length} candidate(s), best score=${scored[0].score} — bestPhone withheld`,
     );
-  } else if (emailCands.length > 0) {
-    status = "ready_to_email";
-    confidence = "medium";
+  }
+
+  // Email selection — confidence-ranked. Tie-broken by nameMatch.
+  const EMAIL_RANK = { high: 4, "medium-high": 3, medium: 2, low: 1 };
+  const sortedEmails = [...emailCands].sort((a, b) => {
+    const ra = EMAIL_RANK[a.confidence] || 0;
+    const rb = EMAIL_RANK[b.confidence] || 0;
+    if (rb !== ra) return rb - ra;
+    return (b.nameMatch ? 1 : 0) - (a.nameMatch ? 1 : 0);
+  });
+  const bestEmailCand = sortedEmails[0] || null;
+
+  // ready_to_email: only when there's no usable phone AND there's a strong
+  // (medium or higher) email with nameMatch or strong source attribution.
+  // Weak / generic emails alone keep status at no_contact_found / needs_review.
+  if (!bestPhone && bestEmailCand) {
+    const ec = bestEmailCand.confidence;
+    const strongEmail = ec === "high" || ec === "medium-high"
+      || (ec === "medium" && bestEmailCand.nameMatch);
+    if (strongEmail) {
+      status = (status === "needs_review") ? "needs_review" : "ready_to_email";
+      confidence = ec === "high" ? "high" : (ec === "medium-high" ? "medium" : "medium");
+    } else if (status === "no_contact_found") {
+      // Low-confidence email only — leave for human review.
+      status = "needs_review";
+      confidence = "low";
+    }
   }
 
   return {
@@ -723,10 +761,13 @@ async function processSinglePackage(pkg, opts) {
     bestPhone,
     bestPhoneBelongsTo,
     phoneRelationship,
-    bestEmail: emailCands[0]?.email || null,
+    bestEmail: bestEmailCand?.email || null,
+    bestEmailOwner: bestEmailCand?.email_owner_name || null,
+    bestEmailRelationship: bestEmailCand?.relationship_to_lead_owner || null,
+    bestEmailConfidence: bestEmailCand?.confidence || null,
     bestWebsite: websiteCands[0]?.url || null,
     phoneCandidates: scored,
-    emailCandidates: emailCands,
+    emailCandidates: sortedEmails,
     websiteCandidates: websiteCands,
     relatedCompanies,
     evidence,
