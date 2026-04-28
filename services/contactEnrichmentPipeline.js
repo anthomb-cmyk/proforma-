@@ -205,6 +205,10 @@ export async function runContactEnrichmentPreview({
   searchFn,
   fetchPageFn,
   options = {},
+  // Top-level convenience aliases for placesFallbackEnabled / placesFallbackFn
+  // so callers (and tests) can pass them directly without nesting inside options.
+  placesFallbackEnabled: topLevelPlacesFallbackEnabled,
+  placesFallbackFn: topLevelPlacesFallbackFn,
 }) {
   if (!Array.isArray(packages) || !packages.length) return [];
   if (typeof searchFn !== "function") throw new Error("searchFn is required");
@@ -252,10 +256,13 @@ export async function runContactEnrichmentPreview({
       b2bhintFetchEnabled: options.b2bhintFetchEnabled === true,
       // Phase 4: Places fallback — opt-in, injected as a function so tests
       // can provide a mock without touching the real Places client.
-      placesFallbackEnabled: options.placesFallbackEnabled === true,
-      placesFallbackFn: typeof options.placesFallbackFn === "function"
-        ? options.placesFallbackFn
-        : null,
+      // Top-level args take priority over options.* for convenience.
+      placesFallbackEnabled: (topLevelPlacesFallbackEnabled === true || options.placesFallbackEnabled === true),
+      placesFallbackFn: typeof topLevelPlacesFallbackFn === "function"
+        ? topLevelPlacesFallbackFn
+        : typeof options.placesFallbackFn === "function"
+          ? options.placesFallbackFn
+          : null,
     });
     results.push(result);
   }
@@ -872,17 +879,20 @@ async function processSinglePackage(pkg, opts) {
   }
 
   // ── Places fallback ──────────────────────────────────────────────────────
-  // Runs ONLY when:
-  //   (a) the web-search pipeline found nothing (status === "no_contact_found")
-  //   (b) the caller opted in (opts.placesFallbackEnabled === true)
-  //   (c) a placesFallbackFn was supplied (wraps runPlacesFallback with the
-  //       real Places client so tests can inject a mock)
+  // Runs whenever no phone was found AND the file didn't already supply one
+  // (i.e. status !== "skipped_existing_phone"), the caller opted in via
+  // placesFallbackEnabled, and a placesFallbackFn was supplied. This is
+  // intentionally broader than the original "no_contact_found" gate: statuses
+  // like ready_to_email (email found, no phone) and needs_review (weak signal,
+  // possibly no phone) should also benefit from a Places lookup — the intent
+  // is "find phones we don't have yet", not just "found nothing at all".
   //
   // On success the result is promoted to needs_review (NOT ready_to_call —
   // Places matches are external and may not match the entity exactly; human
   // confirmation is required before calling).
   if (
-    status === "no_contact_found" &&
+    !bestPhone &&
+    status !== "skipped_existing_phone" &&
     opts.placesFallbackEnabled === true &&
     typeof opts.placesFallbackFn === "function"
   ) {

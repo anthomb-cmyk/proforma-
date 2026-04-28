@@ -1093,3 +1093,78 @@ test("[b2bhint-fetch] Non-B2BHint profile URL does NOT trigger page fetch", asyn
     "b2bhint_fetch evidence should NOT appear for OpenCorporates URL",
   );
 });
+
+/* ------------------------------------------------------------------ *
+ *  P1 audit fix 2: Widen Places fallback trigger
+ * ------------------------------------------------------------------ */
+
+test("Places fallback fires when Brave finds email but no phone", async () => {
+  // Brave returns a result with an email in the snippet but no phone.
+  // Status should be ready_to_email, bestPhone null. Places fallback runs.
+  let placesCalled = false;
+  const placesFallbackFn = async () => {
+    placesCalled = true;
+    return {
+      ok: true,
+      phone: "(514) 555-0188",
+      businessName: "Found via Places",
+      address: "100 rue X",
+      evidence: [],
+    };
+  };
+  const pkg = makePkg({ /* a package likely to produce ready_to_email but no phone */ });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([{ title: "X", snippet: "info@example.ca", url: "https://example.ca" }]),
+    placesFallbackEnabled: true,
+    placesFallbackFn,
+  });
+  assert.equal(placesCalled, true, "Places fallback should have been called");
+  assert.equal(results[0].bestPhone, "(514) 555-0188");
+});
+
+test("Places fallback does NOT fire when Brave already found a phone", async () => {
+  let placesCalled = false;
+  const placesFallbackFn = async () => { placesCalled = true; return { ok: true, phone: "x" }; };
+  const pkg = makePkg({});
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([{ title: pkg.lead_owner_name, snippet: `${PHONE_555}`, url: "https://x.com" }]),
+    placesFallbackEnabled: true,
+    placesFallbackFn,
+  });
+  assert.equal(placesCalled, false, "Places must not run when bestPhone already exists");
+});
+
+test("Places fallback does NOT fire when status is skipped_existing_phone", async () => {
+  let placesCalled = false;
+  const placesFallbackFn = async () => { placesCalled = true; return { ok: true, phone: "x" }; };
+  const pkg = makePkg({
+    candidatePhones: [{ phone: PHONE_555, relationship_to_lead_owner: "owner" }],
+  });
+  await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([]),
+    placesFallbackEnabled: true,
+    placesFallbackFn,
+  });
+  assert.equal(placesCalled, false);
+});
+
+test("Places fallback still works on no_contact_found", async () => {
+  // Existing behavior — verify the new condition still covers this case.
+  let placesCalled = false;
+  const placesFallbackFn = async () => {
+    placesCalled = true;
+    return { ok: true, phone: "(514) 555-0188", businessName: "X", address: "Y", evidence: [] };
+  };
+  const pkg = makePkg({});
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([]),  // no results → no_contact_found
+    placesFallbackEnabled: true,
+    placesFallbackFn,
+  });
+  assert.equal(placesCalled, true);
+  assert.equal(results[0].bestPhone, "(514) 555-0188");
+});
