@@ -47,6 +47,7 @@ import {
   getCachedResult,
   cacheResult,
   clearCachedResult,
+  shouldBypassCacheForPlaces,
 } from "../lib/enrichmentResultCache.js";
 import { buildScorecardCSV } from "../lib/scorecardExport.js";
 
@@ -604,6 +605,11 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     for (const pkg of nextBatchPkgs) {
       const hit = getCachedResult(pkg);
       if (hit.hit) {
+        if (shouldBypassCacheForPlaces(hit.result, placesFallbackRef.current)) {
+          // Cached result has no phone and Places was never tried — re-run.
+          cacheMisses.push(pkg);
+          continue;
+        }
         cacheHits.push({ pkg, result: hit.result, cachedAt: hit.cachedAt });
       } else {
         cacheMisses.push(pkg);

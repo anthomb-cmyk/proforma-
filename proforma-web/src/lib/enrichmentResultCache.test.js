@@ -148,3 +148,26 @@ describe("enrichmentResultCache", () => {
     expect(stats.newestAt).toBeGreaterThanOrEqual(stats.oldestAt);
   });
 });
+
+import { shouldBypassCacheForPlaces } from "./enrichmentResultCache.js";
+
+describe("shouldBypassCacheForPlaces", () => {
+  test("phone exists + Places ON → use cache (no bypass)", () => {
+    expect(shouldBypassCacheForPlaces({ bestPhone: "5145550100" }, true)).toBe(false);
+  });
+  test("no phone + Places OFF → use cache (no bypass)", () => {
+    expect(shouldBypassCacheForPlaces({ bestPhone: null, evidence: [] }, false)).toBe(false);
+  });
+  test("no phone + Places ON + no places_fallback evidence → BYPASS cache", () => {
+    expect(shouldBypassCacheForPlaces({ bestPhone: null, evidence: ["direct_query: x"] }, true)).toBe(true);
+  });
+  test("no phone + Places ON + has places_fallback evidence → use cache", () => {
+    expect(shouldBypassCacheForPlaces({ bestPhone: null, evidence: ["places_fallback_skipped: blocked_type"] }, true)).toBe(false);
+  });
+  test("null result → use cache (no bypass) — defensive", () => {
+    expect(shouldBypassCacheForPlaces(null, true)).toBe(false);
+  });
+  test("places_fallback_skipped also counts as already-tried", () => {
+    expect(shouldBypassCacheForPlaces({ bestPhone: null, evidence: ["places_fallback: phone X"] }, true)).toBe(false);
+  });
+});
