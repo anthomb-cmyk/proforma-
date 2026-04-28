@@ -28,6 +28,14 @@ import {
   isContactEnrichmentDebugEnabled,
   runContactEnrichmentPreview,
 } from "../lib/contactEnrichmentPreview.js";
+import {
+  runEnrichmentOrchestrator,
+  postEnrichmentSingle,
+} from "../lib/enrichmentOrchestrator.js";
+import {
+  groupPackagesByOwner,
+  fanOutResult,
+} from "../lib/ownerDeduplication.js";
 import { CloseIcon } from "./Icons.jsx";
 
 const cellLabel = { fontSize: 11, color: "var(--text3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
@@ -216,6 +224,18 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   // Batch size selector (5 / 10 / 25 / 50 / 100)
   const [batchSize, setBatchSize] = useState(5);
 
+  // Per-package mode: uses orchestrator + owner dedup instead of batch preview
+  const [perPkgMode, setPerPkgMode] = useState(true);
+  // Concurrency for the orchestrator (1–5, default 3)
+  const [concurrency, setConcurrency] = useState(3);
+  // Dedup toast shown once per session
+  const [dedupToast, setDedupToast] = useState(/** @type {string|null} */ null);
+  // Per-package progress tracking: how many of the representatives completed
+  const [pkgDone, setPkgDone] = useState(0);
+  const [pkgTotal, setPkgTotal] = useState(0);
+  // Orchestrator abort controller ref (separate from batch abort)
+  const orchAbortRef = useRef(/** @type {AbortController|null} */ (null));
+
   // Run state for the active network call
   const [enrichState, setEnrichState] = useState(
     /** @type {"idle"|"loading"|"done"|"error"} */ "idle"
@@ -295,6 +315,13 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     return () => clearTimeout(t);
   }, [sessionToast]);
 
+  // Auto-dismiss the dedup toast after 5s.
+  useEffect(() => {
+    if (!dedupToast) return undefined;
+    const t = setTimeout(() => setDedupToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [dedupToast]);
+
   const allPkgs = data.topHighValueWithoutPhonePackages || [];
   const unenrichedPkgs = allPkgs.filter((p) => !enrichedKeys.has(makePackageKey(p)));
   const nextBatchPkgs = unenrichedPkgs.slice(0, batchSize);
@@ -343,6 +370,81 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     }
   }, []);
 
+  // Per-package orchestrator runner (replaces runBatch when perPkgMode is ON)
+  const runPerPkgMode = useCallback(async (pkgsToEnrich) => {
+    if (!pkgsToEnrich?.length) return;
+    if (orchAbortRef.current) orchAbortRef.current.abort();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    orchAbortRef.current = controller;
+
+    // Group by owner+address — only representatives get enriched
+    const pkgEntries = pkgsToEnrich.map((pkg) => ({
+      packageKey: makePackageKey(pkg),
+      package: pkg,
+    }));
+    const { groups, representatives } = groupPackagesByOwner(pkgEntries);
+
+    const totalInput = pkgsToEnrich.length;
+    const totalReps = representatives.length;
+    setPkgTotal(totalReps);
+    setPkgDone(0);
+
+    if (totalInput !== totalReps) {
+      setDedupToast(
+        `Grouped ${totalInput} packages → ${totalReps} unique owner${totalReps !== 1 ? "s" : ""} (1 enrichment per owner, fanned out)`
+      );
+    }
+
+    setEnrichState("loading");
+    setEnrichError(null);
+    setCurrentBatchResults(null);
+    setEnrichStartedAt(Date.now());
+    setEnrichElapsedMs(0);
+
+    let completedCount = 0;
+
+    const res = await runEnrichmentOrchestrator({
+      packages: representatives,
+      concurrency,
+      callSingle: postEnrichmentSingle,
+      signal: controller?.signal,
+      onProgress: ({ packageKey, phase, result }) => {
+        if (phase === "done" && result) {
+          completedCount++;
+          setPkgDone(completedCount);
+
+          // Fan out to all grouped members
+          const group = groups.get(packageKey) || [];
+          const fanned = fanOutResult(result, group);
+
+          setAllEnrichedResults((prev) => {
+            const next = new Map(prev);
+            for (const [key, r] of fanned) next.set(key, r);
+            return next;
+          });
+          setEnrichedKeys((prev) => {
+            const next = new Set(prev);
+            for (const key of fanned.keys()) next.add(key);
+            return next;
+          });
+        } else if (phase === "error") {
+          setPkgDone((d) => d + 1);
+        }
+      },
+    });
+
+    if (controller && orchAbortRef.current !== controller) return;
+    orchAbortRef.current = null;
+
+    if (res.cancelled) {
+      setEnrichState("idle");
+    } else {
+      // Collect batch results for the table from the final allEnrichedResults state
+      setCurrentBatchResults([...res.results.values()]);
+      setEnrichState("done");
+    }
+  }, [concurrency]);
+
   // Auto-advance: when a batch finishes successfully and auto-advance is
   // enabled and we're not paused, automatically queue the next batch.
   const handleEnrichNextRef = useRef(null);
@@ -354,11 +456,15 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     return () => clearTimeout(t);
   }, [enrichState, autoAdvance, paused, nextBatchPkgs.length]);
 
-  // Cancel handler — aborts the in-flight fetch.
+  // Cancel handler — aborts the in-flight fetch or orchestrator.
   const handleCancelEnrich = useCallback(() => {
     if (enrichAbortRef.current) {
       enrichAbortRef.current.abort();
       enrichAbortRef.current = null;
+    }
+    if (orchAbortRef.current) {
+      orchAbortRef.current.abort();
+      orchAbortRef.current = null;
     }
     setEnrichState("idle");
   }, []);
@@ -379,8 +485,12 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     const doneCount = allPkgs.filter((p) => enrichedKeys.has(makePackageKey(p))).length;
     setCurrentBatch(nextBatchPkgs);
     setCurrentBatchRange({ start: doneCount + 1, end: doneCount + nextBatchPkgs.length });
-    runBatch(nextBatchPkgs);
-  }, [nextBatchPkgs, allPkgs, enrichedKeys, runBatch]);
+    if (perPkgMode) {
+      runPerPkgMode(nextBatchPkgs);
+    } else {
+      runBatch(nextBatchPkgs);
+    }
+  }, [nextBatchPkgs, allPkgs, enrichedKeys, runBatch, perPkgMode, runPerPkgMode]);
 
   // Keep ref in sync so auto-advance always invokes the latest closure.
   useEffect(() => { handleEnrichNextRef.current = handleEnrichNext; }, [handleEnrichNext]);
@@ -627,19 +737,45 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <label style={{ fontSize: 11, color: "var(--text3)" }}>
-                  Batch:&nbsp;
-                  <select
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(Number(e.target.value))}
+                {/* Per-package mode toggle */}
+                <label style={{ fontSize: 11, color: "var(--text3)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={perPkgMode}
+                    onChange={(e) => setPerPkgMode(e.target.checked)}
                     disabled={enrichState === "loading"}
-                    style={{ fontSize: 11, padding: "1px 4px" }}
-                  >
-                    {BATCH_SIZES.map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
+                  />
+                  Per-package mode
                 </label>
+                {perPkgMode ? (
+                  <label style={{ fontSize: 11, color: "var(--text3)" }}>
+                    Concurrency:&nbsp;
+                    <select
+                      value={concurrency}
+                      onChange={(e) => setConcurrency(Number(e.target.value))}
+                      disabled={enrichState === "loading"}
+                      style={{ fontSize: 11, padding: "1px 4px" }}
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label style={{ fontSize: 11, color: "var(--text3)" }}>
+                    Batch:&nbsp;
+                    <select
+                      value={batchSize}
+                      onChange={(e) => setBatchSize(Number(e.target.value))}
+                      disabled={enrichState === "loading"}
+                      style={{ fontSize: 11, padding: "1px 4px" }}
+                    >
+                      {BATCH_SIZES.map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
             </div>
 
@@ -693,6 +829,17 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
             {sessionToast && (
               <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6 }}>
                 {sessionToast}
+              </div>
+            )}
+
+            {/* Dedup toast — shown once when owner grouping kicks in. */}
+            {dedupToast && (
+              <div style={{
+                fontSize: 11, color: "#1E40AF",
+                background: "#DBEAFE", borderRadius: 6,
+                padding: "4px 10px", marginBottom: 6,
+              }}>
+                {dedupToast}
               </div>
             )}
 
@@ -763,7 +910,9 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>
-                    Enriching {currentBatch?.length || 0} package{(currentBatch?.length || 0) !== 1 ? "s" : ""}…
+                    {perPkgMode
+                      ? `${pkgDone} / ${pkgTotal} packages enriched…`
+                      : `Enriching ${currentBatch?.length || 0} package${(currentBatch?.length || 0) !== 1 ? "s" : ""}…`}
                   </div>
                   <button
                     type="button"
