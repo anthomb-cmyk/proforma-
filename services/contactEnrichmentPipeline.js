@@ -32,6 +32,9 @@ import {
   validateCoOwnerMatch,
   isStrongCoOwnerMatch,
 } from "./coOwnerValidator.js";
+import {
+  evaluateNameMatch,
+} from "./nameMatchEvaluator.js";
 
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
@@ -286,6 +289,22 @@ async function processSinglePackage(pkg, opts) {
   // across all tracks. Used in Step 4b for director / related-company expansion.
   const profileResults = [];
 
+  // Co-owner names from the rôle row.
+  const coOwnerNames = Array.isArray(pkg.coOwnerNames) && pkg.coOwnerNames.length
+    ? pkg.coOwnerNames
+    : (Array.isArray(pkg.co_owners) ? pkg.co_owners : []);
+  // Directors / officers extracted from any company-profile result, populated
+  // incrementally in Step 4 so downstream evaluateNameMatch calls can authorise
+  // an exact_director match for person results.
+  const directorsAcc = [];
+  // Per-result kind-aware nameMatch evaluator.
+  const evalName = (r, extra = {}) => evaluateNameMatch(ownerName, r?.title || "", {
+    coOwnerNames,
+    knownDirectors: directorsAcc,
+    snippet: r?.snippet || "",
+    ...extra,
+  });
+
   const strategy = pkg.search_strategy || "direct_entity";
   const useDirectQueries = strategy !== "mailing_address_only" && strategy !== "skip_low_value";
   const useMailingQueries = strategy === "mailing_address_only"
@@ -319,11 +338,14 @@ async function processSinglePackage(pkg, opts) {
           profileResults.push(r);
           evidence.push(`direct_profile: "${r.title}" at ${r.url}`);
         }
-        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const nameEval = evalName(r);
+        const nameMatch = nameEval.nameMatch;
+        const weakNameMatch = nameEval.weakNameMatch;
         const combined = `${r.title} ${r.snippet}`;
         for (const p of extractPhones(combined)) {
           recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch, {
             sourceQuality: cls.quality,
+            weakNameMatch,
           });
         }
         for (const e of extractEmails(combined)) {
@@ -335,6 +357,7 @@ async function processSinglePackage(pkg, opts) {
           recordEmail(emailCands, e, "direct_entity", r.url, {
             belongsTo: r.title,
             nameMatch,
+            weakNameMatch,
             confidence: conf,
             evidence: `direct: ${cls.quality}`,
           });
@@ -386,14 +409,16 @@ async function processSinglePackage(pkg, opts) {
           evidence.push(`rejected: "${r.title}" (junk_business)`);
           continue;
         }
-        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const nameEval = evalName(r);
+        const nameMatch = nameEval.nameMatch;
+        const weakNameMatch = nameEval.weakNameMatch;
         const combined = `${r.title} ${r.snippet}`;
 
         // Individual owners: mailing-address business phones are noise.
         // Only record if there is an explicit name match (rare for personal names).
         if (!isIndividual || nameMatch) {
           for (const p of extractPhones(combined)) {
-            recordPhone(phoneCands, p, "mailing", r.url, r.title, nameMatch);
+            recordPhone(phoneCands, p, "mailing", r.url, r.title, nameMatch, { weakNameMatch });
           }
         } else {
           evidence.push(`skipped: individual owner + mailing business "${r.title}" (no name match)`);
@@ -406,6 +431,7 @@ async function processSinglePackage(pkg, opts) {
           recordEmail(emailCands, e, "mailing", r.url, {
             belongsTo: r.title,
             nameMatch,
+            weakNameMatch,
             confidence: conf,
             evidence: "legacy-mailing-discovery",
           });
@@ -425,10 +451,12 @@ async function processSinglePackage(pkg, opts) {
     evidence.push(`related_query: "${rel.name}" → ${res.results.length} results`);
     for (const r of res.results.slice(0, 2)) {
       if (isJunkResult(r.title, r.url)) continue;
-      const nameMatch = hasNameOverlap(ownerName, r.title);
+      const nameEval = evalName(r);
+      const nameMatch = nameEval.nameMatch;
+      const weakNameMatch = nameEval.weakNameMatch;
       if (!isIndividual || nameMatch) {
         for (const p of extractPhones(`${r.title} ${r.snippet}`)) {
-          recordPhone(phoneCands, p, "related", r.url, rel.name, nameMatch);
+          recordPhone(phoneCands, p, "related", r.url, rel.name, nameMatch, { weakNameMatch });
         }
       }
     }
@@ -467,7 +495,9 @@ async function processSinglePackage(pkg, opts) {
           // labeled as company_profile_expansion.
         }
 
-        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const nameEval = evalName(r);
+        const nameMatch = nameEval.nameMatch;
+        const weakNameMatch = nameEval.weakNameMatch;
         const combined = `${r.title} ${r.snippet}`;
 
         // Individual owners: only accept address-discovery phones with nameMatch.
@@ -478,6 +508,7 @@ async function processSinglePackage(pkg, opts) {
                 ? "company_profile_expansion"
                 : "company_discovered_from_same_mailing_address",
               sourceQuality: cls.quality,
+              weakNameMatch,
             });
           }
         }
@@ -492,6 +523,7 @@ async function processSinglePackage(pkg, opts) {
           recordEmail(emailCands, e, "mailing", r.url, {
             belongsTo: r.title,
             nameMatch,
+            weakNameMatch,
             relationship: cls.quality === "company_profile"
               ? "company_profile_expansion"
               : "company_discovered_from_same_mailing_address",
@@ -527,6 +559,10 @@ async function processSinglePackage(pkg, opts) {
       const profile = extractCompanyProfile(r);
       if (!profile) continue;
       profiles.push(profile);
+      // Make extracted directors available to evaluateNameMatch.
+      for (const d of profile.directors || []) {
+        if (d && !directorsAcc.includes(d)) directorsAcc.push(d);
+      }
       evidence.push(
         `company_profile: "${profile.companyName}" NEQ=${profile.enterpriseNumber || "?"}`
         + ` directors=${profile.directors.length} related=${profile.relatedCompanies.length}`,
@@ -562,22 +598,20 @@ async function processSinglePackage(pkg, opts) {
           evidence.push(`rejected: "${r.title}" (${cls.quality})`);
           continue;
         }
-        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const nameEval = evalName(r);
+        const nameMatch = nameEval.nameMatch;
+        const weakNameMatch = nameEval.weakNameMatch;
         const combined = `${r.title} ${r.snippet}`;
 
-        // Exact-director check: does any extracted director name match the
-        // result name? When it does, this is an exact_director_match — the
-        // strongest possible same-mailing signal.
-        let isExactDirector = false;
-        for (const profile of profiles) {
-          for (const dir of profile.directors || []) {
-            const dm = validateCoOwnerMatch(r.title, [dir]);
-            if (dm.matchType === "exact_full_name" || dm.matchType === "token_overlap") {
-              isExactDirector = true;
-              break;
-            }
-          }
-          if (isExactDirector) break;
+        // Exact-director check: nameMatchEvaluator already enforces exact
+        // full-name semantics for person results against directorsAcc, so
+        // e.g. "Jonathan Choinière" cannot be elevated to a director match
+        // against "Mathieu Choinière".
+        const isExactDirector = nameEval.matchType === "exact_director";
+        if (weakNameMatch && !nameMatch) {
+          evidence.push(
+            `weak_person_last_name_match: "${r.title}" — ${nameEval.reason}`,
+          );
         }
 
         const relationship = isExactDirector
@@ -590,6 +624,7 @@ async function processSinglePackage(pkg, opts) {
               nameMatch || isExactDirector, {
                 relationship,
                 sourceQuality: cls.quality,
+                weakNameMatch: weakNameMatch && !isExactDirector,
               });
           }
         }
@@ -600,12 +635,27 @@ async function processSinglePackage(pkg, opts) {
           recordEmail(emailCands, e, "direct_entity", r.url, {
             belongsTo: r.title,
             nameMatch: nameMatch || isExactDirector,
+            weakNameMatch: weakNameMatch && !isExactDirector,
             relationship,
             confidence: conf,
             evidence: `profile_expansion: ${cls.quality}`,
           });
         }
       }
+    }
+  }
+
+  // If we extracted at least one profile but no candidate was upgraded via
+  // exact_director_match, emit a single evidence line so the reviewer sees
+  // why a Choinière-style person result remained needs_review.
+  if (profileResults.length > 0 && directorsAcc.length > 0) {
+    const anyDirectorMatch = phoneCands.some((c) => c.relationship === "exact_director_match")
+      || emailCands.some((e) => e.relationship_to_lead_owner === "exact_director_match");
+    if (!anyDirectorMatch) {
+      evidence.push(
+        `profile_director_not_matched: directors=[${directorsAcc.join(", ")}] — ` +
+        `no exact full-name match found in any expansion result`,
+      );
     }
   }
 
@@ -617,15 +667,17 @@ async function processSinglePackage(pkg, opts) {
   // a co_owner_match relationship — so a numbered company's co-owner mentioned
   // on a real-estate site can be promoted to ready_to_call. A weak (last-name
   // only) match never upgrades on its own; it gets recorded for needs_review.
-  const coOwnerNames = Array.isArray(pkg.coOwnerNames) && pkg.coOwnerNames.length
-    ? pkg.coOwnerNames
-    : (Array.isArray(pkg.co_owners) ? pkg.co_owners : []);
+  // (coOwnerNames already declared at the top of the function for evalName.)
   if (coOwnerNames.length > 0) {
     for (const c of phoneCands) {
-      if (c.nameMatch) continue;
+      // Even when nameMatch is already true (because evaluateNameMatch
+      // detected an exact co-owner / director on the result side at
+      // record time), we still want to surface the more specific
+      // co_owner_match relationship label here so the export and UI
+      // attribute the phone correctly.
       const m = validateCoOwnerMatch(c.belongsTo || "", coOwnerNames);
       if (isStrongCoOwnerMatch(m)) {
-        c.nameMatch = true;
+        if (!c.nameMatch) c.nameMatch = true;
         c.coOwnerMatch = m;
         // co_owner_match is the most-specific relationship label — it overrides
         // generic same-mailing labels like company_discovered_from_same_mailing_address.
@@ -633,7 +685,10 @@ async function processSinglePackage(pkg, opts) {
         evidence.push(
           `co_owner_upgrade: phone "${c.belongsTo}" → "${m.matchedName}" (${m.matchType})`,
         );
-      } else if (m.match === "weak") {
+        continue;
+      }
+      if (c.nameMatch) continue;
+      if (m.match === "weak") {
         c.weakCoOwnerMatch = m.matchedName;
         evidence.push(
           `co_owner_weak: phone "${c.belongsTo}" shares only last name with "${m.matchedName}"`,
@@ -720,6 +775,17 @@ async function processSinglePackage(pkg, opts) {
       status = "needs_review";
       confidence = "low";
     }
+    // Weak person-name match (last-name-only on a person result) must never
+    // become ready_to_call from that signal alone — even if the candidate
+    // came from a high-trust source. The candidate still surfaces with the
+    // phone for human review.
+    if (bestCand.weakNameMatch && !bestCand.nameMatch && status === "ready_to_call") {
+      evidence.push(
+        `rejected_ready_to_call: first_name_mismatch (weak last-name overlap on person result "${bestCand.belongsTo}")`,
+      );
+      status = "needs_review";
+      confidence = "low";
+    }
 
     evidence.push(
       `best_phone: ${bestPhone} from "${bestPhoneBelongsTo}" ` +
@@ -789,6 +855,10 @@ function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch, o
   if (existing) {
     existing.occurrences = (existing.occurrences || 1) + 1;
     if (nameMatch) existing.nameMatch = true;
+    // weakNameMatch only sticks while no strong match exists — once nameMatch
+    // is true the weak flag is dropped so the candidate isn't downgraded.
+    if (existing.nameMatch) existing.weakNameMatch = false;
+    else if (opts.weakNameMatch) existing.weakNameMatch = true;
     // First-set wins for relationship/sourceQuality so the legacy mailing
     // track (Step 3) keeps its un-labeled candidates intact when the
     // address-discovery track (Step 4a) would otherwise relabel them.
@@ -797,6 +867,7 @@ function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch, o
       digits, raw, source,
       url: url || "", belongsTo: belongsTo || "",
       occurrences: 1, nameMatch: !!nameMatch,
+      weakNameMatch: !nameMatch && !!opts.weakNameMatch,
       relationship: opts.relationship || null,
       sourceQuality: opts.sourceQuality || null,
     });
@@ -831,6 +902,7 @@ function recordEmail(list, email, source, url, opts = {}) {
     confidence: opts.confidence || "low",
     evidence: opts.evidence || "",
     nameMatch: !!opts.nameMatch,
+    weakNameMatch: !opts.nameMatch && !!opts.weakNameMatch,
   });
 }
 

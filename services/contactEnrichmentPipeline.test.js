@@ -823,3 +823,117 @@ test("[source-quality] directory-only result without name match → not ready_to
   // explicit name match to clear ready_to_call.
   assert.notEqual(r.status, "ready_to_call");
 });
+
+/* ─── Choinière regression: person last-name overlap is not nameMatch ───── */
+
+test("[choiniere] B2BHint director Mathieu vs result Jonathan — does NOT become ready_to_call", async () => {
+  // Owner is the company. B2BHint profile lists Mathieu Choinière as a
+  // director. Profile-expansion query then surfaces "Jonathan Choinière,
+  // Courtier Immobilier" — same family name only. Must NOT promote to
+  // ready_to_call from that signal alone.
+  const profileResult = {
+    title: "Gestion Immobilière Choinière Inc. - B2BHint",
+    snippet: "NEQ: 1166869975. Dirigeants: Mathieu Choinière. Adresse: 595 rue de l'Émeraude, Bromont.",
+    url: "https://b2bhint.com/fr/company/ca-qc/gestion-immobiliere-choiniere-inc--1166869975",
+  };
+  const personResult = {
+    title: "Jonathan Choinière, Courtier Immobilier",
+    snippet: `Equipe Choinière Gaucher — ${PHONE_555}`,
+    url: "https://example-broker.ca",
+  };
+  let queryNum = 0;
+  const stagedSearch = async () => {
+    queryNum += 1;
+    if (queryNum === 1) return { ok: true, results: [profileResult] };
+    return { ok: true, results: [personResult] };
+  };
+  const pkg = makePkg({
+    lead_owner_name: "GESTION IMMOBILIÈRE CHOINIÈRE INC.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "mailing_address_only",
+    coOwnerNames: [],
+    mailing_address: "595 rue de l'Émeraude",
+    mailing_city: "Bromont",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+  });
+  const r = results[0];
+  assert.notEqual(r.status, "ready_to_call",
+    "Jonathan Choinière (last-name overlap only, not in directors/co-owners) must not be ready_to_call");
+  assert.ok(
+    r.evidence.some((e) => /weak_person_last_name_match|profile_director_not_matched|rejected_ready_to_call.*first_name_mismatch/.test(e)),
+    "expected weak_person_last_name_match / first_name_mismatch / profile_director_not_matched evidence",
+  );
+});
+
+test("[choiniere] exact director Mathieu Choinière → ready_to_call via exact_director_match", async () => {
+  const profileResult = {
+    title: "Gestion Immobilière Choinière Inc. - B2BHint",
+    snippet: "NEQ: 1166869975. Dirigeants: Mathieu Choinière. Adresse: 595 rue de l'Émeraude, Bromont.",
+    url: "https://b2bhint.com/fr/company/ca-qc/gestion-immobiliere-choiniere-inc--1166869975",
+  };
+  const directorResult = {
+    title: "Mathieu Choinière",
+    snippet: `Investisseur immobilier — ${PHONE_555}`,
+    url: "https://example-mathieu.ca",
+  };
+  let queryNum = 0;
+  const stagedSearch = async () => {
+    queryNum += 1;
+    if (queryNum === 1) return { ok: true, results: [profileResult] };
+    return { ok: true, results: [directorResult] };
+  };
+  const pkg = makePkg({
+    lead_owner_name: "GESTION IMMOBILIÈRE CHOINIÈRE INC.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "mailing_address_only",
+    mailing_address: "595 rue de l'Émeraude",
+    mailing_city: "Bromont",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+  });
+  const r = results[0];
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.bestPhone, PHONE_555);
+});
+
+test("[choiniere] exact co-owner Jonathan in coOwnerNames → ready_to_call via co_owner_match", async () => {
+  const profileResult = {
+    title: "Gestion Immobilière Choinière Inc. - B2BHint",
+    snippet: "NEQ: 1166869975. Dirigeants: Mathieu Choinière. Adresse: 595 rue de l'Émeraude, Bromont.",
+    url: "https://b2bhint.com/fr/company/ca-qc/gestion-immobiliere-choiniere-inc--1166869975",
+  };
+  const personResult = {
+    title: "Jonathan Choinière",
+    snippet: `Real estate broker — ${PHONE_555}`,
+    url: "https://example-jonathan.ca",
+  };
+  let queryNum = 0;
+  const stagedSearch = async () => {
+    queryNum += 1;
+    if (queryNum === 1) return { ok: true, results: [profileResult] };
+    return { ok: true, results: [personResult] };
+  };
+  const pkg = makePkg({
+    lead_owner_name: "GESTION IMMOBILIÈRE CHOINIÈRE INC.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "mailing_address_only",
+    coOwnerNames: ["Jonathan Choinière"],
+    mailing_address: "595 rue de l'Émeraude",
+    mailing_city: "Bromont",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+  });
+  const r = results[0];
+  assert.equal(r.status, "ready_to_call");
+  assert.equal(r.phoneRelationship, "co_owner_match");
+});

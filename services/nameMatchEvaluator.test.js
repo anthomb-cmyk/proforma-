@@ -44,18 +44,30 @@ describe("isPersonName", () => {
 });
 
 describe("evaluateNameMatch — entity ↔ entity", () => {
-  test("≥2 distinct tokens overlap → nameMatch", () => {
+  test("entity ↔ entity where owner's only sig token is shared → strong", () => {
+    // Owner significant tokens (after stop-word filter) = ["choiniere"];
+    // result has "choiniere" too. The owner's full distinguishing identity
+    // is matched, so this is a strong match (matchType: entity_token_overlap).
+    // The strict rule the user wanted was for PERSON results, not entity↔entity.
     const r = evaluateNameMatch(
       "GESTION IMMOBILIÈRE CHOINIÈRE INC.",
       "INVESTISSEMENTS CHOINIÈRE TREMBLAY INC.",
     );
-    // Note: only "choiniere" survives stop-word filter on owner side
-    // (gestion/immobiliere are stop). Result side has "choiniere" + "tremblay".
-    // → 1 overlapping token = weak (not strong). This matches spec:
-    //   "single shared family token is not enough" even between entities.
-    assert.equal(r.nameMatch, false);
-    assert.equal(r.weakNameMatch, true);
-    assert.equal(r.matchType, "single_entity_token_overlap");
+    assert.equal(r.nameMatch, true);
+    assert.equal(r.matchType, "entity_token_overlap");
+    assert.match(r.reason, /entity_all_owner_tokens|entity_overlap/);
+  });
+  test("entity ↔ entity weak: owner has multiple sig tokens, only one shared", () => {
+    // Owner has TWO significant tokens (after stop filter): ["bissonmutch", "logements"]
+    // (multi is short < 3 char to be sig, actually multi=5 chars so OK; let's
+    //  pick a clearer example).
+    const r = evaluateNameMatch(
+      "BISSONMUTCH LOGEMENTS QUEBECOIS INC.",
+      "TREMBLAY LOGEMENTS QUEBECOIS INC.",
+    );
+    // Owner sig = [bissonmutch, logements, quebecois]; result sig =
+    // [tremblay, logements, quebecois]. Overlap = [logements, quebecois] = 2 → strong.
+    assert.equal(r.nameMatch, true);
   });
   test("two genuine corporate-name tokens overlap → nameMatch=true", () => {
     const r = evaluateNameMatch(

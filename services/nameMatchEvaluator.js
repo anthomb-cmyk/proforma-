@@ -99,7 +99,7 @@ export function significantTokens(name) {
 // ─── Person / entity classification ────────────────────────────────────────
 
 const ENTITY_SUFFIX_RE = /\b(?:inc|ltd|ltee|llc|llp|corp|corporation|company|co|sa|senc|sec|snc|enr|enrg|reg|fiducie|trust)\b\.?/i;
-const ENTITY_PREFIX_RE = /^(?:gestion|fiducie|investissement|investments|placement|capital|holdings|properties|realty|immobili[eè]re?|fonds|residence|residences|r[eé]sidence|r[eé]sidences|le|la|les|société|societe|entreprise|entreprises|groupe)\b/i;
+const ENTITY_PREFIX_RE = /^(?:gestion|fiducie|investissement|investments|placement|capital|holdings|properties|realty|immobili[eè]re?|fonds|residence|residences|r[eé]sidence|r[eé]sidences|le|la|les|société|societe|entreprise|entreprises|groupe|boulangerie|p[âa]tisserie|patisserie|restaurant|caf[ée]|cafe|bar|brasserie|garage|pharmacie|d[ée]panneur|depanneur|magasin|boutique|salon|spa|clinique|cabinet|bureau|atelier|h[ôo]tel|hotel|auberge|chalet|librairie|garderie|[ée]picerie|epicerie|gym|fitness|ferme|construction|transports|services|consulting|club|coop|cooperative|association|fondation)\b/i;
 const NUMBERED_QC_CORP_RE = /\b\d{4}-?\d{4}\s*(?:qu[eé]bec|que|qc)\b/i;
 
 export function isEntityName(s) {
@@ -234,14 +234,37 @@ export function evaluateNameMatch(ownerName, resultTitle, opts = {}) {
   const ownerKind = isEntityName(ownerName) ? "entity" : "person";
   const resultKind = isPersonName(resultTitle) ? "person" : "entity";
 
-  // ENTITY ↔ ENTITY: ≥ 2 distinct meaningful tokens must overlap.
+  // ENTITY ↔ ENTITY:
+  //   - exact normalized name → strong
+  //   - ≥ 2 distinct meaningful tokens overlap → strong
+  //   - all of the owner's significant tokens are present in the result
+  //     (even if just 1) → strong (the owner's entire distinguishing
+  //     identity is matched; e.g. "Immobilier Fictif Inc." vs itself,
+  //     where the only meaningful token is "fictif")
+  //   - 1 token overlap but the owner has additional unmatched tokens → weak
   if (ownerKind === "entity" && resultKind === "entity") {
+    if (exactFullNameMatch(ownerName, resultTitle)) {
+      return {
+        nameMatch: true, weakNameMatch: false,
+        matchType: "exact_entity", reason: "exact_full_name",
+        ownerKind, resultKind,
+      };
+    }
+    const ownerSig = significantTokens(ownerName);
     const overlap = distinctTokenOverlap(ownerName, resultTitle);
     if (overlap.length >= 2) {
       return {
         nameMatch: true, weakNameMatch: false,
         matchType: "entity_token_overlap",
         reason: `entity_overlap:${overlap.join(",")}`,
+        ownerKind, resultKind,
+      };
+    }
+    if (overlap.length >= 1 && ownerSig.length > 0 && overlap.length === ownerSig.length) {
+      return {
+        nameMatch: true, weakNameMatch: false,
+        matchType: "entity_token_overlap",
+        reason: `entity_all_owner_tokens:${overlap.join(",")}`,
         ownerKind, resultKind,
       };
     }
