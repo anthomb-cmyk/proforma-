@@ -114,6 +114,14 @@ export function isEntityName(s) {
 
 const PERSON_NAME_RE = /^[A-Za-zÀ-ÿ'’-]+(?:\s+[A-Za-zÀ-ÿ'’-]+){1,3}$/;
 const TITLE_PREFIX_RE = /^(?:m\.?|mr\.?|mme\.?|me\.?|dr\.?|prof\.?)\s+/i;
+// Role descriptors that, when trailing a 2-token name, mark the result as a
+// person rather than a noun-phrase entity. Used to recognise titles like
+// "JONATHAN CHOINIERE real estate broker in Bromont" that lack a comma so
+// leadingChunk doesn't split them, yet are clearly person results.
+const PERSON_ROLE_RE = /\b(?:courtier|courtage|broker|realtor|agent|agente|avocat|avocate|notaire|comptable|cpa|consultant|consultante|investisseur|investisseuse|directeur|directrice|pr[eé]sident|pr[eé]sidente|gestionnaire|conseiller|conseill[eè]re|propri[eé]taire|investor|owner|founder|fondateur|fondatrice|associ[eé]|associ[eé]e|partenaire|partner)\b/i;
+// Single-word name shape used when extracting the leading 1-2 tokens of a
+// long title. Allows letters / accents / apostrophes / hyphens, no digits.
+const NAME_WORD_RE = /^[A-Za-zÀ-ÿ\u00C0-\u017F'’-]+$/;
 
 // Does this string look like a Title-Case human name (vs ALL CAPS entity
 // like "BISSONMUTCH MULTI-LOGEMENTS")? Each whitespace-separated word should
@@ -137,10 +145,25 @@ export function isPersonName(s) {
   if (isEntityName(head)) return false;
   const stripped = head.replace(TITLE_PREFIX_RE, "").trim();
   if (!stripped) return false;
-  if (!PERSON_NAME_RE.test(stripped)) return false;
-  // Reject all-caps tokens — corporate names truncated without a suffix
-  // (e.g. "BISSONMUTCH MULTI-LOGEMENTS") otherwise pass the shape check.
-  if (!looksTitleCase(stripped)) return false;
+
+  // (1) Clean shape match — Title-Case "Firstname Lastname [Middle [Suffix]]".
+  if (PERSON_NAME_RE.test(stripped) && looksTitleCase(stripped)) return true;
+
+  // (2) Long role-descriptor titles like "Jonathan Choinière, courtier
+  //     immobilier" (already handled by leadingChunk) or
+  //     "JONATHAN CHOINIERE real estate broker in Bromont" (no comma — fell
+  //     through). Strategy: take the leading 2 tokens, check they look
+  //     name-shaped, and require a role descriptor in the trailing words.
+  const tokens = stripped.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) return false;
+  const leading2 = tokens.slice(0, 2);
+  const trailing = tokens.slice(2).join(" ");
+  if (!leading2.every((t) => NAME_WORD_RE.test(t))) return false;
+  if (!PERSON_ROLE_RE.test(trailing)) return false;
+  // Don't mistake a generic-noun-led entity that happens to be ALL CAPS without
+  // a role descriptor (already handled by the early isEntityName check via the
+  // expanded prefix list, but defence-in-depth here too).
+  if (leading2.some((t) => /^(?:LE|LA|LES|DE|DU|DES)$/.test(t))) return false;
   return true;
 }
 
@@ -232,7 +255,18 @@ export function evaluateNameMatch(ownerName, resultTitle, opts = {}) {
 
   const head = leadingChunk(resultTitle);
   const ownerKind = isEntityName(ownerName) ? "entity" : "person";
-  const resultKind = isPersonName(resultTitle) ? "person" : "entity";
+  // Three-way classification for the result side:
+  //   "person"    — clear person shape (with or without role descriptors)
+  //   "entity"    — clear entity markers (suffix / prefix / numbered corp)
+  //   "ambiguous" — neither (e.g. truncated noun-phrase result)
+  // Ambiguous results NEVER get the entity-vs-entity "all owner tokens
+  // present" relaxation — they require ≥ 2 distinct tokens or an exact match,
+  // otherwise weakNameMatch.
+  const resultKind = isPersonName(resultTitle)
+    ? "person"
+    : isEntityName(resultTitle)
+      ? "entity"
+      : "ambiguous";
 
   // ENTITY ↔ ENTITY:
   //   - exact normalized name → strong
@@ -279,6 +313,60 @@ export function evaluateNameMatch(ownerName, resultTitle, opts = {}) {
     return {
       nameMatch: false, weakNameMatch: false,
       matchType: "no_overlap", reason: "no_significant_overlap",
+      ownerKind, resultKind,
+    };
+  }
+
+  // ENTITY (owner) ↔ AMBIGUOUS (result): result lacks clear markers in
+  // either direction. Apply strict rules — single-token overlap on the
+  // owner's distinguishing token is NOT enough, otherwise titles like
+  // "JONATHAN CHOINIERE real estate broker in Bromont" sneak through.
+  if (ownerKind === "entity" && resultKind === "ambiguous") {
+    if (exactFullNameMatch(ownerName, resultTitle)) {
+      return {
+        nameMatch: true, weakNameMatch: false,
+        matchType: "exact_entity", reason: "exact_full_name",
+        ownerKind, resultKind,
+      };
+    }
+    const overlap = distinctTokenOverlap(ownerName, resultTitle);
+    if (overlap.length >= 2) {
+      return {
+        nameMatch: true, weakNameMatch: false,
+        matchType: "entity_token_overlap",
+        reason: `entity_overlap_ambiguous:${overlap.join(",")}`,
+        ownerKind, resultKind,
+      };
+    }
+    if (entityNameMentioned(ownerName, `${resultTitle} ${opts.snippet || ""}`)) {
+      return {
+        nameMatch: true, weakNameMatch: false,
+        matchType: "entity_name_in_ambiguous_result",
+        reason: "entity_name_mentioned_in_result",
+        ownerKind, resultKind,
+      };
+    }
+    if (overlap.length >= 1) {
+      return {
+        nameMatch: false, weakNameMatch: true,
+        matchType: "weak_ambiguous_overlap",
+        reason: `weak_ambiguous_single_token:${overlap.join(",")}`,
+        ownerKind, resultKind,
+      };
+    }
+    return {
+      nameMatch: false, weakNameMatch: false,
+      matchType: "no_overlap", reason: "no_significant_overlap",
+      ownerKind, resultKind,
+    };
+  }
+
+  // PERSON (owner) ↔ AMBIGUOUS (result): same conservative treatment.
+  if (ownerKind === "person" && resultKind === "ambiguous") {
+    return {
+      nameMatch: false, weakNameMatch: false,
+      matchType: "person_to_ambiguous_default",
+      reason: "person_to_ambiguous_no_strong_match",
       ownerKind, resultKind,
     };
   }

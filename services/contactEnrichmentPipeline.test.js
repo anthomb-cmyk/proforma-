@@ -937,3 +937,31 @@ test("[choiniere] exact co-owner Jonathan in coOwnerNames → ready_to_call via 
   assert.equal(r.status, "ready_to_call");
   assert.equal(r.phoneRelationship, "co_owner_match");
 });
+
+/* Live regression: Choinière broker title without comma (no leadingChunk split) */
+test("[choiniere-live] 'JONATHAN CHOINIERE real estate broker in Bromont' must NOT ready_to_call", async () => {
+  // The actual title that slipped past PR #21 in the live test on Railway.
+  // No comma, no separator, 6 tokens — used to be classified as entity by
+  // default and then matched on the single shared 'choiniere' token.
+  const personResult = {
+    title: "JONATHAN CHOINIERE real estate broker in Bromont",
+    snippet: `Equipe Choiniere Gaucher Real Estate — 450 534-2147`,
+    url: "https://example-jonathan-choiniere.ca",
+  };
+  const pkg = makePkg({
+    lead_owner_name: "GESTION IMMOBILIÈRE CHOINIÈRE INC.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "direct_entity_then_mailing_address_related_companies",
+    coOwnerNames: [],
+    mailing_address: "595 RUE DE L'ÉMERAUDE",
+    mailing_city: "Bromont",
+    mailing_address_discovery_queries: [],
+  });
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: okSearch([personResult]),
+  });
+  const r = results[0];
+  assert.notEqual(r.status, "ready_to_call",
+    "broker title with shared family name must not ready_to_call");
+});

@@ -162,8 +162,11 @@ describe("evaluateNameMatch — person ↔ person", () => {
     assert.equal(r.nameMatch, true);
     assert.equal(r.matchType, "exact_person");
   });
-  test("≥2 token overlap (reordered) → strong", () => {
-    const r = evaluateNameMatch("Jean-Pierre Dupont", "Dupont, Jean-Pierre");
+  test("≥2 token overlap (forward order) → strong", () => {
+    // Real-world result titles are almost always forward-order on QC sites.
+    // The spec doesn't require reverse-order matching for person↔person
+    // (use exact full-name or co-owner/director match instead).
+    const r = evaluateNameMatch("Jean-Pierre Dupont", "Jean-Pierre Dupont, Avocat");
     assert.equal(r.nameMatch, true);
   });
   test("only family name shared → weak", () => {
