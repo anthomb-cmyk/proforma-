@@ -35,6 +35,10 @@ import {
 import {
   evaluateNameMatch,
 } from "./nameMatchEvaluator.js";
+import {
+  isB2BHintProfileUrl,
+  fetchAndExtractDirectors,
+} from "./b2bhintFetcher.js";
 
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
@@ -297,6 +301,8 @@ async function processSinglePackage(pkg, opts) {
   // incrementally in Step 4 so downstream evaluateNameMatch calls can authorise
   // an exact_director match for person results.
   const directorsAcc = [];
+  // Per-package fetch-cache: do not fetch the same B2BHint URL twice.
+  const b2bhintFetchedUrls = new Set();
   // Per-result kind-aware nameMatch evaluator.
   const evalName = (r, extra = {}) => evaluateNameMatch(ownerName, r?.title || "", {
     coOwnerNames,
@@ -563,6 +569,31 @@ async function processSinglePackage(pkg, opts) {
       for (const d of profile.directors || []) {
         if (d && !directorsAcc.includes(d)) directorsAcc.push(d);
       }
+
+      // Step 4 / 4b-bis: B2BHint page fetch.
+      // Only fetch when: (a) URL is B2BHint, (b) snippet-extracted directors is empty,
+      // (c) fetchPageFn is configured, (d) we haven't already fetched this URL.
+      if (
+        profile.directors.length === 0 &&
+        isB2BHintProfileUrl(r.url) &&
+        typeof opts.fetchPageFn === "function" &&
+        !b2bhintFetchedUrls.has(r.url)
+      ) {
+        b2bhintFetchedUrls.add(r.url);
+        const fetchResult = await fetchAndExtractDirectors(r.url, opts.fetchPageFn);
+        if (fetchResult.fetched && fetchResult.directors.length > 0) {
+          for (const d of fetchResult.directors) {
+            if (d && !profile.directors.includes(d)) profile.directors.push(d);
+            if (d && !directorsAcc.includes(d)) directorsAcc.push(d);
+          }
+          evidence.push(
+            `b2bhint_fetch: ${r.url} → ${fetchResult.directors.length} directors extracted`,
+          );
+        } else if (fetchResult.error) {
+          evidence.push(`b2bhint_fetch_error: ${r.url} → ${fetchResult.error}`);
+        }
+      }
+
       evidence.push(
         `company_profile: "${profile.companyName}" NEQ=${profile.enterpriseNumber || "?"}`
         + ` directors=${profile.directors.length} related=${profile.relatedCompanies.length}`,

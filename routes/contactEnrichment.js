@@ -55,5 +55,46 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
     }
   });
 
+  // Per-package endpoint — the workhorse for the orchestrator-driven client.
+  // One package per HTTP call, ~10-30s max, well under any HTTP timeout. The
+  // 2000-row workflow uses this exclusively when "Use per-package mode" is
+  // on (default since Phase 2). Backward compatible: /preview is unchanged.
+  //
+  // NB: PR #24 merged the *tests* for this route but the route itself was
+  // dropped from the diff. Restoring here closes the live regression where
+  // per-package mode silently returns 404 in production.
+  router.post("/single", async (req, res) => {
+    const pkg = req.body?.package;
+    if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) {
+      return res.status(400).json({ ok: false, error: "package required (single object)." });
+    }
+
+    const searchFn = createSearchFn();
+    const probe = await searchFn("probe");
+    if (!probe.ok && probe.error === "WEB_SEARCH_NOT_CONFIGURED") {
+      return res.status(503).json({
+        ok: false,
+        error: "WEB_SEARCH_NOT_CONFIGURED",
+        message:
+          "Set WEB_SEARCH_PROVIDER=brave and BRAVE_SEARCH_API_KEY (or SERPER_API_KEY) to use this endpoint.",
+      });
+    }
+
+    try {
+      const results = await runContactEnrichmentPreview({
+        packages: [pkg],
+        limit: 1,
+        searchFn,
+        fetchPageFn,
+      });
+      // Always return the single result object directly so the client doesn't
+      // need to unwrap an array of length 1.
+      return res.json({ ok: true, result: results[0] || null });
+    } catch (err) {
+      console.error("[contact-enrichment/single] pipeline error:", err);
+      return res.status(500).json({ ok: false, error: String(err.message || err) });
+    }
+  });
+
   return router;
 }

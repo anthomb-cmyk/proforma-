@@ -33,6 +33,7 @@ export default function ReviewQueue({
   onAccept,
   onReject,
   onSkip,
+  onForceReenrich,
   showAccepted = false,
   showRejected = false,
 }) {
@@ -71,6 +72,7 @@ export default function ReviewQueue({
             <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
               Decision
             </th>
+            {onForceReenrich && <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}></th>}
           </tr>
         </thead>
         <tbody>
@@ -98,6 +100,19 @@ export default function ReviewQueue({
                   <button className="btn btn-sm" onClick={() => onSkip?.(packageKey)}
                     style={{ marginLeft: 4, color: "var(--text3)" }}>Skip</button>
                 </td>
+                {onForceReenrich && (
+                  <td style={cellStyle()}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      style={{ fontSize: 9, color: "var(--text3)", padding: "1px 4px" }}
+                      onClick={() => onForceReenrich?.(result)}
+                      title="Clear cache and re-enrich"
+                    >
+                      Re-enrich
+                    </button>
+                  </td>
+                )}
               </tr>
             );
           })}
