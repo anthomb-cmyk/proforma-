@@ -261,6 +261,12 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   const [concurrency, setConcurrency] = useState(1);
   // Phase 4: Google Places fallback for no_contact_found packages (default OFF — costs ~$0.05/call)
   const [placesFallback, setPlacesFallback] = useState(false);
+  // Track the latest placesFallback in a ref so callbacks below (memoized
+  // with empty / minimal deps) can read the live value without depending on
+  // it directly. This avoids stale-closure bugs where the user toggles the
+  // checkbox after mount but the captured value never updates.
+  const placesFallbackRef = useRef(placesFallback);
+  useEffect(() => { placesFallbackRef.current = placesFallback; }, [placesFallback]);
   // Dedup toast shown once per session
   const [dedupToast, setDedupToast] = useState(/** @type {string|null} */ null);
   // Per-package progress tracking: how many of the representatives completed
@@ -384,6 +390,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     const res = await runContactEnrichmentPreview(batch, {
       limit: batch.length,
       signal: controller?.signal,
+      placesFallbackEnabled: placesFallbackRef.current,
     });
     // Drop stale callbacks — only the latest controller is the live one.
     if (controller && enrichAbortRef.current !== controller) return;
@@ -450,7 +457,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     const res = await runEnrichmentOrchestrator({
       packages: representatives,
       concurrency,
-      callSingle: (pkg, signal) => postEnrichmentSingle(pkg, signal, { placesFallbackEnabled: placesFallback }),
+      callSingle: (pkg, signal) => postEnrichmentSingle(pkg, signal, { placesFallbackEnabled: placesFallbackRef.current }),
       signal: controller?.signal,
       onProgress: ({ packageKey, phase, result, error }) => {
         if (phase === "done" && result) {

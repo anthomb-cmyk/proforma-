@@ -33,16 +33,18 @@ export function isContactEnrichmentDebugEnabled() {
  * @param {object}  [options]
  * @param {number}  [options.limit=5]  How many packages to process (max 100).
  * @param {AbortSignal} [options.signal]  Abort signal to cancel the in-flight request.
+ * @param {boolean} [options.placesFallbackEnabled=false]  When true, the server will attempt a Google Places lookup for packages where contact data was not found.
  * @returns {Promise<{ ok: boolean, results?: object[], error?: string, cancelled?: boolean }>}
  */
 export async function runContactEnrichmentPreview(packages, options = {}) {
   const limit = Number.isFinite(options.limit) ? options.limit : 5;
   const signal = options.signal;
+  const placesFallbackEnabled = options.placesFallbackEnabled === true ? true : false;
   try {
     const resp = await fetch("/api/contact-enrichment/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ packages, limit }),
+      body: JSON.stringify({ packages, limit, placesFallbackEnabled }),
       signal,
     });
     const json = await resp.json();

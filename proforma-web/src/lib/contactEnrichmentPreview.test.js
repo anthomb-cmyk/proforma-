@@ -43,7 +43,7 @@ describe("runContactEnrichmentPreview", () => {
     expect(res.results).toHaveLength(1);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     const [, opts] = global.fetch.mock.calls[0];
-    expect(JSON.parse(opts.body)).toEqual({ packages: [{ x: 1 }], limit: 1 });
+    expect(JSON.parse(opts.body)).toEqual({ packages: [{ x: 1 }], limit: 1, placesFallbackEnabled: false });
   });
 
   test("resolves ok:false with error on HTTP failure", async () => {
@@ -97,5 +97,25 @@ describe("runContactEnrichmentPreview", () => {
     await runContactEnrichmentPreview([{}, {}, {}]);
     const [, opts] = global.fetch.mock.calls[0];
     expect(JSON.parse(opts.body).limit).toBe(5);
+  });
+
+  test("forwards placesFallbackEnabled in the request body when provided", async () => {
+    const calls = [];
+    global.fetch = jest.fn(async (_url, opts) => {
+      calls.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true, results: [] }) };
+    });
+    await runContactEnrichmentPreview([{ x: 1 }], { limit: 1, placesFallbackEnabled: true });
+    expect(calls[0].placesFallbackEnabled).toBe(true);
+  });
+
+  test("defaults placesFallbackEnabled to false when not provided", async () => {
+    const calls = [];
+    global.fetch = jest.fn(async (_url, opts) => {
+      calls.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true, results: [] }) };
+    });
+    await runContactEnrichmentPreview([{ x: 1 }], { limit: 1 });
+    expect(calls[0].placesFallbackEnabled).toBe(false);
   });
 });
