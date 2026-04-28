@@ -125,3 +125,139 @@ test("REVIEW_STATUSES export", () => {
   expect(REVIEW_STATUSES.has("ready_to_email")).toBe(true);
   expect(REVIEW_STATUSES.has("ready_to_call")).toBe(false);
 });
+
+// ─── Phase 4: computeReviewSignals tests ─────────────────────────────────────
+
+import { computeReviewSignals } from "./reviewQueueLogic.js";
+
+describe("computeReviewSignals", () => {
+  // ── Test 1: URL matches owner name → positive signal ─────────────────────
+  test("URL containing owner name token yields URL-match positive signal", () => {
+    const result = {
+      lead_owner_name: "Gestion Tremblay Inc.",
+      bestPhone: "(514) 555-0100",
+      bestPhoneBelongsTo: "Gestion Tremblay Inc.",
+      bestWebsite: "https://gestiontremblay.ca",
+      phoneRelationship: "direct_entity_match",
+      phoneCandidates: [],
+    };
+    const { signals, recommendation } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "URL matches owner name")).toBe(true);
+    expect(signals.some((s) => s.kind === "positive")).toBe(true);
+  });
+
+  // ── Test 2: bestPhoneBelongsTo shares distinctive token with owner ────────
+  test('"Belongs to" matching owner name yields positive signal', () => {
+    const result = {
+      lead_owner_name: "Immobilier Dumont Inc.",
+      bestPhone: "(514) 555-0101",
+      bestPhoneBelongsTo: "Gestion Immobilier Dumont",
+      bestWebsite: "",
+      phoneRelationship: "mailing",
+      phoneCandidates: [],
+    };
+    const { signals } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === '"Belongs to" matches owner')).toBe(true);
+  });
+
+  // ── Test 3: exact_director_match relationship → positive ──────────────────
+  test("exact_director_match relationship yields director positive signal", () => {
+    const result = {
+      lead_owner_name: "Placements ABC Inc.",
+      bestPhone: "(514) 555-0102",
+      bestPhoneBelongsTo: "Jean Lalonde",
+      bestWebsite: "",
+      phoneRelationship: "exact_director_match",
+      phoneCandidates: [],
+    };
+    const { signals } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "Exact director/co-owner match")).toBe(true);
+    expect(signals.some((s) => s.kind === "positive")).toBe(true);
+  });
+
+  // ── Test 4: high confidence candidate → positive signal ──────────────────
+  test("top phoneCandidates with nameMatch=true and score>=5 yields High confidence signal", () => {
+    const result = {
+      lead_owner_name: "Les Immeubles XYZ Inc.",
+      bestPhone: "(514) 555-0103",
+      bestPhoneBelongsTo: "Les Immeubles XYZ Inc.",
+      bestWebsite: "",
+      phoneRelationship: "direct_entity_match",
+      phoneCandidates: [{ nameMatch: true, score: 7, raw: "(514) 555-0103" }],
+    };
+    const { signals } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "High confidence match")).toBe(true);
+  });
+
+  // ── Test 5: toll-free number → negative signal ────────────────────────────
+  test("1-800 number yields toll-free negative signal", () => {
+    const result = {
+      lead_owner_name: "Gestion Leblanc Inc.",
+      bestPhone: "1-800-555-0100",
+      // Use a belongsTo that shares no distinctive tokens with owner name to
+      // ensure no positive "Belongs to" signal fires.
+      bestPhoneBelongsTo: "Services Généraux Corporatifs",
+      bestWebsite: "",
+      phoneRelationship: "directory_match",
+      phoneCandidates: [],
+    };
+    const { signals, recommendation } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "Toll-free number")).toBe(true);
+    expect(signals.some((s) => s.kind === "negative")).toBe(true);
+    // No positives present → recommendation should be reject
+    expect(recommendation).toBe("reject");
+  });
+
+  // ── Test 6: generic directory URL + no nameMatch → negative signal ────────
+  test("generic directory URL with no nameMatch yields directory negative signal", () => {
+    const result = {
+      lead_owner_name: "Placements Martin Inc.",
+      bestPhone: "(514) 555-0105",
+      bestPhoneBelongsTo: "Unknown Company",
+      bestWebsite: "https://www.yellowpages.ca/some-listing",
+      phoneRelationship: "directory_match",
+      phoneCandidates: [{ nameMatch: false, score: 2 }],
+    };
+    const { signals } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "Generic directory listing")).toBe(true);
+  });
+
+  // ── Test 7: places_fallback relationship → neutral signal ─────────────────
+  test("places_fallback relationship yields neutral Places signal", () => {
+    const result = {
+      lead_owner_name: "Gestion ACME Inc.",
+      bestPhone: "(514) 555-0106",
+      bestPhoneBelongsTo: "ACME Services Inc.",
+      bestWebsite: "",
+      phoneRelationship: "places_fallback",
+      phoneCandidates: [],
+    };
+    const { signals } = computeReviewSignals(result);
+    expect(signals.some((s) => s.text === "Found via Places fallback")).toBe(true);
+    expect(signals.some((s) => s.kind === "neutral")).toBe(true);
+  });
+
+  // ── Test 8: recommendation logic — mixed signals → verify; empty → verify ──
+  test("mixed positive+negative signals yield verify; empty result yields verify", () => {
+    // Mixed: URL match (positive) + toll-free (negative)
+    const mixed = {
+      lead_owner_name: "Tremblay Gestion Inc.",
+      bestPhone: "1-888-555-0100",
+      bestPhoneBelongsTo: "Tremblay Gestion Inc.",
+      bestWebsite: "https://tremblayGestion.ca",
+      phoneRelationship: "direct_entity_match",
+      phoneCandidates: [],
+    };
+    const { recommendation: r1 } = computeReviewSignals(mixed);
+    expect(r1).toBe("verify");
+
+    // Empty result
+    const { recommendation: r2, signals: s2 } = computeReviewSignals({});
+    expect(r2).toBe("verify");
+    expect(s2.length).toBe(0);
+
+    // Null result
+    const { recommendation: r3 } = computeReviewSignals(null);
+    expect(r3).toBe("verify");
+  });
+});
