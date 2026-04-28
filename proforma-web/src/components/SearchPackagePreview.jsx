@@ -384,6 +384,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     const res = await runContactEnrichmentPreview(batch, {
       limit: batch.length,
       signal: controller?.signal,
+      placesFallbackEnabled: placesFallback,
     });
     // Drop stale callbacks — only the latest controller is the live one.
     if (controller && enrichAbortRef.current !== controller) return;
