@@ -384,6 +384,54 @@ async function processSinglePackage(pkg, opts) {
     }
   }
 
+  // Step 4.5 — co-owner validation pass.
+  //
+  // Walk every candidate (phones + emails) and check whether its result name
+  // matches any of the lead owner's co-owners. A strong match (exact full
+  // name OR ≥ 2-token overlap) upgrades nameMatch and tags the candidate with
+  // a co_owner_match relationship — so a numbered company's co-owner mentioned
+  // on a real-estate site can be promoted to ready_to_call. A weak (last-name
+  // only) match never upgrades on its own; it gets recorded for needs_review.
+  const coOwnerNames = Array.isArray(pkg.coOwnerNames) && pkg.coOwnerNames.length
+    ? pkg.coOwnerNames
+    : (Array.isArray(pkg.co_owners) ? pkg.co_owners : []);
+  if (coOwnerNames.length > 0) {
+    for (const c of phoneCands) {
+      if (c.nameMatch) continue;
+      const m = validateCoOwnerMatch(c.belongsTo || "", coOwnerNames);
+      if (isStrongCoOwnerMatch(m)) {
+        c.nameMatch = true;
+        c.coOwnerMatch = m;
+        c.relationship = c.relationship || "co_owner_match";
+        evidence.push(
+          `co_owner_upgrade: phone "${c.belongsTo}" → "${m.matchedName}" (${m.matchType})`,
+        );
+      } else if (m.match === "weak") {
+        c.weakCoOwnerMatch = m.matchedName;
+        evidence.push(
+          `co_owner_weak: phone "${c.belongsTo}" shares only last name with "${m.matchedName}"`,
+        );
+      }
+    }
+    for (const e of emailCands) {
+      if (e.nameMatch) continue;
+      const m = validateCoOwnerMatch(e.email_owner_name || "", coOwnerNames);
+      if (isStrongCoOwnerMatch(m)) {
+        e.nameMatch = true;
+        e.coOwnerMatch = m;
+        e.relationship_to_lead_owner = e.relationship_to_lead_owner === e.source
+          ? "co_owner_match"
+          : e.relationship_to_lead_owner;
+        if (e.confidence === "low") e.confidence = "medium";
+        evidence.push(
+          `co_owner_upgrade: email "${e.email_owner_name}" → "${m.matchedName}" (${m.matchType})`,
+        );
+      } else if (m.match === "weak") {
+        e.weakCoOwnerMatch = m.matchedName;
+      }
+    }
+  }
+
   // Step 5 — score, filter, and select best candidate.
   const scored = phoneCands
     .map((c) => ({ ...c, score: scorePhoneCandidate(c) }))
@@ -418,24 +466,32 @@ async function processSinglePackage(pkg, opts) {
       if (bestCand.nameMatch) {
         status = "ready_to_call";
         confidence = confidenceFromScore(bestCand.score);
-        phoneRelationship = "direct_entity_match";
+        phoneRelationship = bestCand.relationship || "direct_entity_match";
       } else {
         status = "needs_review";
         confidence = "low";
-        phoneRelationship = bestCand.source;
+        phoneRelationship = bestCand.relationship || bestCand.source;
       }
     } else if (bestCand.source === "mailing" || bestCand.source === "related") {
       // Same mailing address is a strong match — no nameMatch required.
       status = "ready_to_call";
       const isREContext = hasRealEstateKeyword(bestCand.belongsTo || "");
       confidence = isREContext ? "high" : "medium";
-      phoneRelationship = isREContext
+      phoneRelationship = bestCand.relationship || (isREContext
         ? "related_company_same_mailing_address"
-        : "same_mailing_address_contact";
+        : "same_mailing_address_contact");
     } else if (bestCand.source === "pages_jaunes" || bestCand.source === "411") {
       status = "ready_to_call";
       confidence = "medium";
-      phoneRelationship = "directory_match";
+      phoneRelationship = bestCand.relationship || "directory_match";
+    }
+
+    // Co-owner-only matches downgrade-protect: if the only signal was a weak
+    // last-name match (no upgrade), force needs_review. Strong co-owner matches
+    // already had nameMatch upgraded above, so they pass through normally.
+    if (bestCand.weakCoOwnerMatch && !bestCand.nameMatch) {
+      status = "needs_review";
+      confidence = "low";
     }
 
     evidence.push(
