@@ -257,8 +257,8 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
 
   // Per-package mode: uses orchestrator + owner dedup instead of batch preview
   const [perPkgMode, setPerPkgMode] = useState(true);
-  // Concurrency for the orchestrator (1–5, default 3)
-  const [concurrency, setConcurrency] = useState(3);
+  // Concurrency for the orchestrator (1–5, default 1 recommended for free Brave tier)
+  const [concurrency, setConcurrency] = useState(1);
   // Dedup toast shown once per session
   const [dedupToast, setDedupToast] = useState(/** @type {string|null} */ null);
   // Per-package progress tracking: how many of the representatives completed
@@ -947,17 +947,21 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                 </label>
                 {perPkgMode ? (
                   <label style={{ fontSize: 11, color: "var(--text3)" }}>
-                    Concurrency:&nbsp;
+                    Concurrency: 1 (recommended for free Brave tier)&nbsp;
                     <select
                       value={concurrency}
                       onChange={(e) => setConcurrency(Number(e.target.value))}
                       disabled={enrichState === "loading"}
                       style={{ fontSize: 11, padding: "1px 4px" }}
                     >
-                      {[1, 2, 3, 4, 5].map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
+                      <option value={1}>1 (recommended)</option>
+                      <option value={2}>2</option>
+                      <option value={3}>3</option>
+                      <option value={5}>5</option>
                     </select>
+                    <span style={{ fontSize: 10, color: "var(--text3)", marginLeft: 4 }}>
+                      Higher = faster wall clock, but more Brave queries in parallel &mdash; risk of 429s on free tier.
+                    </span>
                   </label>
                 ) : (
                   <label style={{ fontSize: 11, color: "var(--text3)" }}>
