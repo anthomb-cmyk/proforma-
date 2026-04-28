@@ -11,6 +11,20 @@
 import { useMemo, useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
 import {
+  deriveSessionId,
+  loadSession,
+  saveSession,
+  clearSession,
+} from "../lib/enrichmentSession.js";
+import {
+  markNeverCall,
+} from "../lib/neverCallList.js";
+import {
+  applyAcceptedDecision,
+  summarizeSession,
+} from "../lib/reviewQueueLogic.js";
+import ReviewQueue from "./ReviewQueue.jsx";
+import {
   isContactEnrichmentDebugEnabled,
   runContactEnrichmentPreview,
 } from "../lib/contactEnrichmentPreview.js";
@@ -232,6 +246,55 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   );
   const [exportSummary, setExportSummary] = useState(/** @type {object|null} */ null);
 
+  // ─── Phase 1: auto-advance / pause-resume / persistence / review queue ───
+
+  // Active tab in the enrichment panel: 'batch' | 'review'.
+  const [activeTab, setActiveTab] = useState(/** @type {"batch"|"review"} */ "batch");
+  // Auto-advance kicks off the next batch when the current one finishes.
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [paused, setPaused] = useState(false);
+  // Per-package decisions made in the review queue.
+  const [reviewDecisions, setReviewDecisions] = useState(() => new Map());
+  // Session id derived from the imported dataset signature.
+  const sessionId = useMemo(() => deriveSessionId(rows), [rows]);
+  // Toast for "Restored prior session" / "Cleared session".
+  const [sessionToast, setSessionToast] = useState(/** @type {string|null} */ null);
+
+  // Restore prior session state when sessionId becomes available.
+  useEffect(() => {
+    if (!sessionId) return;
+    const loaded = loadSession(sessionId);
+    if (!loaded) return;
+    setAllEnrichedResults(loaded.allEnrichedResults || new Map());
+    setEnrichedKeys(loaded.enrichedKeys || new Set());
+    setExportedKeys(loaded.exportedKeys || new Set());
+    setReviewDecisions(loaded.reviewDecisions || new Map());
+    if ((loaded.allEnrichedResults?.size || 0) > 0) {
+      setSessionToast(`Restored ${loaded.allEnrichedResults.size} prior result${loaded.allEnrichedResults.size !== 1 ? "s" : ""}`);
+    }
+  }, [sessionId]);
+
+  // Throttled save: 500ms after the last state change, persist.
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const handle = setTimeout(() => {
+      saveSession(sessionId, {
+        allEnrichedResults,
+        enrichedKeys,
+        exportedKeys,
+        reviewDecisions,
+      });
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [sessionId, allEnrichedResults, enrichedKeys, exportedKeys, reviewDecisions]);
+
+  // Auto-dismiss the session toast after 3s.
+  useEffect(() => {
+    if (!sessionToast) return undefined;
+    const t = setTimeout(() => setSessionToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [sessionToast]);
+
   const allPkgs = data.topHighValueWithoutPhonePackages || [];
   const unenrichedPkgs = allPkgs.filter((p) => !enrichedKeys.has(makePackageKey(p)));
   const nextBatchPkgs = unenrichedPkgs.slice(0, batchSize);
@@ -280,6 +343,17 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     }
   }, []);
 
+  // Auto-advance: when a batch finishes successfully and auto-advance is
+  // enabled and we're not paused, automatically queue the next batch.
+  const handleEnrichNextRef = useRef(null);
+  useEffect(() => {
+    if (enrichState !== "done") return;
+    if (!autoAdvance || paused) return;
+    if (!nextBatchPkgs.length) return;
+    const t = setTimeout(() => { handleEnrichNextRef.current?.(); }, 250);
+    return () => clearTimeout(t);
+  }, [enrichState, autoAdvance, paused, nextBatchPkgs.length]);
+
   // Cancel handler — aborts the in-flight fetch.
   const handleCancelEnrich = useCallback(() => {
     if (enrichAbortRef.current) {
@@ -307,6 +381,70 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     setCurrentBatchRange({ start: doneCount + 1, end: doneCount + nextBatchPkgs.length });
     runBatch(nextBatchPkgs);
   }, [nextBatchPkgs, allPkgs, enrichedKeys, runBatch]);
+
+  // Keep ref in sync so auto-advance always invokes the latest closure.
+  useEffect(() => { handleEnrichNextRef.current = handleEnrichNext; }, [handleEnrichNext]);
+
+  // Review queue handlers.
+  const handleReviewAccept = useCallback((packageKey, candidatePhone) => {
+    setAllEnrichedResults((prev) => {
+      const next = new Map(prev);
+      const r = next.get(packageKey);
+      if (r) next.set(packageKey, applyAcceptedDecision(r, candidatePhone));
+      return next;
+    });
+    setReviewDecisions((prev) => {
+      const next = new Map(prev);
+      next.set(packageKey, { decision: "accepted", at: Date.now() });
+      return next;
+    });
+  }, []);
+
+  const handleReviewReject = useCallback((packageKey, candidatePhone) => {
+    const r = allEnrichedResults.get(packageKey);
+    markNeverCall({
+      phone: candidatePhone?.raw || candidatePhone?.digits || r?.bestPhone || "",
+      ownerName: r?.lead_owner_name || "",
+      reason: "rejected_in_review",
+    });
+    setReviewDecisions((prev) => {
+      const next = new Map(prev);
+      next.set(packageKey, { decision: "rejected", at: Date.now() });
+      return next;
+    });
+  }, [allEnrichedResults]);
+
+  const handleReviewSkip = useCallback((packageKey) => {
+    setReviewDecisions((prev) => {
+      const next = new Map(prev);
+      next.set(packageKey, { decision: "skipped", at: Date.now() });
+      return next;
+    });
+  }, []);
+
+  // Pause / Clear-session controls.
+  const handlePauseToggle = useCallback(() => setPaused((p) => !p), []);
+  const handleClearSession = useCallback(() => {
+    if (!sessionId) return;
+    if (typeof window !== "undefined" && !window.confirm(
+      "Clear all enrichment results for this import? This cannot be undone."
+    )) return;
+    clearSession(sessionId);
+    setAllEnrichedResults(new Map());
+    setEnrichedKeys(new Set());
+    setExportedKeys(new Set());
+    setReviewDecisions(new Map());
+    setCurrentBatchResults(null);
+    setCurrentBatch(null);
+    setCurrentBatchRange(null);
+    setSessionToast("Session cleared");
+  }, [sessionId]);
+
+  // Live scorecard summary across the whole session.
+  const sessionSummary = useMemo(
+    () => summarizeSession(allEnrichedResults, reviewDecisions),
+    [allEnrichedResults, reviewDecisions],
+  );
 
   const handleRerunBatch = useCallback(() => {
     if (!currentBatch?.length) return;
@@ -523,17 +661,52 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               )}
             </div>
 
+            {/* Live scorecard — running totals across the whole session. */}
+            {hasAnyResults && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  display: "flex", flexWrap: "wrap", gap: 12,
+                  fontSize: 11, marginBottom: 8,
+                  padding: "6px 10px",
+                  background: "var(--bg2, #fafafa)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                }}
+              >
+                <span><strong>{enrichedKeys.size}</strong> / {allPkgs.length} processed</span>
+                <span style={{ color: "#166534" }}><strong>{sessionSummary.ready}</strong> ready</span>
+                <span style={{ color: "#854D0E" }}><strong>{sessionSummary.review}</strong> review</span>
+                <span style={{ color: "#1E40AF" }}><strong>{sessionSummary.email}</strong> email</span>
+                <span style={{ color: "var(--text3)" }}><strong>{sessionSummary.none}</strong> none</span>
+                {sessionSummary.accepted > 0 && (
+                  <span style={{ color: "#166534" }}>{sessionSummary.accepted} accepted</span>
+                )}
+                {sessionSummary.rejected > 0 && (
+                  <span style={{ color: "#991B1B" }}>{sessionSummary.rejected} rejected</span>
+                )}
+              </div>
+            )}
+
+            {/* Session toast (refresh-restore / clear). */}
+            {sessionToast && (
+              <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6 }}>
+                {sessionToast}
+              </div>
+            )}
+
             {/* Action buttons */}
             {enrichState !== "loading" && (
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
                 <button
                   className="btn btn-sm"
                   onClick={handleEnrichNext}
-                  disabled={!nextBatchPkgs.length}
+                  disabled={!nextBatchPkgs.length || paused}
                 >
                   {hasAnyResults
-                    ? `Enrich next ${nextBatchPkgs.length} target${nextBatchPkgs.length !== 1 ? "s" : ""}`
-                    : `Enrich first ${nextBatchPkgs.length} target${nextBatchPkgs.length !== 1 ? "s" : ""}`}
+                    ? `Enrich next ${Math.min(nextBatchPkgs.length, batchSize)} target${Math.min(nextBatchPkgs.length, batchSize) !== 1 ? "s" : ""}`
+                    : `Enrich first ${Math.min(nextBatchPkgs.length, batchSize)} target${Math.min(nextBatchPkgs.length, batchSize) !== 1 ? "s" : ""}`}
                 </button>
                 {hasAnyResults && currentBatch?.length > 0 && (
                   <button
@@ -542,6 +715,36 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                     onClick={handleRerunBatch}
                   >
                     Re-run current batch ({currentBatch.length})
+                  </button>
+                )}
+                <label style={{ fontSize: 11, color: "var(--text2)", display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={autoAdvance}
+                    onChange={(e) => setAutoAdvance(e.target.checked)}
+                  />
+                  Auto-advance
+                </label>
+                {autoAdvance && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={handlePauseToggle}
+                    style={{ color: "var(--text3)" }}
+                    title={paused ? "Resume auto-advance" : "Pause auto-advance"}
+                  >
+                    {paused ? "Resume" : "Pause"}
+                  </button>
+                )}
+                {hasAnyResults && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={handleClearSession}
+                    style={{ color: "var(--text3)", marginLeft: "auto" }}
+                    title="Clear all enrichment results for this import"
+                  >
+                    Clear session
                   </button>
                 )}
               </div>
@@ -608,11 +811,54 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               </div>
             )}
 
+            {/* Tab switcher: current batch vs. session-wide review queue. */}
+            {hasAnyResults && (
+              <div style={{ display: "flex", gap: 0, marginTop: 6, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setActiveTab("batch")}
+                  style={{
+                    background: "transparent",
+                    borderBottom: activeTab === "batch" ? "2px solid var(--accent, #2563EB)" : "2px solid transparent",
+                    borderRadius: 0,
+                    fontWeight: activeTab === "batch" ? 600 : 400,
+                  }}
+                >
+                  Current batch ({currentBatchResults?.length || 0})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setActiveTab("review")}
+                  style={{
+                    background: "transparent",
+                    borderBottom: activeTab === "review" ? "2px solid var(--accent, #2563EB)" : "2px solid transparent",
+                    borderRadius: 0,
+                    fontWeight: activeTab === "review" ? 600 : 400,
+                  }}
+                >
+                  Review queue ({sessionSummary.review + sessionSummary.email})
+                </button>
+              </div>
+            )}
+
             {/* Current batch results table */}
-            {enrichState === "done" && currentBatchResults && (
+            {activeTab === "batch" && enrichState === "done" && currentBatchResults && (
               currentBatchResults.length === 0
                 ? <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results in batch)</div>
                 : <EnrichResultsTable results={currentBatchResults} />
+            )}
+
+            {/* Session-wide review queue */}
+            {activeTab === "review" && (
+              <ReviewQueue
+                allEnrichedResults={allEnrichedResults}
+                reviewDecisions={reviewDecisions}
+                onAccept={handleReviewAccept}
+                onReject={handleReviewReject}
+                onSkip={handleReviewSkip}
+              />
             )}
 
             {!hasAnyResults && enrichState === "idle" && (
