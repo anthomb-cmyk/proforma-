@@ -185,8 +185,15 @@ export default function ReviewQueue({
                 <td style={{ ...cellStyle({ textAlign: "right" }), whiteSpace: "nowrap", verticalAlign: "top" }}>
                   <div style={{ marginBottom: 4, ...recStyle, fontSize: 9 }}>{recLabel}</div>
                   <div>
-                    <button className="btn btn-sm" onClick={() => onAccept?.(packageKey, cand)} disabled={decision === "accepted"}
-                      style={{ marginLeft: 4 }}>Accept</button>
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => onAccept?.(packageKey, cand)}
+                      disabled={decision === "accepted" || (!cand && !result.bestEmail)}
+                      title={!cand && !result.bestEmail ? "No phone or email — nothing to accept" : undefined}
+                      style={{ marginLeft: 4 }}
+                    >
+                      Accept
+                    </button>
                     <button className="btn btn-sm" onClick={() => onReject?.(packageKey, cand)} disabled={decision === "rejected"}
                       style={{ marginLeft: 4, color: "var(--text3)" }}>Reject</button>
                     <button className="btn btn-sm" onClick={() => onSkip?.(packageKey)}

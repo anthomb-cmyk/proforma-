@@ -97,8 +97,9 @@ describe("applyAcceptedDecision", () => {
     expect(result.status).toBe("needs_review");
   });
 
-  test("falls back to manual_review_accepted relationship when none provided", () => {
-    const out = applyAcceptedDecision({ status: "needs_review" }, null);
+  test("falls back to manual_review_accepted relationship when candidatePhone has raw but no named phone", () => {
+    // candidatePhone provided but no raw/phone field — resolves bestPhone from result.bestPhone
+    const out = applyAcceptedDecision({ status: "needs_review", bestPhone: "5145550100" }, null);
     expect(out.status).toBe("ready_to_call");
     expect(out.phoneRelationship).toBe("manual_review_accepted");
   });
@@ -259,5 +260,36 @@ describe("computeReviewSignals", () => {
     // Null result
     const { recommendation: r3 } = computeReviewSignals(null);
     expect(r3).toBe("verify");
+  });
+});
+
+describe("applyAcceptedDecision — phone gating (P1 audit fix)", () => {
+  test("accept with explicit phone candidate → ready_to_call", () => {
+    const r = applyAcceptedDecision({ status: "needs_review" }, { raw: "5145550100", belongsTo: "X" });
+    expect(r.status).toBe("ready_to_call");
+    expect(r.bestPhone).toBe("5145550100");
+  });
+
+  test("accept with existing bestPhone and null candidate → ready_to_call (preserves bestPhone)", () => {
+    const r = applyAcceptedDecision({ status: "needs_review", bestPhone: "5145550100" }, null);
+    expect(r.status).toBe("ready_to_call");
+    expect(r.bestPhone).toBe("5145550100");
+  });
+
+  test("accept with email only (no phone) → ready_to_email, no bestPhone", () => {
+    const r = applyAcceptedDecision(
+      { status: "ready_to_email", bestEmail: "x@y.ca", bestPhone: null },
+      null
+    );
+    expect(r.status).toBe("ready_to_email");
+    expect(r.bestPhone).toBeFalsy();
+    expect(r.evidence.some((e) => /promoted to ready_to_email/.test(e))).toBe(true);
+  });
+
+  test("accept with no phone and no email → does NOT become ready_to_call", () => {
+    const r = applyAcceptedDecision({ status: "needs_review" }, null);
+    expect(r.status).toBe("needs_review");
+    expect(r.bestPhone).toBeFalsy();
+    expect(r.evidence.some((e) => /no contact data/.test(e))).toBe(true);
   });
 });
