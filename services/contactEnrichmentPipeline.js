@@ -48,8 +48,8 @@ const MAX_DIRECT_QUERIES = 3;
 const MAX_MAILING_QUERIES = 2;
 const MAX_RELATED_COMPANIES = 2;
 const MAX_PAGES_PER_SITE = 2;
-const MAX_ADDRESS_DISCOVERY_QUERIES = 7;
-const MAX_PROFILE_EXPANSION_QUERIES = 5;
+const MAX_ADDRESS_DISCOVERY_QUERIES = 4; // reduced from 7 (Fix 5)
+const MAX_PROFILE_EXPANSION_QUERIES = 3; // reduced from 5 (Fix 5)
 
 /* ─── Phone / email / URL extraction from free text ───────────────────────── */
 
@@ -247,6 +247,8 @@ export async function runContactEnrichmentPreview({
       maxPages,
       maxAddressDiscovery,
       maxProfileExpansion,
+      // Fix 6: B2BHint page fetch is opt-in (default OFF).
+      b2bhintFetchEnabled: options.b2bhintFetchEnabled === true,
     });
     results.push(result);
   }
@@ -573,7 +575,10 @@ async function processSinglePackage(pkg, opts) {
       // Step 4 / 4b-bis: B2BHint page fetch.
       // Only fetch when: (a) URL is B2BHint, (b) snippet-extracted directors is empty,
       // (c) fetchPageFn is configured, (d) we haven't already fetched this URL.
+      // Fix 6: gated by opts.b2bhintFetchEnabled (default OFF) to avoid the
+      // 8s × N fetch cost on the free Brave tier. Enable via B2BHINT_FETCH_ENABLED=true.
       if (
+        (opts.b2bhintFetchEnabled === true) &&
         profile.directors.length === 0 &&
         isB2BHintProfileUrl(r.url) &&
         typeof opts.fetchPageFn === "function" &&
