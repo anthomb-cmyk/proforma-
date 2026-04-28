@@ -58,24 +58,44 @@ export function summarizeSession(allEnrichedResults, decisions) {
 }
 
 /**
- * Promote a needs_review result to ready_to_call when the user accepts it.
+ * Promote a review-queue result when the user accepts it.
  * Returns a NEW result object — the caller should replace it in the map.
+ *
+ * Gating (P1 audit fix 3):
+ *   - phone found  → ready_to_call (existing behaviour)
+ *   - no phone but email exists → ready_to_email (not ready_to_call)
+ *   - no phone and no email → keep current status, record decision only
+ *
+ * This prevents junk leads where status === "ready_to_call" but bestPhone
+ * is null, which breaks downstream CRM assumptions.
  */
 export function applyAcceptedDecision(result, candidatePhone) {
   const r = { ...(result || {}) };
-  r.status = "ready_to_call";
-  if (candidatePhone) {
-    r.bestPhone = candidatePhone.raw || candidatePhone.phone || r.bestPhone;
-    r.bestPhoneBelongsTo = candidatePhone.belongsTo || r.bestPhoneBelongsTo;
-    r.phoneRelationship = candidatePhone.relationship_to_lead_owner
-      || candidatePhone.relationship
-      || r.phoneRelationship
-      || "manual_review_accepted";
-    r.confidence = candidatePhone.confidence || r.confidence || "medium";
-  } else if (!r.phoneRelationship) {
-    r.phoneRelationship = "manual_review_accepted";
+  const phone = candidatePhone?.raw || candidatePhone?.phone || r.bestPhone || null;
+  const evidence = [...(r.evidence || [])];
+  if (phone) {
+    r.status = "ready_to_call";
+    r.bestPhone = phone;
+    if (candidatePhone) {
+      r.bestPhoneBelongsTo = candidatePhone.belongsTo || r.bestPhoneBelongsTo;
+      r.phoneRelationship = candidatePhone.relationship_to_lead_owner
+        || candidatePhone.relationship
+        || r.phoneRelationship
+        || "manual_review_accepted";
+      r.confidence = candidatePhone.confidence || r.confidence || "medium";
+    } else if (!r.phoneRelationship) {
+      r.phoneRelationship = "manual_review_accepted";
+    }
+    evidence.push("manual_accept: promoted to ready_to_call by user");
+  } else if (r.bestEmail) {
+    // No phone but email exists — promote to ready_to_email instead.
+    r.status = "ready_to_email";
+    evidence.push("manual_accept: no phone — promoted to ready_to_email by user");
+  } else {
+    // Nothing to call/email — preserve current status, just record the decision.
+    evidence.push(`manual_accept: no contact data — kept as ${r.status || "unknown"}`);
   }
-  r.evidence = [...(r.evidence || []), `manual_accept: promoted to ready_to_call by user`];
+  r.evidence = evidence;
   return r;
 }
 

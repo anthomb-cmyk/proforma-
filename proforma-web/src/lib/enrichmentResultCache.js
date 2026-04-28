@@ -198,3 +198,27 @@ export function cacheStats() {
     newestAt: newestAt === -Infinity ? null : newestAt,
   };
 }
+
+/**
+ * Decide whether to bypass a cached result so Places fallback can run.
+ *
+ * When the user has Places fallback enabled but a previously-cached result
+ * has no phone AND no evidence that Places was already tried, we re-run the
+ * orchestrator to give Places a shot. Otherwise the cache "hides" the new
+ * fallback feature for already-cached misses.
+ *
+ * @param {object} result    The cached result.
+ * @param {boolean} placesFallbackEnabled  Whether Places fallback is currently on.
+ * @returns {boolean}  true → bypass cache (re-run orchestrator); false → use cache.
+ */
+export function shouldBypassCacheForPlaces(result, placesFallbackEnabled) {
+  if (!placesFallbackEnabled) return false;
+  if (!result || typeof result !== "object") return false;
+  if (result.bestPhone) return false;  // Already have a phone, no need.
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const alreadyTriedPlaces = evidence.some(
+    (e) => typeof e === "string" && /places_fallback[:_]/.test(e)
+  );
+  if (alreadyTriedPlaces) return false;
+  return true;
+}
