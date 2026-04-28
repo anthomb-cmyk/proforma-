@@ -9,6 +9,21 @@ import { Router } from "express";
 import { runContactEnrichmentPreview } from "../services/contactEnrichmentPipeline.js";
 
 /**
+ * Returns true if at least one web-search provider appears to be configured
+ * based on env vars alone — no network probe required.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.provider]   Override WEB_SEARCH_PROVIDER env var.
+ * @param {string} [opts.braveKey]   Override BRAVE_SEARCH_API_KEY env var.
+ * @param {string} [opts.serperKey]  Override SERPER_API_KEY env var.
+ */
+function isSearchConfigured(opts = {}) {
+  const braveKey = opts.braveKey ?? process.env.BRAVE_SEARCH_API_KEY ?? "";
+  const serperKey = opts.serperKey ?? process.env.SERPER_API_KEY ?? "";
+  return !!(braveKey || serperKey);
+}
+
+/**
  * @param {object} deps
  * @param {Function} deps.createSearchFn   () => searchFn — factory that returns
  *   the current web-search function (called per request so key changes take effect).
@@ -27,12 +42,9 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
     const rawLimit = req.body?.limit;
     const limit = Number.isFinite(Number(rawLimit)) ? Number(rawLimit) : 5;
 
-    const searchFn = createSearchFn();
-
-    // Guard: if the provider isn't configured return a helpful 503 instead of
-    // silently returning empty results for every package.
-    const probe = await searchFn("probe");
-    if (!probe.ok && probe.error === "WEB_SEARCH_NOT_CONFIGURED") {
+    // Fix 3: Guard via env-var check instead of a live Brave probe call.
+    // Saves 1 Brave query per /single invocation — significant at scale.
+    if (!isSearchConfigured()) {
       return res.status(503).json({
         ok: false,
         error: "WEB_SEARCH_NOT_CONFIGURED",
@@ -41,12 +53,17 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
       });
     }
 
+    const searchFn = createSearchFn();
+
     try {
       const results = await runContactEnrichmentPreview({
         packages,
         limit,
         searchFn,
         fetchPageFn,
+        options: {
+          b2bhintFetchEnabled: process.env.B2BHINT_FETCH_ENABLED === "true",
+        },
       });
       return res.json({ ok: true, results });
     } catch (err) {
@@ -69,9 +86,8 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
       return res.status(400).json({ ok: false, error: "package required (single object)." });
     }
 
-    const searchFn = createSearchFn();
-    const probe = await searchFn("probe");
-    if (!probe.ok && probe.error === "WEB_SEARCH_NOT_CONFIGURED") {
+    // Fix 3: Guard via env-var check instead of a live Brave probe call.
+    if (!isSearchConfigured()) {
       return res.status(503).json({
         ok: false,
         error: "WEB_SEARCH_NOT_CONFIGURED",
@@ -80,12 +96,17 @@ export function createContactEnrichmentRouter({ createSearchFn, fetchPageFn }) {
       });
     }
 
+    const searchFn = createSearchFn();
+
     try {
       const results = await runContactEnrichmentPreview({
         packages: [pkg],
         limit: 1,
         searchFn,
         fetchPageFn,
+        options: {
+          b2bhintFetchEnabled: process.env.B2BHINT_FETCH_ENABLED === "true",
+        },
       });
       // Always return the single result object directly so the client doesn't
       // need to unwrap an array of length 1.
