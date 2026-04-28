@@ -512,6 +512,12 @@ export function buildSearchPackages(inputRows, options = {}) {
         propertiesByKey: new Map(),
         sourceRowIndices: [],
         warnings: new Set(),
+        // Co-owner expansion fields (populated from role-extractor rows).
+        coOwnerNamesSet: new Set(),
+        slotIdx: typeof row.slotIdx === "number" ? row.slotIdx : 0,
+        slotIdxSet: typeof row.slotIdx === "number",
+        mailingAddressesAll: [],
+        searchAnchorsAll: [],
       };
       groups.set(key, g);
     } else {
@@ -548,6 +554,19 @@ export function buildSearchPackages(inputRows, options = {}) {
     if (Array.isArray(row.candidateEmails)) g.candidateEmails.push(...row.candidateEmails);
     if (Array.isArray(row.candidateWebsites)) g.candidateWebsites.push(...row.candidateWebsites);
 
+    // Co-owner expansion: accumulate from role-extractor rows.
+    if (Array.isArray(row.coOwnerNames)) {
+      for (const n of row.coOwnerNames) {
+        if (n) g.coOwnerNamesSet.add(n);
+      }
+    }
+    if (!g.slotIdxSet && typeof row.slotIdx === "number") {
+      g.slotIdx = row.slotIdx;
+      g.slotIdxSet = true;
+    }
+    if (Array.isArray(row.mailingAddresses)) g.mailingAddressesAll.push(...row.mailingAddresses);
+    if (Array.isArray(row.searchAnchors)) g.searchAnchorsAll.push(...row.searchAnchors);
+
     // Properties: from buildings (owner shape) or the single building this
     // row represents (lead-like shape).
     const props = isOwnerShaped(row) ? buildingsToProperties(row) : leadLikeToProperties(row);
@@ -570,10 +589,11 @@ export function buildSearchPackages(inputRows, options = {}) {
     const isSearchable = SEARCHABLE_CATEGORIES.has(category);
 
     // Co-owners = every distinct contact/alias name on the same mailing
-    // address EXCEPT the chosen lead_owner_name.
+    // address EXCEPT the chosen lead_owner_name. Legacy source: contactNames /
+    // aliases. New source: coOwnerNamesSet populated by role-extractor rows.
     const coOwners = [];
     const coSeen = new Set();
-    for (const n of [...g.contactNames, ...g.aliases]) {
+    for (const n of [...g.contactNames, ...g.aliases, ...g.coOwnerNamesSet]) {
       const t = String(n || "").trim();
       if (!t || t === leadOwnerName) continue;
       const k = normalizeTextKey(t);
@@ -581,6 +601,25 @@ export function buildSearchPackages(inputRows, options = {}) {
       coSeen.add(k);
       coOwners.push(t);
     }
+
+    // Classify co-owners into entities vs. people for targeted enrichment.
+    const coOwnerEntities = coOwners.filter((n) => {
+      const cat = classifyLegalEntity(n);
+      return cat !== "individual" && cat !== "unknown";
+    });
+    const coOwnerPeople = coOwners.filter((n) => classifyLegalEntity(n) === "individual");
+
+    // Deduplicated mailing addresses from all input rows (role-extractor path).
+    const mailingAddrSeen = new Set();
+    const mailingAddresses = g.mailingAddressesAll.filter((a) => {
+      const k = `${String(a.street || "").toLowerCase()}|${String(a.postalCode || "").toLowerCase()}`;
+      if (mailingAddrSeen.has(k)) return false;
+      mailingAddrSeen.add(k);
+      return true;
+    });
+
+    // Unique search anchors from all input rows.
+    const searchAnchors = [...new Set(g.searchAnchorsAll.filter(Boolean))];
 
     // Dedupe the flat phones/emails/websites lists.
     const existing_phones = mergePhoneLists(g.existingPhones);
@@ -628,6 +667,14 @@ export function buildSearchPackages(inputRows, options = {}) {
       candidateWebsites,
       associated_properties: associatedProperties,
       co_owners: coOwners,
+      // Co-owner expansion (role-extractor path).
+      coOwnerNames: coOwners,
+      coOwnerEntities,
+      coOwnerPeople,
+      slotIdx: g.slotIdx ?? 0,
+      mailingAddresses,
+      searchAnchors,
+      propertyId: associatedProperties[0]?.matricule || associatedProperties[0]?.address || null,
       primary_target: "phone",
       secondary_targets: ["email", "website"],
       warnings,

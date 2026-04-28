@@ -102,6 +102,18 @@ function adaptRoleRowsToLeadLike(rows) {
     if (!parsed.ownersMap.size) return [];
 
     const propById = new Map(parsed.properties.map((p) => [p.id, p]));
+
+    // Build propertyId → [owner names] map so each draft can discover its
+    // co-owners (other owners sharing the same property row).
+    const propToNames = new Map();
+    for (const [, drafts] of parsed.ownersMap) {
+      for (const d of drafts) {
+        if (!d.name) continue;
+        if (!propToNames.has(d.propertyId)) propToNames.set(d.propertyId, []);
+        propToNames.get(d.propertyId).push(d.name);
+      }
+    }
+
     const records = [];
 
     for (const [, drafts] of parsed.ownersMap) {
@@ -122,6 +134,9 @@ function adaptRoleRowsToLeadLike(rows) {
               },
             ]
           : [];
+        const primaryAddr = mailingAddresses[0] || {};
+        const coOwnerNames = (propToNames.get(draft.propertyId) || [])
+          .filter((n) => n !== draft.name);
         records.push({
           companyName: draft.name,
           address: prop?.adresseImmeuble || "",
@@ -133,12 +148,20 @@ function adaptRoleRowsToLeadLike(rows) {
           mailing_province: postal.province || "QC",
           mailing_postal_code: postal.postalCode || "",
           mailingAddresses,
+          searchAnchors: (primaryAddr.street || (primaryAddr.city && primaryAddr.postalCode))
+            ? [[primaryAddr.street, primaryAddr.city, primaryAddr.province, primaryAddr.postalCode]
+                .filter(Boolean).join(", ")]
+            : [],
           phones: draft.phones || [],
           phone: (draft.phones || [])[0] || "",
           candidatePhones,
           units: prop ? (prop.nbTotalUnites || prop.nbLogements || 0) : 0,
           utilisation: prop?.utilisation || "",
           status: draft.status || "",
+          // Co-owner expansion fields.
+          coOwnerNames,
+          slotIdx: 0,
+          propertyId: draft.propertyId || null,
         });
       }
     }
@@ -177,8 +200,12 @@ function adaptRoleRowsToLeadLike(rows) {
     const ville = prop?.ville
       || (villeCol ? String(row[villeCol] || "").trim() : "");
 
+    // All slot names in this row — used to identify co-owners for each slot.
+    const allSlotNames = slots.map((s) => s.name).filter(Boolean);
+
     for (const slot of slots) {
       const primaryAddr = slot.mailingAddresses[0] || {};
+      const coOwnerNames = allSlotNames.filter((n) => n !== slot.name);
       records.push({
         companyName: slot.name,
         address: buildingAddress,
@@ -190,12 +217,17 @@ function adaptRoleRowsToLeadLike(rows) {
         mailing_province: primaryAddr.province || "QC",
         mailing_postal_code: primaryAddr.postalCode || "",
         mailingAddresses: slot.mailingAddresses,
+        searchAnchors: buildSearchAnchors(slot),
         phones: slot.phones || [],
         phone: (slot.phones || [])[0] || "",
         candidatePhones: slot.candidatePhones || [],
         units: prop ? (prop.nbTotalUnites || prop.nbLogements || 0) : 0,
         utilisation: prop?.utilisation || "",
         status: slot.status || "",
+        // Co-owner expansion fields.
+        coOwnerNames,
+        slotIdx: slot.slotIdx,
+        propertyId: prop?.id || prop?.matricule || `row_${rowIdx}`,
       });
     }
   });
