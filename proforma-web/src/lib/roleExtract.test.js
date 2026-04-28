@@ -245,10 +245,10 @@ describe("extractOwnerSlotsFromRow — Format B (compact indexed)", () => {
   const row = {
     "Propriétaire1_Nom": "GESTION IMMOBILIÈRE GRANBY INC.",
     "Propriétaire1_Adresse": "1 rue Principale, Granby (Québec) J2G 2T2",
-    "Propriétaire1_Téléphone": "450-372-1111",
+    "Propriétaire1_Téléphone": "450-555-0161",
     "Propriétaire2_Nom": "DURAND Sophie",
     "Propriétaire2_Adresse": "22 ave Cartier, Granby (Québec) J2H 2B2",
-    "Propriétaire2_Téléphone": "450-372-2222",
+    "Propriétaire2_Téléphone": "450-555-0162",
     "Propriétaire3_Nom": "FIDUCIE DURAND",
     "Propriétaire3_Adresse": "22 ave Cartier, Granby (Québec) J2H 2B2",
     "Propriétaire3_Téléphone": "",
@@ -290,7 +290,7 @@ describe("extractOwnerSlotsFromRow — Format B (compact indexed)", () => {
   });
 
   test("slot 1: phone from Propriétaire2_Téléphone", () => {
-    expect(slots[1].phones).toContain("450-372-2222");
+    expect(slots[1].phones).toContain("450-555-0162");
   });
 
   test("slot 2: Fiducie at same address as slot 1, fanned out independently", () => {
@@ -329,7 +329,7 @@ describe("extractOwnerSlotsFromRow — Format D (prospection template)", () => {
       "Adresse_proprio": "5 boul. des Entreprises",
       "Ville_code_postal_proprio": "Saint-Hyacinthe J2S 4B3",
       "Code postal-proprio": "",
-      "Téléphone_proprio": "450-773-9999",
+      "Téléphone_proprio": "450-555-0163",
     };
     const slots = extractOwnerSlotsFromRow(row, headers);
     expect(slots).toHaveLength(1);
@@ -570,7 +570,7 @@ describe("extractOwnerSlotsFromRow — edge cases", () => {
     const row = {
       "Propriétaire": "GAGNON Pierre",
       "Adresse postale": "1 rue Principale, Victoriaville (Québec) G6P 1A1",
-      "Téléphone": "819-555-3000",
+      "Téléphone": "819-555-0131",
       "Propriétaire 2": "9234-5678 QUÉBEC INC.",
       "Adresse postale 2": "99 rue Commerce, Victoriaville (Québec) G6P 9Z9",
       "Téléphone 2": "",
