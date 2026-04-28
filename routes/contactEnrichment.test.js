@@ -4,7 +4,7 @@
 // a minimal Express app, injects a mocked searchFn, exercises both /preview
 // and /single without hitting the network.
 
-import { test, describe } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import http from "node:http";
@@ -48,8 +48,39 @@ function postJSON(port, path, body) {
   });
 }
 
+// Fix 3: searchFn factory for configured provider.
+// isSearchConfigured() in the route now checks process.env directly, so tests
+// that want a "configured" state must set a key env var.
 const okSearch = (results = []) => async () => ({ ok: true, results });
-const notConfigured = () => async () => ({ ok: false, error: "WEB_SEARCH_NOT_CONFIGURED" });
+
+// For the "not configured" tests we clear all search-key env vars.
+// We restore them after each test to avoid polluting later tests.
+let savedBraveKey;
+let savedSerperKey;
+let savedProvider;
+
+function clearSearchEnv() {
+  savedBraveKey = process.env.BRAVE_SEARCH_API_KEY;
+  savedSerperKey = process.env.SERPER_API_KEY;
+  savedProvider = process.env.WEB_SEARCH_PROVIDER;
+  delete process.env.BRAVE_SEARCH_API_KEY;
+  delete process.env.SERPER_API_KEY;
+  delete process.env.WEB_SEARCH_PROVIDER;
+}
+
+function setSearchEnv() {
+  // Provide a dummy key so isSearchConfigured() returns true.
+  process.env.BRAVE_SEARCH_API_KEY = "test-key";
+}
+
+function restoreSearchEnv() {
+  if (savedBraveKey !== undefined) process.env.BRAVE_SEARCH_API_KEY = savedBraveKey;
+  else delete process.env.BRAVE_SEARCH_API_KEY;
+  if (savedSerperKey !== undefined) process.env.SERPER_API_KEY = savedSerperKey;
+  else delete process.env.SERPER_API_KEY;
+  if (savedProvider !== undefined) process.env.WEB_SEARCH_PROVIDER = savedProvider;
+  else delete process.env.WEB_SEARCH_PROVIDER;
+}
 
 const samplePkg = {
   lead_owner_name: "Test Inc.",
@@ -60,6 +91,7 @@ const samplePkg = {
 
 describe("POST /api/contact-enrichment/preview", () => {
   test("400 when packages[] missing", async () => {
+    setSearchEnv();
     const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/preview", {});
@@ -67,21 +99,26 @@ describe("POST /api/contact-enrichment/preview", () => {
       assert.equal(r.body.ok, false);
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 
   test("503 when web search is not configured", async () => {
-    const { server, port } = await startApp({ createSearchFn: notConfigured });
+    // Fix 3: 503 is now driven by missing env vars, not by probe call result.
+    clearSearchEnv();
+    const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/preview", { packages: [samplePkg] });
       assert.equal(r.status, 503);
       assert.equal(r.body.error, "WEB_SEARCH_NOT_CONFIGURED");
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 
   test("200 with results array on success", async () => {
+    setSearchEnv();
     const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/preview", { packages: [samplePkg], limit: 1 });
@@ -91,12 +128,14 @@ describe("POST /api/contact-enrichment/preview", () => {
       assert.equal(r.body.results.length, 1);
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 });
 
 describe("POST /api/contact-enrichment/single", () => {
   test("400 when package missing", async () => {
+    setSearchEnv();
     const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/single", {});
@@ -104,31 +143,38 @@ describe("POST /api/contact-enrichment/single", () => {
       assert.equal(r.body.ok, false);
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 
   test("400 when package is an array (must be a single object)", async () => {
+    setSearchEnv();
     const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/single", { package: [samplePkg] });
       assert.equal(r.status, 400);
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 
   test("503 when web search is not configured", async () => {
-    const { server, port } = await startApp({ createSearchFn: notConfigured });
+    // Fix 3: 503 is now driven by missing env vars, not by probe call result.
+    clearSearchEnv();
+    const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/single", { package: samplePkg });
       assert.equal(r.status, 503);
       assert.equal(r.body.error, "WEB_SEARCH_NOT_CONFIGURED");
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 
   test("200 with a single result object on success", async () => {
+    setSearchEnv();
     const { server, port } = await startApp({ createSearchFn: () => okSearch([]) });
     try {
       const r = await postJSON(port, "/api/contact-enrichment/single", { package: samplePkg });
@@ -140,6 +186,7 @@ describe("POST /api/contact-enrichment/single", () => {
       assert.equal(r.body.result.lead_owner_name, "Test Inc.");
     } finally {
       server.close();
+      restoreSearchEnv();
     }
   });
 });

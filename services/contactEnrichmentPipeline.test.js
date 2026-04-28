@@ -1022,6 +1022,7 @@ test("[b2bhint-fetch] B2BHint profile with no snippet directors triggers page fe
     packages: [pkg],
     searchFn: stagedSearch,
     fetchPageFn: mockFetchPage,
+    options: { b2bhintFetchEnabled: true }, // Fix 6: opt-in required
   });
   const r = results[0];
 

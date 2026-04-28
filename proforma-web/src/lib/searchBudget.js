@@ -8,7 +8,7 @@
 //   { used: number, cap: number, sessionStartedAt: number }
 
 const STORAGE_KEY = "pf_search_budget_v1";
-const DEFAULT_CAP = 200;
+const DEFAULT_CAP = 500; // raised from 200 (Fix 7: ~13 queries/pkg now, covers 25-50 packages)
 
 /** Return the default call cap (200). */
 export function defaultCap() {
