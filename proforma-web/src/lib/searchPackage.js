@@ -341,11 +341,6 @@ export function buildDirectEntityQueries(pkg) {
 
 export function buildMailingAddressDiscoveryQueries(pkg) {
   if (!pkg) return [];
-  const street = String(pkg.mailing_address || "").trim();
-  const city = String(pkg.mailing_city || "").trim();
-  const prov = String(pkg.mailing_province || "").trim();
-  const postal = String(pkg.mailing_postal_code || "").trim();
-  if (!street && !(city && postal)) return [];
 
   const seen = new Set();
   const out = [];
@@ -358,10 +353,37 @@ export function buildMailingAddressDiscoveryQueries(pkg) {
     out.push(trimmed);
   };
 
-  if (street) push(joinNonEmpty([street, city, prov, postal]));
-  if (street && city) push(`companies ${joinNonEmpty([street, city, prov])}`);
-  if (street && city) push(`businesses ${joinNonEmpty([street, city, prov])}`);
-  if (street && postal) push(joinNonEmpty([street, postal]));
+  const pushAddress = (street, city, prov, postal) => {
+    if (!street && !(city && postal)) return;
+    if (street) push(joinNonEmpty([street, city, prov, postal]));
+    if (street && city) push(`companies ${joinNonEmpty([street, city, prov])}`);
+    if (street && city) push(`businesses ${joinNonEmpty([street, city, prov])}`);
+    if (street && postal) push(joinNonEmpty([street, postal]));
+  };
+
+  // When the package carries a mailingAddresses[] array (produced by the
+  // universal extractor for Formats B/D, or by adaptRoleRowsToLeadLike for
+  // Format A/C), generate queries for EVERY address so all owner mailing
+  // locations become search anchors.
+  if (Array.isArray(pkg.mailingAddresses) && pkg.mailingAddresses.length > 0) {
+    for (const addr of pkg.mailingAddresses) {
+      pushAddress(
+        String(addr.street || "").trim(),
+        String(addr.city || "").trim(),
+        String(addr.province || "").trim(),
+        String(addr.postalCode || "").trim(),
+      );
+    }
+    return out;
+  }
+
+  // Legacy: single address from flat fields (Owner-shaped or plain lead-like).
+  pushAddress(
+    String(pkg.mailing_address || "").trim(),
+    String(pkg.mailing_city || "").trim(),
+    String(pkg.mailing_province || "").trim(),
+    String(pkg.mailing_postal_code || "").trim(),
+  );
   return out;
 }
 

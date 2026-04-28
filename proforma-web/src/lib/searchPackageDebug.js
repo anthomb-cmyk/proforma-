@@ -21,6 +21,10 @@ import {
   normalizeHeaderKey,
   extractRoleData,
 } from "./roleImport.js";
+import {
+  detectRoleFormat,
+  extractOwnerSlotsFromRow,
+} from "./roleExtract.js";
 
 const FLAG_KEY = "pf_spdebug";
 
@@ -39,12 +43,13 @@ export function isSearchPackageDebugEnabled() {
 
 // ─── Raw rôle-row detection + adaptation ──────────────────────────────────
 
-// A row is "rôle-style" if it contains a column whose normalized name is
-// exactly "proprietaire" — the lead owner column present in every Québec
-// rôle d'évaluation export.
+// A row is "rôle-style" if its headers match any known Québec rôle format:
+// Format A/C — "proprietaire" (exact), Format B — "proprietaire1 nom" etc.,
+// Format D — "nom proprio" / "adresse proprio".
 function isRoleStyleRow(row) {
   if (!row || typeof row !== "object") return false;
-  return Object.keys(row).some((k) => normalizeHeaderKey(k) === "proprietaire");
+  const normKeys = Object.keys(row).map(normalizeHeaderKey);
+  return detectRoleFormat(normKeys) !== "unknown";
 }
 
 // Phone Finder wraps each imported row in a shaped record with a `rawRow`
@@ -65,7 +70,7 @@ function isRoleFormat(rows) {
 }
 
 // Convert a batch of raw rôle rows (or PF-wrapped rôle rows) to lead-like
-// records for buildSearchPackages, emitting ONE record per owner-slot draft.
+// records for buildSearchPackages, emitting ONE record per owner-slot.
 //
 // Why not reuse buildOwnersAndLeadsFromRole here: that function groups by
 // mailing address (one Owner per unique ownerKey), so two different owners
@@ -73,53 +78,127 @@ function isRoleFormat(rows) {
 // collapse into a single Owner record. The chosen displayName drives
 // classification, hiding the fiducie/company under the person's name.
 //
-// By emitting one record per draft we give buildSearchPackages the raw
+// By emitting one record per slot we give buildSearchPackages the raw
 // (name, mailing) pairs it needs to:
 //   • group correctly by (normalized_name | normalized_postal)
 //   • classify each owner independently
 //   • collapse same-name-same-mailing across property rows into one package
 //   • flag same-name-different-mailing as duplicate_different_address
+//
+// Format A/C uses the existing extractRoleData pipeline (which also captures
+// building-level candidate phones). Formats B and D use extractOwnerSlotsFromRow
+// directly.
 function adaptRoleRowsToLeadLike(rows) {
   const rawRows = rows.map(getRawRow).filter((r) => r && typeof r === "object");
   if (!rawRows.length) return [];
-  // Collect all unique header names so extractRoleData finds every slot column.
+
   const headers = [...new Set(rawRows.flatMap((r) => Object.keys(r)))];
+  const normHeaders = headers.map(normalizeHeaderKey);
+  const format = detectRoleFormat(normHeaders);
+
+  // ── Format A/C: use existing extractRoleData pipeline ─────────────────
+  if (format === "A_C") {
+    const parsed = extractRoleData({ rows: rawRows, headers });
+    if (!parsed.ownersMap.size) return [];
+
+    const propById = new Map(parsed.properties.map((p) => [p.id, p]));
+    const records = [];
+
+    for (const [, drafts] of parsed.ownersMap) {
+      for (const draft of drafts) {
+        const postal = draft.postalAddress || {};
+        const prop = propById.get(draft.propertyId);
+        const candidatePhones = [
+          ...(draft.candidatePhones || []),
+          ...(prop?.candidatePhones || []),
+        ];
+        const mailingAddresses = (postal.street || postal.postalCode)
+          ? [
+              {
+                street: postal.street || "",
+                city: postal.city || "",
+                province: postal.province || "QC",
+                postalCode: postal.postalCode || "",
+              },
+            ]
+          : [];
+        records.push({
+          companyName: draft.name,
+          address: prop?.adresseImmeuble || "",
+          city: prop?.ville || "",
+          province: "QC",
+          postalCode: prop?.codePostalImmeuble || "",
+          mailing_address: postal.street || "",
+          mailing_city: postal.city || "",
+          mailing_province: postal.province || "QC",
+          mailing_postal_code: postal.postalCode || "",
+          mailingAddresses,
+          phones: draft.phones || [],
+          phone: (draft.phones || [])[0] || "",
+          candidatePhones,
+          units: prop ? (prop.nbTotalUnites || prop.nbLogements || 0) : 0,
+          utilisation: prop?.utilisation || "",
+          status: draft.status || "",
+        });
+      }
+    }
+    return records;
+  }
+
+  // ── Formats B and D: use universal extractor ───────────────────────────
+  // Property-level columns (building address, city, units) are read via
+  // extractRoleData — it still populates properties[] even when ownerSlots is
+  // empty (which it will be for unknown formats). For sheets that have no
+  // recognizable property columns (e.g. pure-prospection Format D), we fall
+  // back to empty strings for the building-level fields.
   const parsed = extractRoleData({ rows: rawRows, headers });
-  if (!parsed.ownersMap.size) return [];
+  const propByRowIdx = new Map(
+    parsed.properties.map((p) => [p.rowIndex, p]),
+  );
 
-  const propById = new Map(parsed.properties.map((p) => [p.id, p]));
+  // Best-effort building-address column discovery for sheets without standard
+  // rôle property columns (Format D prospection templates).
+  const addrCol =
+    headers.find((h) => {
+      const n = normalizeHeaderKey(h);
+      return n === "adresse immeuble" || n === "adresse civique";
+    }) || "";
+  const villeCol =
+    headers.find((h) => normalizeHeaderKey(h) === "ville") || "";
+
   const records = [];
+  rawRows.forEach((row, rowIdx) => {
+    const slots = extractOwnerSlotsFromRow(row, headers);
+    if (!slots.length) return;
 
-  for (const [, drafts] of parsed.ownersMap) {
-    for (const draft of drafts) {
-      const postal = draft.postalAddress || {};
-      const prop = propById.get(draft.propertyId);
-      // Append building-level candidates (relationship: "building") from the
-      // property row; buildSearchPackages will deduplicate via
-      // mergePhoneCandidates when it flattens the group's candidatePhones.
-      const candidatePhones = [
-        ...(draft.candidatePhones || []),
-        ...(prop?.candidatePhones || []),
-      ];
+    const prop = propByRowIdx.get(rowIdx);
+    const buildingAddress = prop?.adresseImmeuble
+      || (addrCol ? String(row[addrCol] || "").trim() : "");
+    const ville = prop?.ville
+      || (villeCol ? String(row[villeCol] || "").trim() : "");
+
+    for (const slot of slots) {
+      const primaryAddr = slot.mailingAddresses[0] || {};
       records.push({
-        companyName: draft.name,
-        address: prop?.adresseImmeuble || "",
-        city: prop?.ville || "",
+        companyName: slot.name,
+        address: buildingAddress,
+        city: ville,
         province: "QC",
         postalCode: prop?.codePostalImmeuble || "",
-        mailing_address: postal.street || "",
-        mailing_city: postal.city || "",
-        mailing_province: postal.province || "QC",
-        mailing_postal_code: postal.postalCode || "",
-        phones: draft.phones || [],
-        phone: (draft.phones || [])[0] || "",
-        candidatePhones,
+        mailing_address: primaryAddr.street || "",
+        mailing_city: primaryAddr.city || "",
+        mailing_province: primaryAddr.province || "QC",
+        mailing_postal_code: primaryAddr.postalCode || "",
+        mailingAddresses: slot.mailingAddresses,
+        phones: slot.phones || [],
+        phone: (slot.phones || [])[0] || "",
+        candidatePhones: slot.candidatePhones || [],
         units: prop ? (prop.nbTotalUnites || prop.nbLogements || 0) : 0,
         utilisation: prop?.utilisation || "",
-        status: draft.status || "",
+        status: slot.status || "",
       });
     }
-  }
+  });
 
   return records;
 }
