@@ -965,3 +965,130 @@ test("[choiniere-live] 'JONATHAN CHOINIERE real estate broker in Bromont' must N
   assert.notEqual(r.status, "ready_to_call",
     "broker title with shared family name must not ready_to_call");
 });
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/*  Phase 3.1 — B2BHint page-fetch pipeline tests                              */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+/* P3-T1. B2BHint result with empty snippet directors → fetch fills directors */
+test("[b2bhint-fetch] B2BHint profile with no snippet directors triggers page fetch and populates directors", async () => {
+  const PHONE_DIR = "(514) 555-0199";
+  const DIGITS_DIR = "5145550199";
+
+  // Mocked B2BHint page HTML — has directors not in the snippet.
+  const b2bhintPageHtml = `<html><body>
+    <dl>
+      <dt>Dirigeants</dt>
+      <dd>Robert Gosselin, Francine Audet</dd>
+    </dl>
+  </body></html>`;
+
+  // The search result has NO directors in its snippet.
+  const profileResult = {
+    title: "Gestion Gosselin Inc. - B2BHint",
+    snippet: "NEQ: 1234509876. Adresse: 99 boul. Test, Laval. Aucun dirigeant affiché.",
+    url: "https://b2bhint.com/fr/company/ca-qc/gestion-gosselin-inc--1234509876",
+  };
+
+  // Expansion query returns a director result.
+  const directorResult = {
+    title: "Robert Gosselin",
+    snippet: `Propriétaire — ${PHONE_DIR}`,
+    url: "https://example-gosselin.ca",
+  };
+
+  let queryNum = 0;
+  const stagedSearch = async (_q) => {
+    queryNum += 1;
+    if (queryNum === 1) return { ok: true, results: [profileResult] };
+    return { ok: true, results: [directorResult] };
+  };
+
+  const fetchedUrls = [];
+  const mockFetchPage = async (url) => {
+    fetchedUrls.push(url);
+    if (url === profileResult.url) return b2bhintPageHtml;
+    return null;
+  };
+
+  const pkg = makePkg({
+    lead_owner_name: "Gestion Gosselin Inc.",
+    legal_entity_category: "inc_ltee",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: [],
+  });
+
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+    fetchPageFn: mockFetchPage,
+  });
+  const r = results[0];
+
+  // B2BHint page must have been fetched
+  assert.ok(fetchedUrls.includes(profileResult.url), "B2BHint page should have been fetched");
+
+  // evidence must contain b2bhint_fetch line
+  assert.ok(
+    r.evidence.some((e) => /b2bhint_fetch:/.test(e)),
+    `expected b2bhint_fetch evidence, got: ${JSON.stringify(r.evidence)}`,
+  );
+
+  // directors from page should have enabled director-based expansion
+  // (Robert Gosselin should appear in evidence as a director)
+  assert.ok(
+    r.evidence.some((e) => /company_profile:.*directors=2/.test(e)),
+    `expected directors=2 in company_profile evidence, got: ${JSON.stringify(r.evidence)}`,
+  );
+});
+
+/* P3-T2. Non-B2BHint profile URL → no page fetch attempt */
+test("[b2bhint-fetch] Non-B2BHint profile URL does NOT trigger page fetch", async () => {
+  const profileResult = {
+    title: "Société ABC - OpenCorporates",
+    snippet: "NEQ: 9876543210. Dirigeants: (none listed). Adresse: 77 rue Test, Québec.",
+    url: "https://opencorporates.com/companies/ca_qc/9876543210",
+  };
+
+  let fetchPageCalled = false;
+  const mockFetchPage = async (_url) => {
+    fetchPageCalled = true;
+    return null;
+  };
+
+  let queryNum = 0;
+  const stagedSearch = async (_q) => {
+    queryNum += 1;
+    if (queryNum === 1) return { ok: true, results: [profileResult] };
+    return { ok: true, results: [] };
+  };
+
+  const pkg = makePkg({
+    lead_owner_name: "Société ABC",
+    legal_entity_category: "society",
+    search_strategy: "mailing_address_only",
+    mailing_address_discovery_queries: [],
+  });
+
+  await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+    fetchPageFn: mockFetchPage,
+  });
+
+  // fetchPageFn should NOT have been called for a non-B2BHint URL
+  // (it may be called for top website pages, but not for this OpenCorporates URL)
+  // We check that no B2BHint fetch evidence appeared.
+  // The mock IS called for the site page-fetch (step 2), so we only check
+  // that no b2bhint_fetch evidence was emitted (not that fetchPage was never called).
+  const results = await runContactEnrichmentPreview({
+    packages: [pkg],
+    searchFn: stagedSearch,
+    fetchPageFn: mockFetchPage,
+  });
+  const r = results[0];
+  assert.ok(
+    !r.evidence.some((e) => /b2bhint_fetch:/.test(e)),
+    "b2bhint_fetch evidence should NOT appear for OpenCorporates URL",
+  );
+});

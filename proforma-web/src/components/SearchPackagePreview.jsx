@@ -37,6 +37,12 @@ import {
   fanOutResult,
 } from "../lib/ownerDeduplication.js";
 import { CloseIcon } from "./Icons.jsx";
+import {
+  getCachedResult,
+  cacheResult,
+  clearCachedResult,
+} from "../lib/enrichmentResultCache.js";
+import { buildScorecardCSV } from "../lib/scorecardExport.js";
 
 const cellLabel = { fontSize: 11, color: "var(--text3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
 const cellValue = { fontSize: 18, fontWeight: 700, color: "var(--text)" };
@@ -100,7 +106,7 @@ const TD = ({ children, style }) => (
 );
 
 // Enrichment results table with per-row expandable evidence panel.
-function EnrichResultsTable({ results }) {
+function EnrichResultsTable({ results, onForceReenrich }) {
   const [openIdx, setOpenIdx] = useState(null);
   const toggle = useCallback((i) => setOpenIdx((prev) => (prev === i ? null : i)), []);
 
@@ -117,6 +123,7 @@ function EnrichResultsTable({ results }) {
           <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Email</th>
           <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Website</th>
           <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}>Conf.</th>
+          {onForceReenrich && <th style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)" }}></th>}
         </tr>
       </thead>
       <tbody>
@@ -144,6 +151,19 @@ function EnrichResultsTable({ results }) {
                   : "—"}
               </TD>
               <TD style={{ color: "var(--text3)" }}>{r.confidence || "—"}</TD>
+              {onForceReenrich && (
+                <TD>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ fontSize: 9, color: "var(--text3)", padding: "1px 4px" }}
+                    onClick={(e) => { e.stopPropagation(); onForceReenrich(r); }}
+                    title="Clear cache and re-enrich this package"
+                  >
+                    Re-enrich
+                  </button>
+                </TD>
+              )}
             </tr>
 
             {openIdx === i && (
@@ -279,6 +299,8 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
   const sessionId = useMemo(() => deriveSessionId(rows), [rows]);
   // Toast for "Restored prior session" / "Cleared session".
   const [sessionToast, setSessionToast] = useState(/** @type {string|null} */ null);
+  // Toast for cache-restore and force-reenrich operations.
+  const [cacheToast, setCacheToast] = useState(/** @type {string|null} */ null);
 
   // Restore prior session state when sessionId becomes available.
   useEffect(() => {
@@ -359,6 +381,10 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
         batch.forEach((pkg) => next.add(makePackageKey(pkg)));
         return next;
       });
+      // Persist results to cross-session cache.
+      batch.forEach((pkg, i) => {
+        if (res.results[i]) cacheResult(pkg, res.results[i]);
+      });
       setCurrentBatchResults(res.results);
       setEnrichState("done");
     } else if (res.cancelled) {
@@ -427,6 +453,8 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
             for (const key of fanned.keys()) next.add(key);
             return next;
           });
+          // Persist result to cross-session cache.
+          cacheResult(representatives.find((e) => e.packageKey === packageKey)?.package || {}, result);
         } else if (phase === "error") {
           setPkgDone((d) => d + 1);
         }
@@ -483,12 +511,57 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     if (!nextBatchPkgs.length) return;
     // Count how many allPkgs are already enriched to compute the 1-based range.
     const doneCount = allPkgs.filter((p) => enrichedKeys.has(makePackageKey(p))).length;
+
+    // Cache pre-pass: check cross-session cache before firing the orchestrator.
+    const cacheHits = [];
+    const cacheMisses = [];
+    for (const pkg of nextBatchPkgs) {
+      const hit = getCachedResult(pkg);
+      if (hit.hit) {
+        cacheHits.push({ pkg, result: hit.result, cachedAt: hit.cachedAt });
+      } else {
+        cacheMisses.push(pkg);
+      }
+    }
+
+    if (cacheHits.length > 0) {
+      const cacheIso = (ts) => ts ? new Date(ts).toISOString() : "?";
+      setAllEnrichedResults((prev) => {
+        const next = new Map(prev);
+        for (const { pkg, result, cachedAt } of cacheHits) {
+          const restored = {
+            ...result,
+            evidence: [
+              ...(result.evidence || []),
+              `restored_from_cache: cachedAt=${cacheIso(cachedAt)}`,
+            ],
+          };
+          next.set(makePackageKey(pkg), restored);
+        }
+        return next;
+      });
+      setEnrichedKeys((prev) => {
+        const next = new Set(prev);
+        for (const { pkg } of cacheHits) next.add(makePackageKey(pkg));
+        return next;
+      });
+      setCacheToast(`Restored ${cacheHits.length} / ${nextBatchPkgs.length} packages from cache`);
+    }
+
     setCurrentBatch(nextBatchPkgs);
     setCurrentBatchRange({ start: doneCount + 1, end: doneCount + nextBatchPkgs.length });
+
+    if (cacheMisses.length === 0) {
+      // All cache hits — no network needed.
+      setEnrichState("done");
+      setCurrentBatchResults(cacheHits.map(({ result }) => result));
+      return;
+    }
+
     if (perPkgMode) {
-      runPerPkgMode(nextBatchPkgs);
+      runPerPkgMode(cacheMisses);
     } else {
-      runBatch(nextBatchPkgs);
+      runBatch(cacheMisses);
     }
   }, [nextBatchPkgs, allPkgs, enrichedKeys, runBatch, perPkgMode, runPerPkgMode]);
 
@@ -549,6 +622,46 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     setCurrentBatchRange(null);
     setSessionToast("Session cleared");
   }, [sessionId]);
+
+  // Force re-enrich: clear cache entry, remove from allEnrichedResults / enrichedKeys,
+  // so the next "Enrich next N" will pick it up again.
+  const handleForceReenrich = useCallback((result) => {
+    const pkg = allPkgs.find((p) => makePackageKey(p) === makePackageKey(result)) || result;
+    clearCachedResult(pkg);
+    const key = makePackageKey(result);
+    setAllEnrichedResults((prev) => {
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+    setEnrichedKeys((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    setCacheToast(`Force re-enrich queued for "${result.lead_owner_name || key}"`);
+  }, [allPkgs]);
+
+  // Auto-dismiss the cache toast after 3s.
+  useEffect(() => {
+    if (!cacheToast) return undefined;
+    const t = setTimeout(() => setCacheToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [cacheToast]);
+
+  // Scorecard CSV export handler.
+  const handleExportScorecardCSV = useCallback(() => {
+    const csv = buildScorecardCSV(allEnrichedResults, reviewDecisions);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `enrichment-scorecard-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [allEnrichedResults, reviewDecisions]);
 
   // Live scorecard summary across the whole session.
   const sessionSummary = useMemo(
@@ -843,6 +956,17 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
               </div>
             )}
 
+            {/* Cache toast — shown when packages are restored from cache or force-re-enriched. */}
+            {cacheToast && (
+              <div style={{
+                fontSize: 11, color: "#166534",
+                background: "#DCFCE7", borderRadius: 6,
+                padding: "4px 10px", marginBottom: 6,
+              }}>
+                {cacheToast}
+              </div>
+            )}
+
             {/* Action buttons */}
             {enrichState !== "loading" && (
               <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -996,7 +1120,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
             {activeTab === "batch" && enrichState === "done" && currentBatchResults && (
               currentBatchResults.length === 0
                 ? <div style={{ fontSize: 12, color: "var(--text3)" }}>(no results in batch)</div>
-                : <EnrichResultsTable results={currentBatchResults} />
+                : <EnrichResultsTable results={currentBatchResults} onForceReenrich={handleForceReenrich} />
             )}
 
             {/* Session-wide review queue */}
@@ -1007,6 +1131,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                 onAccept={handleReviewAccept}
                 onReject={handleReviewReject}
                 onSkip={handleReviewSkip}
+                onForceReenrich={handleForceReenrich}
               />
             )}
 
@@ -1037,15 +1162,25 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                         {reviewCount > 0 && ` · ${reviewCount} needs_review (skipped)`}
                       </div>
                       {exportState !== "done" && (
-                        <button
-                          className="btn btn-sm btn-gold"
-                          onClick={handleExportToLeads}
-                          disabled={exportState === "loading" || readyUnexportedCount === 0}
-                        >
-                          {exportState === "loading"
-                            ? "Exporting…"
-                            : `Export ${readyUnexportedCount} ready contact${readyUnexportedCount !== 1 ? "s" : ""} to Leads`}
-                        </button>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            className="btn btn-sm btn-gold"
+                            onClick={handleExportToLeads}
+                            disabled={exportState === "loading" || readyUnexportedCount === 0}
+                          >
+                            {exportState === "loading"
+                              ? "Exporting…"
+                              : `Export ${readyUnexportedCount} ready contact${readyUnexportedCount !== 1 ? "s" : ""} to Leads`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={handleExportScorecardCSV}
+                            title="Download full scorecard as CSV"
+                          >
+                            Export scorecard CSV
+                          </button>
+                        </div>
                       )}
                       {exportState === "done" && exportSummary && !exportSummary.error && (
                         <div style={{ fontSize: 12, padding: "6px 10px", background: "#DCFCE7", borderRadius: 6, color: "#166534" }}>
