@@ -282,6 +282,9 @@ async function processSinglePackage(pkg, opts) {
   const websiteCands = [];
   const relatedCompanies = [];
   const evidence = [];
+  // Company-profile (B2BHint / registre / OpenCorporates) results gathered
+  // across all tracks. Used in Step 4b for director / related-company expansion.
+  const profileResults = [];
 
   const strategy = pkg.search_strategy || "direct_entity";
   const useDirectQueries = strategy !== "mailing_address_only" && strategy !== "skip_low_value";
@@ -303,13 +306,34 @@ async function processSinglePackage(pkg, opts) {
           evidence.push(`rejected: "${r.title}" (junk_business)`);
           continue;
         }
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality}: ${cls.reasons.join(",")})`);
+          continue;
+        }
+        if (cls.quality === "company_profile") {
+          profileResults.push(r);
+          evidence.push(`direct_profile: "${r.title}" at ${r.url}`);
+        }
         const nameMatch = hasNameOverlap(ownerName, r.title);
         const combined = `${r.title} ${r.snippet}`;
         for (const p of extractPhones(combined)) {
-          recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch);
+          recordPhone(phoneCands, p, "direct_entity", r.url, r.title, nameMatch, {
+            sourceQuality: cls.quality,
+          });
         }
         for (const e of extractEmails(combined)) {
-          recordEmail(emailCands, e, "direct_entity", r.url);
+          const conf = nameMatch
+            ? "high"
+            : (cls.quality === "real_estate" || cls.quality === "private_business")
+              ? "medium"
+              : "low";
+          recordEmail(emailCands, e, "direct_entity", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            confidence: conf,
+            evidence: `direct: ${cls.quality}`,
+          });
         }
         if (r.url) recordWebsite(websiteCands, r.url, "direct_entity", nameMatch);
         for (const u of extractUrls(combined)) {
@@ -401,7 +425,6 @@ async function processSinglePackage(pkg, opts) {
   // Phones/emails picked up here get the "company_discovered_from_same_mailing_address"
   // relationship label so downstream callers can distinguish them from
   // direct-name matches.
-  const addressDiscoveryProfileResults = [];
   if (useMailingQueries || strategy === "mailing_address_only") {
     const addrQueries = buildAddressDiscoveryQueriesLocal(pkg, opts.maxAddressDiscovery);
     for (const q of addrQueries) {
@@ -419,7 +442,7 @@ async function processSinglePackage(pkg, opts) {
         }
 
         if (cls.quality === "company_profile") {
-          addressDiscoveryProfileResults.push(r);
+          profileResults.push(r);
           evidence.push(`addr_profile: "${r.title}" at ${r.url}`);
           // Profile results without explicit phone in snippet are evidence-only.
           // Still extract any phone/email that happens to appear in the snippet,
@@ -461,6 +484,108 @@ async function processSinglePackage(pkg, opts) {
 
         if (r.title && relatedCompanies.length < opts.maxRelated) {
           relatedCompanies.push({ name: r.title, url: r.url });
+        }
+      }
+    }
+  }
+
+  // Step 4b — company-profile expansion.
+  //
+  // For every B2BHint / registre / OpenCorporates result captured in Step 1
+  // or Step 4a, extract structured profile data and run expansion queries
+  // for each director and related company anchored at the mailing address.
+  // Profile pages without an explicit phone in their snippet contribute
+  // evidence + expansion targets only — never a contact result on their own.
+  if (profileResults.length > 0) {
+    const mailingAnchor = [
+      pkg.mailing_address,
+      pkg.mailing_city,
+      pkg.mailing_province,
+    ].filter(Boolean).join(", ");
+
+    const expansionQueriesSet = new Set();
+    const profiles = [];
+    for (const r of profileResults) {
+      const profile = extractCompanyProfile(r);
+      if (!profile) continue;
+      profiles.push(profile);
+      evidence.push(
+        `company_profile: "${profile.companyName}" NEQ=${profile.enterpriseNumber || "?"}`
+        + ` directors=${profile.directors.length} related=${profile.relatedCompanies.length}`,
+      );
+
+      // Legal-address corroboration: when the profile's legal address contains
+      // the mailing street/postal, every existing candidate from this profile
+      // gains a "legal_address_match" hint.
+      if (profile.legalAddress && pkg.mailing_address) {
+        const la = profile.legalAddress.toLowerCase();
+        const ma = String(pkg.mailing_address || "").toLowerCase();
+        if (la.includes(ma) || ma.includes(la)) {
+          evidence.push(`legal_address_match: "${profile.legalAddress}" ↔ "${pkg.mailing_address}"`);
+        }
+      }
+
+      for (const q of buildProfileExpansionQueries(profile, mailingAnchor)) {
+        expansionQueriesSet.add(q);
+      }
+    }
+
+    const expansionQueries = [...expansionQueriesSet].slice(0, opts.maxProfileExpansion);
+    for (const q of expansionQueries) {
+      const res = await opts.searchFn(q);
+      if (!res.ok) {
+        evidence.push(`profile_expansion_failed: "${q}" → ${res.error}`);
+        continue;
+      }
+      evidence.push(`profile_expansion: "${q}" → ${res.results.length} results`);
+      for (const r of res.results) {
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality})`);
+          continue;
+        }
+        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const combined = `${r.title} ${r.snippet}`;
+
+        // Exact-director check: does any extracted director name match the
+        // result name? When it does, this is an exact_director_match — the
+        // strongest possible same-mailing signal.
+        let isExactDirector = false;
+        for (const profile of profiles) {
+          for (const dir of profile.directors || []) {
+            const dm = validateCoOwnerMatch(r.title, [dir]);
+            if (dm.matchType === "exact_full_name" || dm.matchType === "token_overlap") {
+              isExactDirector = true;
+              break;
+            }
+          }
+          if (isExactDirector) break;
+        }
+
+        const relationship = isExactDirector
+          ? "exact_director_match"
+          : (nameMatch ? "company_profile_expansion" : "related_company_from_profile");
+
+        if (!isIndividual || nameMatch || isExactDirector) {
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, "direct_entity", r.url, r.title,
+              nameMatch || isExactDirector, {
+                relationship,
+                sourceQuality: cls.quality,
+              });
+          }
+        }
+        for (const e of extractEmails(combined)) {
+          const conf = isExactDirector
+            ? "high"
+            : (nameMatch ? "medium" : "low");
+          recordEmail(emailCands, e, "direct_entity", r.url, {
+            belongsTo: r.title,
+            nameMatch: nameMatch || isExactDirector,
+            relationship,
+            confidence: conf,
+            evidence: `profile_expansion: ${cls.quality}`,
+          });
         }
       }
     }
