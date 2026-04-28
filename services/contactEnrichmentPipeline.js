@@ -256,7 +256,8 @@ export async function runContactEnrichmentPreview({
       b2bhintFetchEnabled: options.b2bhintFetchEnabled === true,
       // Phase 4: Places fallback — opt-in, injected as a function so tests
       // can provide a mock without touching the real Places client.
-      // Top-level args take priority over options.* for convenience.
+      // Top-level args can enable Places fallback; options.* remains supported.
+      // Either source set to true enables fallback (logical OR), neither overrides the other to false.
       placesFallbackEnabled: (topLevelPlacesFallbackEnabled === true || options.placesFallbackEnabled === true),
       placesFallbackFn: typeof topLevelPlacesFallbackFn === "function"
         ? topLevelPlacesFallbackFn
