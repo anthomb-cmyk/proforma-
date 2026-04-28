@@ -220,6 +220,12 @@ export async function runContactEnrichmentPreview({
   const maxPages = Number.isFinite(options.maxPagesPerSite)
     ? Math.min(options.maxPagesPerSite, MAX_PAGES_PER_SITE)
     : MAX_PAGES_PER_SITE;
+  const maxAddressDiscovery = Number.isFinite(options.maxAddressDiscoveryQueries)
+    ? Math.min(options.maxAddressDiscoveryQueries, MAX_ADDRESS_DISCOVERY_QUERIES)
+    : MAX_ADDRESS_DISCOVERY_QUERIES;
+  const maxProfileExpansion = Number.isFinite(options.maxProfileExpansionQueries)
+    ? Math.min(options.maxProfileExpansionQueries, MAX_PROFILE_EXPANSION_QUERIES)
+    : MAX_PROFILE_EXPANSION_QUERIES;
 
   const batch = packages.slice(0, limit);
   const results = [];
@@ -232,6 +238,8 @@ export async function runContactEnrichmentPreview({
       maxMailing,
       maxRelated,
       maxPages,
+      maxAddressDiscovery,
+      maxProfileExpansion,
     });
     results.push(result);
   }
@@ -379,6 +387,80 @@ async function processSinglePackage(pkg, opts) {
       if (!isIndividual || nameMatch) {
         for (const p of extractPhones(`${r.title} ${r.snippet}`)) {
           recordPhone(phoneCands, p, "related", r.url, rel.name, nameMatch);
+        }
+      }
+    }
+  }
+
+  // Step 4a — address-discovery track.
+  //
+  // Runs B2BHint-style queries against each mailing address to surface
+  // companies/entities co-located there. Capped at MAX_ADDRESS_DISCOVERY_QUERIES
+  // (7) per package across all addresses. Results pass through the source
+  // quality classifier; government and junk sources are rejected outright.
+  // Phones/emails picked up here get the "company_discovered_from_same_mailing_address"
+  // relationship label so downstream callers can distinguish them from
+  // direct-name matches.
+  const addressDiscoveryProfileResults = [];
+  if (useMailingQueries || strategy === "mailing_address_only") {
+    const addrQueries = buildAddressDiscoveryQueriesLocal(pkg, opts.maxAddressDiscovery);
+    for (const q of addrQueries) {
+      const res = await opts.searchFn(q);
+      if (!res.ok) {
+        evidence.push(`addr_discovery_failed: ${res.error}`);
+        continue;
+      }
+      evidence.push(`addr_discovery: "${q}" → ${res.results.length} results`);
+      for (const r of res.results) {
+        const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
+        if (isRejectedSource(cls.quality)) {
+          evidence.push(`rejected: "${r.title}" (${cls.quality}: ${cls.reasons.join(",")})`);
+          continue;
+        }
+
+        if (cls.quality === "company_profile") {
+          addressDiscoveryProfileResults.push(r);
+          evidence.push(`addr_profile: "${r.title}" at ${r.url}`);
+          // Profile results without explicit phone in snippet are evidence-only.
+          // Still extract any phone/email that happens to appear in the snippet,
+          // labeled as company_profile_expansion.
+        }
+
+        const nameMatch = hasNameOverlap(ownerName, r.title);
+        const combined = `${r.title} ${r.snippet}`;
+
+        // Individual owners: only accept address-discovery phones with nameMatch.
+        if (!isIndividual || nameMatch) {
+          for (const p of extractPhones(combined)) {
+            recordPhone(phoneCands, p, "mailing", r.url, r.title, nameMatch, {
+              relationship: cls.quality === "company_profile"
+                ? "company_profile_expansion"
+                : "company_discovered_from_same_mailing_address",
+              sourceQuality: cls.quality,
+            });
+          }
+        }
+
+        for (const e of extractEmails(combined)) {
+          const emailConfidence =
+            (cls.quality === "real_estate" || cls.quality === "private_business") && nameMatch
+              ? "high"
+              : (cls.quality === "real_estate" || cls.quality === "private_business")
+                ? "medium-high"
+                : nameMatch ? "medium" : "low";
+          recordEmail(emailCands, e, "mailing", r.url, {
+            belongsTo: r.title,
+            nameMatch,
+            relationship: cls.quality === "company_profile"
+              ? "company_profile_expansion"
+              : "company_discovered_from_same_mailing_address",
+            confidence: emailConfidence,
+            evidence: `address-discovery: ${cls.quality}`,
+          });
+        }
+
+        if (r.title && relatedCompanies.length < opts.maxRelated) {
+          relatedCompanies.push({ name: r.title, url: r.url });
         }
       }
     }
@@ -535,8 +617,9 @@ function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch, o
   if (existing) {
     existing.occurrences = (existing.occurrences || 1) + 1;
     if (nameMatch) existing.nameMatch = true;
-    if (opts.relationship && !existing.relationship) existing.relationship = opts.relationship;
-    if (opts.sourceQuality && !existing.sourceQuality) existing.sourceQuality = opts.sourceQuality;
+    // First-set wins for relationship/sourceQuality so the legacy mailing
+    // track (Step 3) keeps its un-labeled candidates intact when the
+    // address-discovery track (Step 4a) would otherwise relabel them.
   } else {
     list.push({
       digits, raw, source,
@@ -591,6 +674,67 @@ const JUNK_NAME_RE = /^(?:\d{6,8}|[\d\-]{10,30}|[a-z]{0,3}\d+[a-z]{0,3})$/i;
 function looksLikeJunkLocal(name) {
   if (!name) return true;
   return JUNK_NAME_RE.test(String(name).trim());
+}
+
+/**
+ * Build address-discovery queries — up to maxQueries (default 7) per package.
+ * For packages with mailingAddresses[] populated, queries are generated for
+ * each address until the cap is reached. Falls back to flat mailing_* fields
+ * for legacy lead-like packages.
+ *
+ * Templates (in priority order — most specific first):
+ *   "<addr> b2bhint"
+ *   "\"<addr>\" Québec Inc"
+ *   "\"<addr>\" company"
+ *   "\"<addr>\" immobilier gestion"
+ *   "\"<addr>\" site:b2bhint.com"
+ *   "\"<addr>\" entreprise"
+ *   "\"<addr>\" gestion immobilière"
+ */
+export function buildAddressDiscoveryQueriesLocal(pkg, maxQueries = MAX_ADDRESS_DISCOVERY_QUERIES) {
+  const cap = Math.min(maxQueries, MAX_ADDRESS_DISCOVERY_QUERIES);
+  const sources = [];
+
+  if (Array.isArray(pkg.mailingAddresses) && pkg.mailingAddresses.length > 0) {
+    for (const a of pkg.mailingAddresses) {
+      const street = String(a.street || "").trim();
+      const city = String(a.city || "").trim();
+      const addrStr = [street, city].filter(Boolean).join(", ");
+      if (addrStr) sources.push(addrStr);
+    }
+  } else {
+    const street = String(pkg.mailing_address || "").trim();
+    const city = String(pkg.mailing_city || "").trim();
+    const addrStr = [street, city].filter(Boolean).join(", ");
+    if (addrStr) sources.push(addrStr);
+  }
+
+  if (!sources.length) return [];
+
+  const TEMPLATES = [
+    (a) => `${a} b2bhint`,
+    (a) => `"${a}" Québec Inc`,
+    (a) => `"${a}" company`,
+    (a) => `"${a}" immobilier gestion`,
+    (a) => `"${a}" site:b2bhint.com`,
+    (a) => `"${a}" entreprise`,
+    (a) => `"${a}" gestion immobilière`,
+  ];
+
+  const seen = new Set();
+  const out = [];
+  for (const addr of sources) {
+    for (const tmpl of TEMPLATES) {
+      if (out.length >= cap) return out;
+      const q = tmpl(addr);
+      const k = q.toLowerCase().trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(q);
+    }
+    if (out.length >= cap) return out;
+  }
+  return out;
 }
 
 function buildDirectEntityQueriesLocal(pkg) {
