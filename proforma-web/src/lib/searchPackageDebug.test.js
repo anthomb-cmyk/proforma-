@@ -508,3 +508,52 @@ describe("buildSearchPackagePreviewData — raw rôle rows", () => {
     ).toContain("YK REALTIES INC.");
   });
 });
+
+// ─── Format B / Format D regression coverage ────────────────────────────────
+//
+// The original raw-rôle test block above only exercises Format A_C headers
+// (Propriétaire / Adresse postale / Téléphone), which routes through the
+// inline-anchor branch in adaptRoleRowsToLeadLike. The Format B and Format D
+// branches (Granby/Magog/Victoriaville compact-indexed; Prospection template)
+// route through extractOwnerSlotsFromRow + buildSearchAnchors. A missing
+// import for buildSearchAnchors silently survived backend/frontend tests and
+// crashed the Phone Finder page in production with
+// "buildSearchAnchors is not defined". These tests pin both branches.
+
+describe("buildSearchPackagePreviewData — Format B / D regression", () => {
+  test("Format B (Granby/Magog compact-indexed) rows do not throw and produce a package", () => {
+    const rows = [
+      {
+        "Propriétaire1_Nom": "BISSONMUTCH MULTI-LOGEMENTS INC.",
+        "Propriétaire1_Adresse": "100 rue de la Gare, Granby (Québec) J2G 1A1",
+        "Propriétaire1_Téléphone": "",
+        "Propriétaire2_Nom": "",
+        "Propriétaire2_Adresse": "",
+        "Propriétaire2_Téléphone": "",
+        "Adresse Immeuble": "55 rue Principale, Granby",
+        "Numéro de matricule": "G-001",
+      },
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.inputRowCount).toBe(1);
+    expect(data.packageCount).toBeGreaterThan(0);
+  });
+
+  test("Format D (Prospection template) rows do not throw and produce a package", () => {
+    const rows = [
+      {
+        "Nom_proprio": "GESTION IMMOBILIERE CHOINIERE INC.",
+        "Prénom_proprio": "",
+        "Adresse_proprio": "200 rue des Pins",
+        "Ville_code_postal_proprio": "Magog (Québec) J1X 2B2",
+        "Code postal-proprio": "",
+        "Téléphone_proprio": "",
+        "Adresse_batiment": "300 rue du Lac, Magog",
+        "Nombre logement": 12,
+      },
+    ];
+    const data = buildSearchPackagePreviewData(rows);
+    expect(data.inputRowCount).toBe(1);
+    expect(data.packageCount).toBeGreaterThan(0);
+  });
+});

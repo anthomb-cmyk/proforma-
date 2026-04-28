@@ -24,6 +24,7 @@ import {
 import {
   detectRoleFormat,
   extractOwnerSlotsFromRow,
+  buildSearchAnchors,
 } from "./roleExtract.js";
 
 const FLAG_KEY = "pf_spdebug";
