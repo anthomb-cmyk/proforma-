@@ -22,6 +22,16 @@
 //     related_company_same_mailing_address, directory_match.
 
 import { isValidNanpPhone, normalizePhoneKey, normalizeKey } from "./phoneEnrichment.js";
+import { classifySource, isRejectedSource } from "./sourceQualityClassifier.js";
+import {
+  isCompanyProfileUrl,
+  extractCompanyProfile,
+  buildProfileExpansionQueries,
+} from "./companyProfileExtractor.js";
+import {
+  validateCoOwnerMatch,
+  isStrongCoOwnerMatch,
+} from "./coOwnerValidator.js";
 
 /* ─── Hard limits ──────────────────────────────────────────────────────────── */
 
@@ -31,6 +41,8 @@ const MAX_DIRECT_QUERIES = 3;
 const MAX_MAILING_QUERIES = 2;
 const MAX_RELATED_COMPANIES = 2;
 const MAX_PAGES_PER_SITE = 2;
+const MAX_ADDRESS_DISCOVERY_QUERIES = 7;
+const MAX_PROFILE_EXPANSION_QUERIES = 5;
 
 /* ─── Phone / email / URL extraction from free text ───────────────────────── */
 
@@ -462,24 +474,53 @@ async function processSinglePackage(pkg, opts) {
 
 /* ─── Candidate list helpers ─────────────────────────────────────────────── */
 
-function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch) {
+function recordPhone(list, { digits, raw }, source, url, belongsTo, nameMatch, opts = {}) {
   const existing = list.find((c) => c.digits === digits && c.source === source);
   if (existing) {
     existing.occurrences = (existing.occurrences || 1) + 1;
     if (nameMatch) existing.nameMatch = true;
+    if (opts.relationship && !existing.relationship) existing.relationship = opts.relationship;
+    if (opts.sourceQuality && !existing.sourceQuality) existing.sourceQuality = opts.sourceQuality;
   } else {
     list.push({
       digits, raw, source,
       url: url || "", belongsTo: belongsTo || "",
       occurrences: 1, nameMatch: !!nameMatch,
+      relationship: opts.relationship || null,
+      sourceQuality: opts.sourceQuality || null,
     });
   }
 }
 
-function recordEmail(list, email, source, url) {
-  if (!list.some((c) => c.email === email)) {
-    list.push({ email, source, url: url || "" });
-  }
+// Email-prefix patterns that we always reject (privacy/legal/system mailboxes).
+// Generic mailboxes like info@, contact@, admin@ are intentionally NOT in this
+// set — they are valid contact addresses for many small businesses and the
+// caller decides their confidence level.
+const JUNK_EMAIL_PREFIX_RE =
+  /^(?:noreply|no-reply|no_reply|privacy|abuse|legal|webmaster|unsubscribe|bounce|postmaster|mailer-daemon|spam|phishing)$/i;
+
+export function isJunkEmail(email) {
+  const e = String(email || "").toLowerCase().trim();
+  if (!e.includes("@")) return true;
+  const local = e.split("@")[0] || "";
+  return JUNK_EMAIL_PREFIX_RE.test(local);
+}
+
+function recordEmail(list, email, source, url, opts = {}) {
+  const lower = String(email || "").toLowerCase().trim();
+  if (!lower || isJunkEmail(lower)) return;
+  if (list.some((c) => c.email === lower)) return;
+  list.push({
+    email: lower,
+    source,
+    source_url: url || "",
+    url: url || "", // legacy alias kept for existing callers
+    email_owner_name: opts.belongsTo || "",
+    relationship_to_lead_owner: opts.relationship || source,
+    confidence: opts.confidence || "low",
+    evidence: opts.evidence || "",
+    nameMatch: !!opts.nameMatch,
+  });
 }
 
 function recordWebsite(list, url, source, nameMatch) {
