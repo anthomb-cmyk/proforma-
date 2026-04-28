@@ -302,13 +302,17 @@ async function processSinglePackage(pkg, opts) {
       }
       evidence.push(`direct_query: "${q}" → ${res.results.length} results`);
       for (const r of res.results) {
-        if (isJunkResult(r.title, r.url)) {
-          evidence.push(`rejected: "${r.title}" (junk_business)`);
-          continue;
-        }
+        // Source-quality first — gives government/junk a specific evidence
+        // line. Falls through to the legacy isJunkResult catch for any
+        // patterns the classifier doesn't cover (e.g. municipal title text
+        // without a municipal domain).
         const cls = classifySource({ url: r.url, title: r.title, snippet: r.snippet });
         if (isRejectedSource(cls.quality)) {
           evidence.push(`rejected: "${r.title}" (${cls.quality}: ${cls.reasons.join(",")})`);
+          continue;
+        }
+        if (isJunkResult(r.title, r.url)) {
+          evidence.push(`rejected: "${r.title}" (junk_business)`);
           continue;
         }
         if (cls.quality === "company_profile") {
@@ -623,7 +627,9 @@ async function processSinglePackage(pkg, opts) {
       if (isStrongCoOwnerMatch(m)) {
         c.nameMatch = true;
         c.coOwnerMatch = m;
-        c.relationship = c.relationship || "co_owner_match";
+        // co_owner_match is the most-specific relationship label — it overrides
+        // generic same-mailing labels like company_discovered_from_same_mailing_address.
+        c.relationship = "co_owner_match";
         evidence.push(
           `co_owner_upgrade: phone "${c.belongsTo}" → "${m.matchedName}" (${m.matchType})`,
         );

@@ -107,13 +107,17 @@ const RELATED_LABEL_RE =
   /(?:entreprises?\s+li[eé]es?|related\s+compan(?:y|ies)|compagnies?\s+li[eé]es?|soci[eé]t[eé]s?\s+li[eé]es?)\s*[:\-–]\s*/i;
 
 function extractRelatedCompanies(snippet) {
+  // Match the label and capture everything until newline. Periods inside the
+  // capture (e.g. "Inc.") are tolerated; trailing sentence punctuation is
+  // trimmed in post-processing.
   const m = String(snippet || "").match(
-    new RegExp(RELATED_LABEL_RE.source + "([^.\\n]{3,200})", "i"),
+    new RegExp(RELATED_LABEL_RE.source + "([^\\n]{3,300})", "i"),
   );
   if (!m) return [];
   return m[1]
+    .replace(/\.$/, "") // drop trailing sentence period
     .split(/[,;•·]+/)
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/\.$/, "").trim())
     .filter((s) => s.length >= 3 && s.length <= 80 && /[a-zA-ZÀ-ÿ]/.test(s));
 }
 
