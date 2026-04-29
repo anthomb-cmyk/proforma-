@@ -31,6 +31,7 @@ import {
   buildLeadIdentityKey, getLeadPhones,
 } from "./lib/dealHelpers.js";
 import { migrateLeadsToOwners } from "./lib/ownerGrouping.js";
+import { pickBuildingCityFromRawRow } from "./lib/buildingCity.js";
 
 // ─── Runtime constants ───────────────────────────────────────────────────────
 // Hardcoded per-user PIN access. Client-side only (not a security boundary —
@@ -2951,7 +2952,7 @@ export default function App() {
       const rawRowForUnits = row?.rawRow || {};
       const rre = (patterns) => Object.entries(rawRowForUnits).find(([k]) => patterns.some(rx => rx.test(k)))?.[1] || "";
       const units       = parseInt(rre([/logement|unite|unit[eé]s?/i]), 10) || 0;
-      const cityFromRow = rre([/\bville\d*\b/i]);
+      const cityFromRow = pickBuildingCityFromRawRow(rawRowForUnits);
       const utilisation = row?.utilisation || rre([/utilisation|usage.*predominant|type.*immeuble/i]);
       const assessment  = rre([/valeur.*fonciere|valeur.*immeuble|[eé]valuation|valeur.*totale|assess/i]);
       const yearBuilt   = rre([/ann[eé]e.*construction|year.*built|construit/i]);
