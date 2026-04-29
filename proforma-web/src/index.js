@@ -1,11 +1,14 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import ProformaCalculator from "./features/proforma/ProformaCalculator.jsx";
 
 const root = createRoot(document.getElementById("root"));
+const isProformaLab = window.location.pathname === "/proforma-lab";
+
 root.render(
   <React.StrictMode>
-    <App />
+    {isProformaLab ? <ProformaCalculator /> : <App />}
   </React.StrictMode>
 );
 

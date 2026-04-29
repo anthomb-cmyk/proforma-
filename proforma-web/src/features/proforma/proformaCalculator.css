@@ -1,0 +1,119 @@
+.pf-page {
+  min-height: 100vh;
+  background: #f5f7fb;
+  color: #172033;
+  padding: 28px;
+}
+
+.pf-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  background: linear-gradient(135deg, #111827, #243045);
+  color: white;
+  border-radius: 24px;
+  padding: 28px;
+  margin-bottom: 20px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.18);
+}
+
+.pf-hero h1 { margin: 0; font-size: 34px; letter-spacing: -0.04em; }
+.pf-hero p { margin: 8px 0 0; color: rgba(255,255,255,0.78); max-width: 720px; }
+.pf-eyebrow { text-transform: uppercase; font-size: 12px; letter-spacing: 0.14em; color: #a5b4fc !important; margin: 0 0 6px !important; }
+
+.pf-hero-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.pf-hero button, .pf-tga-row button {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 14px;
+  font-weight: 800;
+  cursor: pointer;
+  background: #ffffff;
+  color: #172033;
+}
+.pf-hero button.secondary { opacity: 0.6; cursor: not-allowed; }
+
+.pf-grid { display: grid; gap: 14px; }
+.pf-summary-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 18px; }
+.pf-output-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.pf-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.pf-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 22px;
+  padding: 20px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
+}
+.pf-card.wide { grid-column: 1 / -1; }
+.pf-card h2 { margin: 0 0 14px; font-size: 20px; letter-spacing: -0.03em; }
+.pf-muted { color: #64748b; margin-top: -6px; font-size: 13px; }
+
+.pf-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pf-form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pf-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 700; color: #334155; }
+.pf-field input, .pf-field select, .pf-table input, .pf-table select {
+  border: 1px solid #d6dbe6;
+  border-radius: 12px;
+  padding: 10px 11px;
+  font-size: 14px;
+  background: #fbfdff;
+  min-width: 0;
+}
+.pf-field small { color: #64748b; font-weight: 500; }
+
+.pf-metric {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 15px;
+  min-height: 74px;
+}
+.pf-metric span { display: block; color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.pf-metric strong { display: block; margin-top: 8px; font-size: 19px; letter-spacing: -0.03em; }
+.pf-metric.good { background: #f0fdf4; border-color: #bbf7d0; }
+
+.pf-mini-results { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; color: #475569; }
+.pf-mini-results.stacked { flex-direction: column; gap: 8px; }
+
+.pf-tga-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+.pf-tga-row button { background: #eef2ff; color: #3730a3; }
+
+.pf-table { display: flex; flex-direction: column; gap: 8px; overflow-x: auto; }
+.pf-table-head, .pf-table-row {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  min-width: 760px;
+}
+.pf-table-head { color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; font-weight: 800; }
+.pf-table-head.rent, .pf-table-row.rent { grid-template-columns: 80px 130px 150px 150px 1fr; }
+.pf-table-head.capex, .pf-table-row.capex { grid-template-columns: 1fr 160px 160px; min-width: 0; }
+.pf-table-row.capex span, .pf-table-row.capex strong { font-size: 14px; }
+.pf-table.compact { overflow: visible; }
+
+.pf-total-line {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid #e5e7eb;
+  margin-top: 14px;
+  padding-top: 14px;
+  font-size: 16px;
+}
+
+@media (max-width: 1100px) {
+  .pf-summary-grid, .pf-output-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pf-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .pf-page { padding: 16px; }
+  .pf-hero { flex-direction: column; border-radius: 18px; }
+  .pf-summary-grid, .pf-output-grid, .pf-form-grid, .pf-form-grid.two { grid-template-columns: 1fr; }
+}
