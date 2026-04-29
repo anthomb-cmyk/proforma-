@@ -1250,61 +1250,6 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
     updateRowsRef.current(prev => prev.filter(x => x.id !== r.id));
   }, []);
 
-  /**
-   * handleDirectImportPhonesInFile — shared handler for direct-import of
-   * rows that already carry a valid phone. Called from both the dashboard
-   * button AND the legacy confirmation modal so the logic is DRY.
-   *
-   * Optional `onAfterImport` is called (no args) after a successful import —
-   * the modal uses it to close itself and navigate to Leads.
-   */
-  const handleDirectImportPhonesInFile = useCallback((onAfterImport) => {
-    if (!csvFile?.rows?.length) return;
-    const phoneRows = csvFile.rows
-      .filter(r => pickBestPhone(r))
-      .map(r => ({
-        companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
-          : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
-        leadContact: r[colMap.leadContact] ? String(r[colMap.leadContact] || "").trim() : "",
-        buildingAddress: [
-          r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
-          r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
-          r[colMap.province] ? String(r[colMap.province] || "").trim() : "",
-        ].filter(Boolean).join(", "),
-        address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
-        city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
-        province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
-        postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
-        rawRow: r,
-      }));
-    const { leadsToExport } = buildDirectImportToLeads(phoneRows);
-    if (!leadsToExport.length) {
-      showToast(lang === "en" ? "No valid phones to import." : "Aucun téléphone valide à importer.", 3500);
-      return;
-    }
-    if (typeof onExportFoundToLeads === "function") {
-      Promise.resolve(onExportFoundToLeads(leadsToExport, { ownerGrouped: false }))
-        .then(result => {
-          const added = Number(result?.added || 0);
-          const updated = Number(result?.updated || 0);
-          showToast(
-            lang === "en"
-              ? `${leadsToExport.length} leads imported (${added} new · ${updated} updated) — no API cost.`
-              : `${leadsToExport.length} leads importés (${added} nouveaux · ${updated} mis à jour) — aucun coût API.`,
-            6000
-          );
-          if (typeof onAfterImport === "function") onAfterImport();
-          else if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
-        })
-        .catch(err => showToast(String(err?.message || err), 5000));
-    } else {
-      showToast(
-        lang === "en" ? "Export handler not available." : "Exportation non disponible.",
-        3500
-      );
-    }
-  }, [csvFile, colMap, lang, onExportFoundToLeads, onOpenLeads, showToast]);
-
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
 
@@ -1533,25 +1478,6 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 <button className="btn" onClick={cancel} disabled={planningBusy}>
                   {t("pf_confirm_cancel")}
                 </button>
-                {fileCount > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={planningBusy}
-                    onClick={() => {
-                      handleDirectImportPhonesInFile(() => {
-                        setPendingLookup(null);
-                        setPlanResult(null);
-                        if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
-                      });
-                    }}
-                    style={{ padding: "8px 14px", fontSize: 13 }}
-                  >
-                    {lang === "en"
-                      ? `Import ${fileCount} already-on-file → Leads (no API cost)`
-                      : `Importer ${fileCount} déjà-au-fichier → Leads (aucun coût API)`}
-                  </button>
-                )}
 {/* "Aperçu des paquets (dev)" removed — package preview is now
                     accessible via "Enrichir N téléphones manquants" in the dashboard.
                     Removing it here avoids leaking the new pipeline into the legacy
@@ -1761,7 +1687,53 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                         rowsWithPhone={_withPhone}
                         rowsEligibleForEnrichment={_eligibleForEnrichment}
                         rowsSkipped={_skipped}
-                        onDirectImport={() => handleDirectImportPhonesInFile()}
+                        onDirectImport={() => {
+                          // Build phone-already-in-file rows and export immediately.
+                          // P1 fix: filter with pickBestPhone so rows counted in the
+                          // dashboard "with phone" bucket are exactly the rows exported here.
+                          const phoneRows = csvFile.rows
+                            .filter(r => pickBestPhone(r))
+                            .map(r => ({
+                              companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
+                                : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
+                              leadContact: r[colMap.leadContact] ? String(r[colMap.leadContact] || "").trim() : "",
+                              buildingAddress: [
+                                r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                                r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                                r[colMap.province] ? String(r[colMap.province] || "").trim() : "",
+                              ].filter(Boolean).join(", "),
+                              address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                              city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                              province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
+                              postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
+                              rawRow: r,
+                            }));
+                          const { leadsToExport } = buildDirectImportToLeads(phoneRows);
+                          if (!leadsToExport.length) {
+                            showToast(lang === "en" ? "No valid phones to import." : "Aucun téléphone valide à importer.", 3500);
+                            return;
+                          }
+                          if (typeof onExportFoundToLeads === "function") {
+                            Promise.resolve(onExportFoundToLeads(leadsToExport, { ownerGrouped: false }))
+                              .then(result => {
+                                const added = Number(result?.added || 0);
+                                const updated = Number(result?.updated || 0);
+                                showToast(
+                                  lang === "en"
+                                    ? `${leadsToExport.length} leads imported (${added} new · ${updated} updated) — no API cost.`
+                                    : `${leadsToExport.length} leads importés (${added} nouveaux · ${updated} mis à jour) — aucun coût API.`,
+                                  6000
+                                );
+                                if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
+                              })
+                              .catch(err => showToast(String(err?.message || err), 5000));
+                          } else {
+                            showToast(
+                              lang === "en" ? "Export handler not available." : "Exportation non disponible.",
+                              3500
+                            );
+                          }
+                        }}
                         onEnrichMissing={() => {
                           // Show the pipeline panel (scroll to it), or open it if not yet visible.
                           setShowPipelinePanel(true);

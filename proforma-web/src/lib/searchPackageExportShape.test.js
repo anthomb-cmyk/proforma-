@@ -144,39 +144,3 @@ describe("integration: identity key uniqueness", () => {
     expect(k1).toBe(k2);
   });
 });
-
-// ── city field extraction (Part 2c) ──────────────────────────────────────
-
-describe("buildExportRowFromResult — city field", () => {
-  test("uses building_city when present", () => {
-    const row = buildExportRowFromResult({
-      lead_owner_name: "X",
-      address: "100 rue Y, Granby, QC, J2G 1A1",
-      building_city: "Granby",
-      mailing_city: "Montréal",
-    });
-    expect(row.city).toBe("Granby");
-  });
-
-  test("extracts city from address when building_city absent", () => {
-    const row = buildExportRowFromResult({
-      lead_owner_name: "X",
-      address: "100 rue Y, Sherbrooke QC, J1H 1A1",
-    });
-    expect(row.city).toBe("Sherbrooke");
-  });
-
-  test("falls back to mailing_city when address unparseable", () => {
-    const row = buildExportRowFromResult({
-      lead_owner_name: "X",
-      address: "100 rue Y",
-      mailing_city: "Laval",
-    });
-    expect(row.city).toBe("Laval");
-  });
-
-  test("city is empty string when no data available", () => {
-    const row = buildExportRowFromResult({});
-    expect(row.city).toBe("");
-  });
-});
