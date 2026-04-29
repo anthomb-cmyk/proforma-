@@ -25,7 +25,7 @@ import PhoneResultRow from "../components/PhoneResultRow.jsx";
 import SearchPackagePreview from "../components/SearchPackagePreview.jsx";
 import { isSearchPackageDebugEnabled } from "../lib/searchPackageDebug.js";
 import EnrichmentDashboard from "../components/EnrichmentDashboard.jsx";
-import { buildDirectImportToLeads, countRowsWithPhone } from "../lib/directImportToLeads.js";
+import { buildDirectImportToLeads, countRowsWithPhone, pickBestPhone } from "../lib/directImportToLeads.js";
 import { buildSearchPackages, auditSearchPackages } from "../lib/searchPackage.js";
 import { PhoneIcon, GlobeIcon, FolderIcon, BookIcon, PencilIcon, FileIcon, DownloadIcon, CloseIcon } from "../components/Icons.jsx";
 import {
@@ -1653,16 +1653,22 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 {csvFile && (() => {
                   // ── Phase 5.1.4 — compute dashboard breakdown ──────────────
                   // Compute dashboard breakdown using the same split searchCSV uses.
-                  const _withPhone = countRowsWithPhone(
-                    csvFile.rows.map(r => ({
-                      phone: r[colMap.phone] ? String(r[colMap.phone] || "") : "",
-                      rawRow: r,
-                    }))
-                  );
+                  // P1 fix: use pickBestPhone as single source of truth for phone detection.
+                  // Both the dashboard count and the enrichment payload must use the same
+                  // predicate so a row counted "with phone" is never sent to enrichment.
+                  const _withPhone = csvFile.rows.filter(r => pickBestPhone(r)).length;
+                  // Invariant: _withPhone + _rowsToEnrich === csvFile.rows.length
                   const _rowsToEnrich = csvFile.rows.length - _withPhone;
+                  if (process.env.NODE_ENV !== "production") {
+                    if (_withPhone + _rowsToEnrich !== csvFile.rows.length) {
+                      console.warn("[PhoneFinder] P1 invariant violated: withPhone + missingPhone !== total", {
+                        total: csvFile.rows.length, _withPhone, _rowsToEnrich,
+                      });
+                    }
+                  }
                   // Count eligible using searchPackage audit on rows with no phone.
                   const _auditRows = csvFile.rows
-                    .filter(r => !(r[colMap.phone] && String(r[colMap.phone] || "").trim()))
+                    .filter(r => !pickBestPhone(r))
                     .map(r => ({
                       companyName: r[colMap.company] ? String(r[colMap.company] || "").trim() : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
                       address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
@@ -1687,8 +1693,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                         rowsSkipped={_skipped}
                         onDirectImport={() => {
                           // Build phone-already-in-file rows and export immediately.
+                          // P1 fix: filter with pickBestPhone so rows counted in the
+                          // dashboard "with phone" bucket are exactly the rows exported here.
                           const phoneRows = csvFile.rows
-                            .filter(r => r[colMap.phone] && String(r[colMap.phone] || "").trim())
+                            .filter(r => pickBestPhone(r))
                             .map(r => ({
                               companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
                                 : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
@@ -1702,8 +1710,6 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                               city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
                               province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
                               postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
-                              phone: String(r[colMap.phone] || "").trim(),
-                              inputPhones: [String(r[colMap.phone] || "").trim()],
                               rawRow: r,
                             }));
                           const { leadsToExport } = buildDirectImportToLeads(phoneRows);
@@ -1775,7 +1781,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                           </div>
                           <SearchPackagePreview
                             rows={[
-                              ...csvFile.rows.filter(r => !(r[colMap.phone] && String(r[colMap.phone] || "").trim())).map(r => ({
+                              // P1 fix: use pickBestPhone so only rows not counted in
+                              // the dashboard "with phone" bucket enter enrichment.
+                              ...csvFile.rows.filter(r => !pickBestPhone(r)).map(r => ({
                                 companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
                                   : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
                                 leadContact: r[colMap.leadContact] ? String(r[colMap.leadContact] || "").trim() : "",

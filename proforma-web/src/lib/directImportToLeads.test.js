@@ -231,3 +231,71 @@ describe("countRowsWithPhone", () => {
     expect(countRowsWithPhone(rows)).toBe(2);
   });
 });
+
+// ── PR #32 P1 fix — pickBestPhone multi-column detection ──────────────────
+
+describe("pickBestPhone — multi-column detection (PR #32 P1 fix)", () => {
+  test("finds phone in the mapped phone column", () => {
+    const row = { phone: "(514) 555-0100", companyName: "X" };
+    expect(pickBestPhone(row)).toBeTruthy();
+  });
+
+  test("finds phone in a non-mapped column (Téléphone Immeuble)", () => {
+    const row = {
+      companyName: "X",
+      "Téléphone Immeuble": "514-555-0100",
+    };
+    expect(pickBestPhone(row)).toBeTruthy();
+  });
+
+  test("finds phone in nested rawRow object", () => {
+    const row = {
+      companyName: "X",
+      rawRow: { "Telephone": "5145550100" },
+    };
+    expect(pickBestPhone(row)).toBeTruthy();
+  });
+
+  test("returns null when no phone anywhere in the row", () => {
+    expect(pickBestPhone({ companyName: "X" })).toBeFalsy();
+  });
+
+  test("ignores invalid phone-like strings (too few digits)", () => {
+    expect(pickBestPhone({ phone: "123" })).toBeFalsy();
+    expect(pickBestPhone({ phone: "abc" })).toBeFalsy();
+  });
+});
+
+// ── Dashboard / enrichment partition consistency (Codex P1) ───────────────
+
+describe("dashboard / enrichment partition consistency (Codex P1)", () => {
+  test("a row with phone in non-mapped column is counted as 'with phone' AND excluded from missing-phone payload", () => {
+    const rows = [
+      { companyName: "A", phone: "5145550100" },                    // mapped phone
+      { companyName: "B", "Téléphone Immeuble": "5145550101" },     // non-mapped
+      { companyName: "C", rawRow: { Tel: "5145550102" } },          // nested
+      { companyName: "D" },                                          // no phone anywhere
+    ];
+
+    const withPhone = countRowsWithPhone(rows);
+    const missingPhone = rows.filter(r => !pickBestPhone(r));
+
+    expect(withPhone).toBe(3);
+    expect(missingPhone.length).toBe(1);
+    expect(missingPhone[0].companyName).toBe("D");
+    // The two counts must partition the input cleanly.
+    expect(withPhone + missingPhone.length).toBe(rows.length);
+  });
+
+  test("the enrichment payload never contains rows already counted by countRowsWithPhone", () => {
+    const rows = [
+      { companyName: "A", phone: "5145550100" },
+      { companyName: "B", "Téléphone Immeuble": "5145550101" },
+      { companyName: "C" },
+    ];
+    const withPhoneCount = countRowsWithPhone(rows);
+    const missingPhone = rows.filter(r => !pickBestPhone(r));
+    expect(missingPhone.every(r => !pickBestPhone(r))).toBe(true);
+    expect(withPhoneCount + missingPhone.length).toBe(rows.length);
+  });
+});
