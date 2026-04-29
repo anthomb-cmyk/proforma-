@@ -1350,9 +1350,14 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         //  - GPT on, no plan yet   → "Prévisualiser" / "Preview"
         //  - GPT on, plan computed → "Launch"
         //  - GPT off               → "Launch" (current behavior)
+        // primaryLabel: for non-GPT or post-plan (launch) always says "Lancer la recherche Google Places".
+        // For GPT pre-plan intermediate step, renamed from "Prévisualiser le plan" to
+        // "Lancer la recherche Google Places" so the button text is consistent.
+        // The 2-stage GPT behavior is preserved (1st click = planner, 2nd click = lookup);
+        // only the button label changes to avoid confusion (PR #32 ghost UI cleanup).
         const primaryLabel = useGptPlanner
-          ? (hasPlan ? t("pf_confirm_launch") : (lang === "en" ? "Preview plan" : "Prévisualiser le plan"))
-          : t("pf_confirm_launch");
+          ? (hasPlan ? (lang === "en" ? "Launch Google Places search" : "Lancer la recherche Google Places") : (lang === "en" ? "Launch Google Places search" : "Lancer la recherche Google Places"))
+          : (lang === "en" ? "Launch Google Places search" : "Lancer la recherche Google Places");
         return (
           <div className="mo" onClick={cancel}>
             <div className="mo-box" style={{maxWidth:520}} onClick={e => e.stopPropagation()}>
@@ -1473,20 +1478,10 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 <button className="btn" onClick={cancel} disabled={planningBusy}>
                   {t("pf_confirm_cancel")}
                 </button>
-                {/* Phase 5.1.3: "Preview packages" button is always available in the
-                    confirmation modal — no longer hidden behind the dev flag. */}
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={() => setSearchPackagePreviewRows([
-                    ...(pendingLookup.rows || []),
-                    ...(pendingLookup.skippedWithPhone || []),
-                  ])}
-                  disabled={planningBusy}
-                  title="Aperçu des paquets de recherche — aucun appel API"
-                >
-                  Aperçu des paquets
-                </button>
+{/* "Aperçu des paquets (dev)" removed — package preview is now
+                    accessible via "Enrichir N téléphones manquants" in the dashboard.
+                    Removing it here avoids leaking the new pipeline into the legacy
+                    Google Places confirmation flow (ghost UI after PR #32). */}
                 <button
                   className="btn btn-gold"
                   onClick={confirmPendingLookup}
@@ -1502,8 +1497,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         );
       })()}
 
-      {/* SearchPackagePreview modal — triggered from the confirmation modal's
-          "Aperçu des paquets" button. Pure-presentational; no API call. */}
+      {/* SearchPackagePreview modal — triggered from the dashboard's
+          "Enrichir N téléphones manquants" pipeline panel. Pure-presentational; no API call.
+          The confirmation modal's "Aperçu des paquets" button was removed in PR #34. */}
       {searchPackagePreviewRows && (
         <SearchPackagePreview
           rows={searchPackagePreviewRows}
@@ -1807,16 +1803,16 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                         </div>
                       )}
 
-                      {/* Original file info bar + legacy button kept as escape hatch */}
-                      <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                        <div style={{fontSize:12,color:"var(--text2)"}}>
-                          <strong>{csvFile.rows.length}</strong>{" "}
-                          {lang === "en" ? "rows •" : "lignes •"}{" "}
-                          <strong>{Object.values(colMap).filter(Boolean).length}</strong>{" "}
-                          {lang === "en" ? "columns auto-detected" : "colonnes détectées automatiquement"}
-                          {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>{t("pf_csv_advanced_mapping")}</button>)
-                        </div>
-                        <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? t("pf_csv_running") : t("pf_csv_search_n", csvFile.rows.length)}</button>
+                      {/* "Rechercher N lignes" gold button removed — duplicate entry point for
+                          the legacy Google Places flow. The dashboard's "Utiliser l'ancien flux
+                          Google Places →" button is now the only entry point (PR #32 ghost UI
+                          cleanup). Column-mapping link kept for UX completeness. */}
+                      <div style={{marginTop:12,color:"var(--text2)",fontSize:12}}>
+                        <strong>{csvFile.rows.length}</strong>{" "}
+                        {lang === "en" ? "rows •" : "lignes •"}{" "}
+                        <strong>{Object.values(colMap).filter(Boolean).length}</strong>{" "}
+                        {lang === "en" ? "columns auto-detected" : "colonnes détectées automatiquement"}
+                        {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>{t("pf_csv_advanced_mapping")}</button>)
                       </div>
                     </>
                   );
