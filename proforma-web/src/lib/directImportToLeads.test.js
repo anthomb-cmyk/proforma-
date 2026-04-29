@@ -113,6 +113,14 @@ describe("isLikelyResidentialOrInsufficient", () => {
   test("returns true for null row", () => {
     expect(isLikelyResidentialOrInsufficient(null)).toBe(true);
   });
+
+  test("returns false for raw role row with owner and building address", () => {
+    expect(isLikelyResidentialOrInsufficient({
+      "Propriétaire1_Nom": "GESTION CML 2008 INC.",
+      "Adresse Immeuble": "361 rue Girouard",
+      "Téléphone Immeuble": "8197580387",
+    })).toBe(false);
+  });
 });
 
 // ── buildDirectImportToLeads ───────────────────────────────────────────────
@@ -207,6 +215,64 @@ describe("buildDirectImportToLeads", () => {
     const { leadsToExport, skipped } = buildDirectImportToLeads(rows);
     expect(leadsToExport).toHaveLength(0);
     expect(skipped).toHaveLength(1);
+  });
+
+  test("maps raw role columns into the fields the Leads importer needs", () => {
+    const rows = [
+      {
+        "Propriétaire1_Nom": "GESTION CML 2008 INC.",
+        "Adresse Immeuble": "361 RUE GIROUARD",
+        "Ville Immeuble": "VICTORIAVILLE",
+        "Province": "QC",
+        "Code Postal Immeuble": "G6T0T8",
+        "Téléphone Immeuble": "819-758-0387",
+      },
+    ];
+
+    const { leadsToExport, skipped } = buildDirectImportToLeads(rows);
+    expect(skipped).toHaveLength(0);
+    expect(leadsToExport).toHaveLength(1);
+    expect(leadsToExport[0]).toMatchObject({
+      lead_owner_name: "GESTION CML 2008 INC.",
+      leadContact: "GESTION CML 2008 INC.",
+      companyName: "GESTION CML 2008 INC.",
+      buildingAddress: "361 RUE GIROUARD",
+      inputAddress: "361 RUE GIROUARD",
+      matchedAddress: "361 RUE GIROUARD",
+      city: "VICTORIAVILLE",
+      province: "QC",
+      postalCode: "G6T0T8",
+      phone: "8197580387",
+      bestPhone: "8197580387",
+      source: "file_direct_import",
+      status: "ready_to_call",
+    });
+    expect(leadsToExport[0].candidatePhones[0]).toMatchObject({
+      phone: "8197580387",
+      confidence: "high",
+      source: "imported_with_phone",
+      relationship_to_lead_owner: "owner",
+      phone_owner_name: "GESTION CML 2008 INC.",
+    });
+  });
+
+  test("maps nested rawRow role columns too", () => {
+    const rows = [
+      {
+        rawRow: {
+          "Propriétaire1_Nom": "ROBERT, CHRISTIAN",
+          "Adresse Immeuble": "180 RUE NOTRE-DAME",
+          "Ville Immeuble": "SAINT-PIE",
+          "Téléphone": "450-234-5678",
+        },
+      },
+    ];
+
+    const { leadsToExport } = buildDirectImportToLeads(rows);
+    expect(leadsToExport[0].lead_owner_name).toBe("ROBERT, CHRISTIAN");
+    expect(leadsToExport[0].buildingAddress).toBe("180 RUE NOTRE-DAME");
+    expect(leadsToExport[0].city).toBe("SAINT-PIE");
+    expect(leadsToExport[0].phone).toBe("4502345678");
   });
 });
 
