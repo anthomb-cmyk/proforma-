@@ -122,3 +122,59 @@ export function extractPhonesFromRow(row) {
     .map(([, value]) => value);
   return mergePhoneLists(phoneKeyValues, allValues);
 }
+
+// ── PR #40 P0 fix: context-aware phone picker ─────────────────────────────
+// These patterns identify common non-phone identifier shapes found in Quebec
+// rôle d'évaluation Excel files. They prevent long identifiers from being
+// sliced to 10 digits and wrongly accepted as NANP phones.
+
+// Quebec rôle matricule: NNNN-NN-NNNN-N-NNN-NNNN (4-2-4-1-3-4 with hyphens or spaces)
+const LOOKS_LIKE_MATRICULE_RE = /^\s*\d{4}[\s\-]\d{2}[\s\-]\d{4}[\s\-]\d[\s\-]\d{3}[\s\-]\d{4}\s*$/;
+// Cadastre / lot: 7+ bare digits with no separators (not a phone shape)
+const LOOKS_LIKE_CADASTRE_RE = /^\s*\d{12,}\s*$/;
+// Numbered Quebec corp identifier: "1234-5678 Québec Inc" (4-4 + corp suffix)
+const LOOKS_LIKE_NUMBERED_COMPANY_RE = /^\s*\d{4}[\s\-]\d{4}\s+(?:qu[eé]bec|que|qc|inc)\b/i;
+
+/**
+ * Pick a valid NANP phone from a string value WITH context awareness.
+ *
+ * Unlike `normalizePhoneKey` which loosely normalizes any 10+ digit string,
+ * this function rejects values that are clearly NOT phone numbers — even if
+ * the first 10 digits happen to satisfy NANP rules. Used by the direct-import
+ * flow to prevent matricule numbers (XXXX-XX-XXXX-X-XXX-XXXX = 19 digits)
+ * from being treated as phones.
+ *
+ * Acceptance criteria:
+ *  1. After stripping non-digits, digit count must be 10, or 11 starting with
+ *     "1". Sources with 12+ digits are rejected — they're identifiers.
+ *  2. The original string must NOT match a known non-phone identifier shape:
+ *     - Quebec matricule: 4-2-4-1-3-4 grouping
+ *     - Cadastre / lot number: 7+ digits with no separators
+ *     - Numbered company suffix: "9876-5432 Québec Inc"
+ *  3. The normalized 10-digit value must pass isValidNanpPhone.
+ *
+ * @param {string|number} value  Raw cell value.
+ * @returns {string|null}  10-digit normalized phone, or null.
+ */
+export function pickPhoneFromValueWithContext(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  // Reject obvious non-phone identifier shapes by raw string.
+  if (LOOKS_LIKE_MATRICULE_RE.test(raw)) return null;
+  if (LOOKS_LIKE_CADASTRE_RE.test(raw)) return null;
+  if (LOOKS_LIKE_NUMBERED_COMPANY_RE.test(raw)) return null;
+
+  const digits = raw.replace(/\D+/g, "");
+  if (!digits) return null;
+
+  // Reject sources with too many digits — they're identifiers, not phones.
+  // 12+ digits = clearly something else (matricule, lot number, etc.)
+  if (digits.length > 11) return null;
+  if (digits.length === 11 && !digits.startsWith("1")) return null;
+
+  // Apply standard NANP normalization.
+  const normalized = normalizePhoneKey(raw);
+  return normalized || null;
+}

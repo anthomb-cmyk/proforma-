@@ -365,3 +365,53 @@ describe("dashboard / enrichment partition consistency (Codex P1)", () => {
     expect(withPhoneCount + missingPhone.length).toBe(rows.length);
   });
 });
+
+// ── PR #40 P0 fix — pickBestPhone matricule false-positive prevention ──────
+
+describe("pickBestPhone — matricule false-positive prevention (PR #40 P0 fix)", () => {
+  test("does NOT accept Matricule column value as phone", () => {
+    const row = {
+      rawRow: {
+        "Matricule": "6429-88-8837-0-000-0000",
+        "Adresse Immeuble": "393 RUE BOIVIN",
+        "Ville": "Granby",
+      },
+    };
+    expect(pickBestPhone(row)).toBeNull();
+  });
+  test("DOES accept value in a column named Téléphone", () => {
+    const row = {
+      rawRow: {
+        "Matricule": "6429-88-8837-0-000-0000",
+        "Téléphone": "450-555-0100",
+      },
+    };
+    expect(pickBestPhone(row)).toBe("4505550100");
+  });
+  test("prefers phone column over numeric junk in other columns", () => {
+    const row = {
+      rawRow: {
+        "Matricule": "6429-88-8837-0-000-0000",
+        "Cadastre": "1234567",
+        "Telephone": "514-555-0188",
+      },
+    };
+    expect(pickBestPhone(row)).toBe("5145550188");
+  });
+  test("walks unmapped columns ONLY for clearly phone-shaped values", () => {
+    const row = {
+      rawRow: {
+        "Some_Random_Field": "(450) 555-0100",
+      },
+    };
+    expect(pickBestPhone(row)).toBe("4505550100");
+  });
+  test("rejects bare 13-digit string in unmapped column", () => {
+    const row = {
+      rawRow: {
+        "Some_Random_Field": "5145550100123",
+      },
+    };
+    expect(pickBestPhone(row)).toBeNull();
+  });
+});

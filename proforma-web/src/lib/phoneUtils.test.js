@@ -184,3 +184,45 @@ describe("extractPhonesFromRow", () => {
     expect(extractPhonesFromRow(undefined)).toEqual([]);
   });
 });
+
+// ── PR #40 P0 fix — pickPhoneFromValueWithContext ─────────────────────────
+
+import { pickPhoneFromValueWithContext } from "./phoneUtils.js";
+
+describe("pickPhoneFromValueWithContext — matricule rejection (PR #40 P0 fix)", () => {
+  test("rejects standard Quebec matricule (XXXX-XX-XXXX-X-XXX-XXXX)", () => {
+    expect(pickPhoneFromValueWithContext("6429-88-8837-0-000-0000")).toBeNull();
+  });
+  test("rejects matricule with spaces instead of hyphens", () => {
+    expect(pickPhoneFromValueWithContext("6429 88 8837 0 000 0000")).toBeNull();
+  });
+  test("rejects bare cadastre/lot number (12+ digits, no separators)", () => {
+    expect(pickPhoneFromValueWithContext("1234567890123")).toBeNull(); // 13 digits
+    expect(pickPhoneFromValueWithContext("9999999999999")).toBeNull(); // 13 digits
+  });
+  test("rejects numbered company identifier", () => {
+    expect(pickPhoneFromValueWithContext("9876-5432 Québec Inc.")).toBeNull();
+    expect(pickPhoneFromValueWithContext("1234-5678 quebec inc")).toBeNull();
+  });
+  test("accepts a clean Quebec phone number", () => {
+    expect(pickPhoneFromValueWithContext("450-555-0100")).toBe("4505550100");
+    expect(pickPhoneFromValueWithContext("(514) 555-0100")).toBe("5145550100");
+    expect(pickPhoneFromValueWithContext("819.758.0387")).toBe("8197580387");
+  });
+  test("accepts compact 10-digit phone", () => {
+    expect(pickPhoneFromValueWithContext("4505550100")).toBe("4505550100");
+  });
+  test("accepts 11-digit phone with leading 1", () => {
+    expect(pickPhoneFromValueWithContext("14505550100")).toBe("4505550100");
+    expect(pickPhoneFromValueWithContext("1-514-555-0100")).toBe("5145550100");
+  });
+  test("rejects empty / null / non-string", () => {
+    expect(pickPhoneFromValueWithContext(null)).toBeNull();
+    expect(pickPhoneFromValueWithContext("")).toBeNull();
+    expect(pickPhoneFromValueWithContext("abc")).toBeNull();
+  });
+  test("rejects a value with 12 digits even if first 10 are NANP-valid", () => {
+    // "514555010099" — 12 digits — should be rejected as too long
+    expect(pickPhoneFromValueWithContext("514555010099")).toBeNull();
+  });
+});
