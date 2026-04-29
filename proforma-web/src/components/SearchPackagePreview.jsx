@@ -10,6 +10,7 @@
 
 import { useMemo, useState, useCallback, useEffect, useRef, Fragment } from "react";
 import { buildSearchPackagePreviewData } from "../lib/searchPackageDebug.js";
+import { buildExportRowFromResult, buildExportSummary } from "../lib/searchPackageExportShape.js";
 import {
   deriveSessionId,
   loadSession,
@@ -792,38 +793,51 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
       ([key, r]) => r.status === "ready_to_call" && exportedKeys.has(key),
     ).length;
 
-    const exportRows = readyUnexported.map(([, r]) => ({
-      companyName: r.lead_owner_name || "",
-      mailing_address: r.mailing_address || "",
-      mailing_city: r.mailing_city || "",
-      phone: r.bestPhone || "",
-      email: r.bestEmail || "",
-      website: r.bestWebsite || "",
-      candidatePhones: r.bestPhone ? [enrichResultToCandidatePhone(r)] : [],
-      candidateEmails: r.bestEmail ? [{ email: r.bestEmail, source: "enrichment_web_search" }] : [],
-      candidateWebsites: r.bestWebsite ? [{ website: r.bestWebsite, source: "enrichment_web_search" }] : [],
-    }));
+    // Use buildExportRowFromResult so the importer gets all identity-key fields
+    // (buildingAddress / inputAddress / matchedAddress). Without these, every lead
+    // with the same company name collapsed to the same key, causing silent skips.
+    const exportRows = readyUnexported.map(([, r]) =>
+      buildExportRowFromResult(r, { enrichResultToCandidatePhone })
+    );
 
     try {
       const result = await Promise.resolve(onExportToLeads(exportRows, { ownerGrouped: false }));
+      const realAdded = Number(result?.added) || 0;
+      const realUpdated = Number(result?.updated) || 0;
       setExportedKeys((prev) => {
         const next = new Set(prev);
-        readyUnexported.forEach(([key]) => next.add(key));
+        // Only mark as exported when at least one row actually landed.
+        // If importer skipped everything (added=0, updated=0) leave keys
+        // un-marked so the user can retry without Force re-export.
+        if (realAdded + realUpdated > 0) {
+          readyUnexported.forEach(([key]) => next.add(key));
+        }
         return next;
       });
-      setExportSummary({
-        exported: readyUnexported.length,
-        updated: result?.count ?? readyUnexported.length,
+      setExportSummary(buildExportSummary(result, readyUnexported.length, {
         skippedReview,
         skippedNoContact,
         skippedAlreadyExported,
-      });
+      }));
       setExportState("done");
     } catch (err) {
       setExportState("error");
       setExportSummary({ error: String(err?.message || err) });
     }
   }, [allEnrichedResults, exportedKeys, onExportToLeads]);
+
+  // Force re-export: clears the local exported-keys tracker, then runs the
+  // regular export on the next tick so all ready_to_call leads are re-sent.
+  // Requires window.confirm to prevent accidental duplicate spam.
+  const handleForceReExport = useCallback(() => {
+    if (typeof window !== "undefined" && !window.confirm(
+      "Re-send all ready_to_call leads to your CRM, including ones already marked as exported in this session? " +
+      "If the previous export was silently skipped this will recover them; if it succeeded this will produce duplicates only if the CRM importer doesn\'t dedupe."
+    )) return;
+    setExportedKeys(new Set());  // Clear the local exported-tracker.
+    // Trigger the regular export flow on next tick so the cleared state propagates.
+    setTimeout(() => { handleExportToLeads?.(); }, 0);
+  }, [handleExportToLeads]);
 
   return (
     <div className="mo" onClick={onClose}>
@@ -1340,16 +1354,54 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
                           >
                             Export scorecard CSV
                           </button>
+                          {exportedKeys.size > 0 && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              style={{ color: "var(--text3)", marginLeft: 8 }}
+                              onClick={handleForceReExport}
+                              disabled={exportState === "loading"}
+                              title="Resends every ready_to_call lead, including ones marked as exported in this session. Use this if previous exports were silently skipped (added 0, updated 0)."
+                            >
+                              Force re-export all ready leads
+                            </button>
+                          )}
                         </div>
                       )}
-                      {exportState === "done" && exportSummary && !exportSummary.error && (
-                        <div style={{ fontSize: 12, padding: "6px 10px", background: "#DCFCE7", borderRadius: 6, color: "#166534" }}>
-                          Exported {exportSummary.exported} contact{exportSummary.exported !== 1 ? "s" : ""} to Leads
-                          {exportSummary.skippedReview > 0 && ` · ${exportSummary.skippedReview} needs_review skipped`}
-                          {exportSummary.skippedNoContact > 0 && ` · ${exportSummary.skippedNoContact} no-contact skipped`}
-                          {exportSummary.skippedAlreadyExported > 0 && ` · ${exportSummary.skippedAlreadyExported} already exported`}
-                        </div>
-                      )}
+                      {exportState === "done" && exportSummary && !exportSummary.error && (() => {
+                        const { added = 0, updated = 0, skippedByImporter = 0, totalSent = 0,
+                                skippedReview: sRev = 0, skippedNoContact: sNC = 0,
+                                skippedAlreadyExported: sAE = 0 } = exportSummary;
+                        const allSkipped = added + updated === 0 && totalSent > 0;
+                        return (
+                          <>
+                            <div style={{
+                              fontSize: 12, padding: "6px 10px", borderRadius: 6,
+                              background: allSkipped ? "#FEF9C3" : "#DCFCE7",
+                              color: allSkipped ? "#854D0E" : "#166534",
+                            }}>
+                              {allSkipped
+                                ? `Importer received ${totalSent} row${totalSent !== 1 ? "s" : ""} but none were added. They likely matched existing leads on identity key. Try Force re-export below to send them again.`
+                                : `Exported ${added} new · ${updated} updated · ${skippedByImporter} skipped`}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 4 }}>
+                              {`(${totalSent} sent to importer; ${sRev} review skipped, ${sNC} no-contact skipped, ${sAE} already-exported skipped)`}
+                            </div>
+                            {exportedKeys.size > 0 && (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ color: "var(--text3)", marginTop: 6 }}
+                                onClick={handleForceReExport}
+                                disabled={exportState === "loading"}
+                                title="Resends every ready_to_call lead, including ones marked as exported in this session. Use this if previous exports were silently skipped (added 0, updated 0)."
+                              >
+                                Force re-export all ready leads
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                       {exportState === "error" && exportSummary?.error && (
                         <div style={{ fontSize: 12, color: "#B91C1C" }}>
                           Export error: {exportSummary.error}
