@@ -20,6 +20,107 @@ export function normalizeValidPhone(raw) {
   return key && isValidNanpPhone(key) ? key : null;
 }
 
+function normalizeHeaderName(key) {
+  return String(key || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[_\-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanCell(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function rowEntries(row) {
+  if (!row || typeof row !== "object") return [];
+  const source = row.rawRow && typeof row.rawRow === "object" ? row.rawRow : row;
+  return Object.entries(source)
+    .map(([key, value]) => ({ key, norm: normalizeHeaderName(key), value: cleanCell(value) }))
+    .filter((entry) => entry.value);
+}
+
+function pickFirstByHeader(row, patterns, { reject = [] } = {}) {
+  for (const pattern of patterns) {
+    for (const entry of rowEntries(row)) {
+      if (!pattern.test(entry.norm)) continue;
+      if (reject.some((rx) => rx.test(entry.norm))) continue;
+      return entry.value;
+    }
+  }
+  return "";
+}
+
+function inferOwnerName(row) {
+  return cleanCell(row?.leadContact)
+    || cleanCell(row?.lead_owner_name)
+    || cleanCell(row?.ownerName)
+    || cleanCell(row?.companyName)
+    || cleanCell(row?.name)
+    || cleanCell(row?.rawName)
+    || pickFirstByHeader(row, [
+      /\bproprietaire\d*\s+nom\b/,
+      /\bowner\s+name\b/,
+      /\bnom\s+proprio\b/,
+      /\bproprietaire\d*\b/,
+      /\bowner\b/,
+    ], {
+      reject: [/\badresse\b/, /\baddress\b/, /\bstatut\b/, /\bstatus\b/, /\btelephone\b/, /\bphone\b/, /\bcourriel\b/, /\bemail\b/],
+    });
+}
+
+function inferBuildingAddress(row) {
+  return cleanCell(row?.buildingAddress)
+    || cleanCell(row?.inputAddress)
+    || cleanCell(row?.matchedAddress)
+    || cleanCell(row?.address)
+    || pickFirstByHeader(row, [
+      /\badresses?\s+immeubles?\s+clean\b/,
+      /\badresse\s+immeuble\b/,
+      /\badresses?\s+immeubles?\b/,
+      /\bbuilding\s+address\b/,
+      /\badresse\b/,
+      /\baddress\b/,
+    ], {
+      reject: [/\bpostale\b/, /\bpostal\b/, /\bproprietaire\b/, /\bowner\b/],
+    });
+}
+
+function inferCity(row) {
+  return cleanCell(row?.city)
+    || pickFirstByHeader(row, [
+      /\bville\s+immeuble\b/,
+      /\bville\d*\b/,
+      /\bcity\b/,
+      /\bmunicipalite\b/,
+    ], {
+      reject: [/\bpostale\b/, /\bpostal\b/, /\bproprietaire\b/, /\bowner\b/],
+    });
+}
+
+function inferProvince(row) {
+  return cleanCell(row?.province)
+    || pickFirstByHeader(row, [/\bprovince\b/, /\betat\b/, /\bstate\b/])
+    || "QC";
+}
+
+function inferPostalCode(row) {
+  return cleanCell(row?.postalCode)
+    || cleanCell(row?.postal_code)
+    || pickFirstByHeader(row, [
+      /\bcode\s+postal\s+immeuble\b/,
+      /\bcode\s+postal\b/,
+      /\bpostal\s+code\b/,
+      /\bzip\b/,
+    ], {
+      reject: [/\bpostale\b/, /\bproprietaire\b/, /\bowner\b/],
+    });
+}
+
 /**
  * Pick the best (first valid NANP) phone from a row. Inspects `inputPhones`
  * (the pre-merged phone list populated by PhoneFinder) first; falls back to
@@ -58,15 +159,12 @@ export function pickBestPhone(row) {
 
 /**
  * Classify a row as "likely residential / insufficient data" — has a phone
- * but lacks both a recognisable business name AND a building address.
+ * but lacks both a recognisable owner/company name AND a building address.
  */
 export function isLikelyResidentialOrInsufficient(row) {
   if (!row || typeof row !== "object") return true;
-  const name =
-    String(row.companyName || row.name || row.rawName || row.leadContact || "").trim();
-  const addr = String(
-    row.buildingAddress || row.address || row.inputAddress || ""
-  ).trim();
+  const name = inferOwnerName(row);
+  const addr = inferBuildingAddress(row);
   return !name && !addr;
 }
 
@@ -94,43 +192,48 @@ export function buildDirectImportToLeads(rows) {
       continue;
     }
 
-    const companyName =
-      String(row.companyName || row.name || row.rawName || "").trim();
-    const leadContact =
-      String(row.leadContact || "").trim();
-    const displayName = companyName || leadContact || "(unknown)";
+    const ownerName = inferOwnerName(row) || "(unknown)";
+    const companyName = cleanCell(row?.companyName) || cleanCell(row?.company) || ownerName;
+    const leadContact = cleanCell(row?.leadContact) || ownerName;
 
-    const address = String(
-      row.buildingAddress || row.inputAddress || row.address || ""
-    ).trim();
-    const city = String(row.city || "").trim();
-    const province = String(row.province || "QC").trim();
-    const postalCode = String(row.postalCode || "").trim();
+    const address = inferBuildingAddress(row);
+    const city = inferCity(row);
+    const province = inferProvince(row);
+    const postalCode = inferPostalCode(row);
 
     const residential = isLikelyResidentialOrInsufficient(row);
 
     leadsToExport.push({
-      lead_owner_name: displayName,
+      lead_owner_name: ownerName,
       companyName,
       leadContact,
+      inputName: companyName || ownerName,
+      matchedName: companyName || ownerName,
       address,
+      inputAddress: address,
+      matchedAddress: address,
       city,
       province,
       postalCode,
       buildingAddress: address,
       phone,
+      bestPhone: phone,
       inputPhones: [phone],
+      fileInputPhones: [phone],
       candidatePhones: [
         {
           phone,
           confidence: "high",
           source: "imported_with_phone",
           relationship_to_lead_owner: "owner",
-          phone_owner_name: displayName,
+          phone_owner_name: ownerName,
         },
       ],
       status: "ready_to_call",
+      source: "file_direct_import",
       likelyResidential: residential,
+      rawRow: row.rawRow || row,
+      _src: row,
       _directImport: true,
     });
   }
