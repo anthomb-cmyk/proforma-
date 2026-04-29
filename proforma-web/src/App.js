@@ -2588,6 +2588,10 @@ export default function App() {
     return nextDeal.id;
   }, [t]);
 
+  function shouldLogImportDebug() {
+    try { return typeof localStorage !== "undefined" && localStorage.getItem("pf_import_debug") === "1"; } catch { return false; }
+  }
+
   const importPhoneFinderResultsToLeads = useCallback((rows, meta = {}) => {
     let added = 0;
     let updated = 0;
@@ -2866,7 +2870,19 @@ export default function App() {
 
     for (const row of Array.isArray(rows) ? rows : []) {
       const phones = mergePhoneLists(row?.phone, row?.inputPhones, extractPhonesFromRow(row?.rawRow));
-      if (!phones.length) { skipped++; continue; }
+      if (!phones.length) {
+        if (shouldLogImportDebug()) {
+          // eslint-disable-next-line no-console
+          console.warn("[importPhoneFinderResultsToLeads] skip: no valid phone found", {
+            companyName: row?.companyName,
+            buildingAddress: row?.buildingAddress,
+            providedPhone: row?.phone,
+            providedInputPhones: row?.inputPhones,
+            rawRowKeys: row?.rawRow ? Object.keys(row.rawRow).slice(0, 8) : null,
+          });
+        }
+        skipped++; continue;
+      }
       const ownerName = String(row?.leadContact || inferOwnerNameFromRawRow(row?.rawRow) || "").trim();
       const companyFallback = String(row?.companyName || row?.inputName || row?.matchedName || "").trim();
       const companyName = ownerName || companyFallback;
@@ -2926,7 +2942,18 @@ export default function App() {
         const mergedCandEmails = mergeEmailCandidates(existing.candidateEmails || [], incomingCandidateEmails);
         const mergedCandWebsites = mergeWebsiteCandidates(existing.candidateWebsites || [], incomingCandidateWebsites);
         const candChanged = (mergedCandPhones.length + mergedCandEmails.length + mergedCandWebsites.length) !== beforeCandLen;
-        if (merged.length === existing.phones.length && !candChanged) { skipped++; continue; }
+        if (merged.length === existing.phones.length && !candChanged) {
+          if (shouldLogImportDebug()) {
+            // eslint-disable-next-line no-console
+            console.warn("[importPhoneFinderResultsToLeads] skip: existing lead has same phones (re-import dedup)", {
+              companyName: row?.companyName,
+              buildingAddress: row?.buildingAddress,
+              existingPhones: existing.phones,
+              newPhones: phones,
+            });
+          }
+          skipped++; continue;
+        }
         existing.phones = merged;
         existing.phone = pickBestPhone(mergedCandPhones) || merged[0] || existing.phone || "";
         existing.candidatePhones = mergedCandPhones;
@@ -3004,6 +3031,10 @@ export default function App() {
       setLeads([...additions, ...current].slice(0, 6000));
     }
 
+    if (shouldLogImportDebug()) {
+      // eslint-disable-next-line no-console
+      console.info(`[importPhoneFinderResultsToLeads] done: added=${added}, updated=${updated}, skipped=${skipped}, total=${(Array.isArray(rows) ? rows : []).length}`);
+    }
     return { added, updated, skipped };
   }, [leads, t]);
 
