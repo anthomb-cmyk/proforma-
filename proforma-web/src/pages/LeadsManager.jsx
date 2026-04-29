@@ -944,6 +944,16 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
             <option value="all">Tous</option>
             {Object.entries(STAGE_CFG).map(([id, cfg]) => <option key={id} value={id}>{cfg.label}</option>)}
           </select>
+          {cityOptions.length > 0 && (
+            <select
+              style={{padding:"6px 9px",fontSize:14}}
+              value={filter.city}
+              onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}
+            >
+              <option value="all">Toutes villes (immeuble)</option>
+              {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           <button
             className="btn btn-sm leads-filter-toggle"
             style={{fontSize:13,background:showAdvancedFilters||activeSecondaryCount?"var(--gold-light)":undefined,borderColor:showAdvancedFilters||activeSecondaryCount?"#E9D9AA":undefined}}
@@ -978,12 +988,7 @@ function LeadsManager({ leads, setLeads, onCreateDealFromLead }) {
               <option value="25">25–49 unités</option>
               <option value="50">50+ unités</option>
             </select>
-            {cityOptions.length > 0 && (
-              <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.city} onChange={e => setFilter(prev => ({ ...prev, city:e.target.value }))}>
-                <option value="all">Toutes villes</option>
-                {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            )}
+            {/* City filter is now in the primary filter bar (always visible). */}
             <select style={{padding:"6px 9px",fontSize:12,flexShrink:0}} value={filter.call} onChange={e => setFilter(prev => ({ ...prev, call:e.target.value }))}>
               <option value="all">Appel: tous</option>
               <option value="due">Rappel dû</option>
