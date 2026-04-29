@@ -6,6 +6,10 @@
  * identity key per property — without these, every lead with the same company name
  * collapses to the same key and subsequent exports are silently skipped as duplicates.
  */
+import { extractCityFromAddress } from "./buildingCity.js";
+
+export { extractCityFromAddress };
+
 export function buildExportRowFromResult(r, helpers = {}) {
   const propertyAddress = r.address || r.mailing_address || "";
   return {
@@ -17,6 +21,12 @@ export function buildExportRowFromResult(r, helpers = {}) {
     matchedAddress: propertyAddress,
     mailing_address: r.mailing_address || "",
     mailing_city: r.mailing_city || "",
+    // Prefer building_city (property municipality) over mailing/postal city.
+    // Falls back to parsing city from the address string, then mailing_city.
+    city: r.building_city
+      || (propertyAddress && extractCityFromAddress(propertyAddress))
+      || r.mailing_city
+      || "",
     phone: r.bestPhone || "",
     bestPhone: r.bestPhone || "",
     email: r.bestEmail || "",
