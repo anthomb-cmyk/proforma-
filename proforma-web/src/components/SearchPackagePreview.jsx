@@ -251,7 +251,9 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
     [rows, topN],
   );
 
-  const enrichEnabled = useMemo(() => isContactEnrichmentDebugEnabled(), []);
+  // Phase 5.1.3: contact enrichment panel is now always enabled — dev flag gate removed.
+  // isContactEnrichmentDebugEnabled() is kept exported for verbose logging use-cases.
+  const enrichEnabled = true;
 
   // Batch size selector (5 / 10 / 25 / 50 / 100)
   const [batchSize, setBatchSize] = useState(5);
@@ -832,10 +834,7 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <div className="mo-title" style={{ marginBottom: 0 }}>
-            Search-package preview
-            <span style={{ marginLeft: 8, fontSize: 11, color: "var(--text3)", fontWeight: 500 }}>
-              dev only · no API call
-            </span>
+            Enrichissement — aperçu des paquets de recherche
           </div>
           <button className="btn btn-sm" onClick={onClose} aria-label="Close">
             <CloseIcon size={11} />
@@ -937,17 +936,14 @@ export default function SearchPackagePreview({ rows, onClose, onExportToLeads, t
           )}
         </div>
 
-        {/* ── Contact-enrichment preview (pf_websearch_debug flag) ─────────── */}
+        {/* ── Contact-enrichment preview (Phase 5.1.3: always shown when data is loaded) ─ */}
         {enrichEnabled && allPkgs.length > 0 && (
           <div style={{ ...card, padding: "12px 14px", marginTop: 12 }}>
 
             {/* Header row: title + batch size selector */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
-                Contact enrichment
-                <span style={{ marginLeft: 6, fontSize: 10, color: "var(--text3)", fontWeight: 500 }}>
-                  dev only · web search
-                </span>
+                Enrichissement des contacts
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {/* Per-package mode toggle */}

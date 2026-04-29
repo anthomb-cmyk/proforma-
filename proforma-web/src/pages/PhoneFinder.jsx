@@ -24,6 +24,9 @@ import {
 import PhoneResultRow from "../components/PhoneResultRow.jsx";
 import SearchPackagePreview from "../components/SearchPackagePreview.jsx";
 import { isSearchPackageDebugEnabled } from "../lib/searchPackageDebug.js";
+import EnrichmentDashboard from "../components/EnrichmentDashboard.jsx";
+import { buildDirectImportToLeads, countRowsWithPhone, pickBestPhone } from "../lib/directImportToLeads.js";
+import { buildSearchPackages, auditSearchPackages } from "../lib/searchPackage.js";
 import { PhoneIcon, GlobeIcon, FolderIcon, BookIcon, PencilIcon, FileIcon, DownloadIcon, CloseIcon } from "../components/Icons.jsx";
 import {
   loadRunsFromStorage,
@@ -183,12 +186,16 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // finishes so the user sees their spend climb in near-real-time.
   const [dailySpend, setDailySpend] = useState(() => loadTodaySpend());
 
-  // Dev-only search-package preview. Gated on a localStorage flag so the
-  // button stays invisible to normal users (see lib/searchPackageDebug.js).
-  // Read once at mount — the flag isn't expected to flip mid-session.
-  const [spDebugEnabled] = useState(() => isSearchPackageDebugEnabled());
+  // Phase 5.1.3: SearchPackagePreview is now always available when data is
+  // imported — the pf_spdebug localStorage gate is removed from the UI.
+  // isSearchPackageDebugEnabled() is kept exported for verbose-logging use.
   // When non-null, holds the rows currently being previewed in the modal.
   const [searchPackagePreviewRows, setSearchPackagePreviewRows] = useState(null);
+  // Phase 5.1.4: show/hide the enrichment pipeline panel inline.
+  const [showPipelinePanel, setShowPipelinePanel] = useState(false);
+  const pipelinePanelRef = typeof window !== "undefined" ? { current: null } : { current: null };
+  // Use a ref so scrollIntoView can target the SearchPackagePreview section.
+  const pipelinePanelRefCallback = (node) => { pipelinePanelRef.current = node; };
 
   // Esc dismisses whichever modal is open. The hook only attaches its
   // keydown listener while `active` is truthy, so we never intercept
@@ -1466,23 +1473,20 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 <button className="btn" onClick={cancel} disabled={planningBusy}>
                   {t("pf_confirm_cancel")}
                 </button>
-                {/* Dev-only: previews the search packages buildSearchPackages
-                    would produce for the loaded rows. No API call. Hidden
-                    when localStorage.pf_spdebug !== "1". */}
-                {spDebugEnabled && (
-                  <button
-                    className="btn"
-                    type="button"
-                    onClick={() => setSearchPackagePreviewRows([
-                      ...(pendingLookup.rows || []),
-                      ...(pendingLookup.skippedWithPhone || []),
-                    ])}
-                    disabled={planningBusy}
-                    title="Inspect generated search packages — no API call"
-                  >
-                    Preview packages (dev)
-                  </button>
-                )}
+                {/* Phase 5.1.3: "Preview packages" button is always available in the
+                    confirmation modal — no longer hidden behind the dev flag. */}
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => setSearchPackagePreviewRows([
+                    ...(pendingLookup.rows || []),
+                    ...(pendingLookup.skippedWithPhone || []),
+                  ])}
+                  disabled={planningBusy}
+                  title="Aperçu des paquets de recherche — aucun appel API"
+                >
+                  Aperçu des paquets
+                </button>
                 <button
                   className="btn btn-gold"
                   onClick={confirmPendingLookup}
@@ -1498,8 +1502,8 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         );
       })()}
 
-      {/* Dev-only modal — renders only when the Preview packages button
-          fires it. Pure-presentational; no API call, no state mutation. */}
+      {/* SearchPackagePreview modal — triggered from the confirmation modal's
+          "Aperçu des paquets" button. Pure-presentational; no API call. */}
       {searchPackagePreviewRows && (
         <SearchPackagePreview
           rows={searchPackagePreviewRows}
@@ -1646,20 +1650,177 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                     : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>{t("pf_csv_drop")}</div>}
                   <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>{t("pf_csv_hint")}</div>
                 </div>
-                {csvFile && (
-                  <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                    <div style={{fontSize:12,color:"var(--text2)"}}>
-                      {/* Inline a React-rich version of pf_csv_detected so
-                          the row + column counts render in <strong>. */}
-                      <strong>{csvFile.rows.length}</strong>{" "}
-                      {lang === "en" ? "rows •" : "lignes •"}{" "}
-                      <strong>{Object.values(colMap).filter(Boolean).length}</strong>{" "}
-                      {lang === "en" ? "columns auto-detected" : "colonnes détectées automatiquement"}
-                      {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>{t("pf_csv_advanced_mapping")}</button>)
-                    </div>
-                    <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? t("pf_csv_running") : t("pf_csv_search_n", csvFile.rows.length)}</button>
-                  </div>
-                )}
+                {csvFile && (() => {
+                  // ── Phase 5.1.4 — compute dashboard breakdown ──────────────
+                  // Compute dashboard breakdown using the same split searchCSV uses.
+                  // P1 fix: use pickBestPhone as single source of truth for phone detection.
+                  // Both the dashboard count and the enrichment payload must use the same
+                  // predicate so a row counted "with phone" is never sent to enrichment.
+                  const _withPhone = csvFile.rows.filter(r => pickBestPhone(r)).length;
+                  // Invariant: _withPhone + _rowsToEnrich === csvFile.rows.length
+                  const _rowsToEnrich = csvFile.rows.length - _withPhone;
+                  if (process.env.NODE_ENV !== "production") {
+                    if (_withPhone + _rowsToEnrich !== csvFile.rows.length) {
+                      console.warn("[PhoneFinder] P1 invariant violated: withPhone + missingPhone !== total", {
+                        total: csvFile.rows.length, _withPhone, _rowsToEnrich,
+                      });
+                    }
+                  }
+                  // Count eligible using searchPackage audit on rows with no phone.
+                  const _auditRows = csvFile.rows
+                    .filter(r => !pickBestPhone(r))
+                    .map(r => ({
+                      companyName: r[colMap.company] ? String(r[colMap.company] || "").trim() : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
+                      address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                      city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                      province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
+                      postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
+                    }));
+                  const _pkgs = buildSearchPackages(_auditRows);
+                  const _audit = auditSearchPackages(_pkgs);
+                  const _eligible = (_audit.summary?.eligible_without_phone ?? 0) + (_audit.summary?.already_has_phone ?? 0);
+                  const _eligibleForEnrichment = Math.min(_rowsToEnrich, _audit.summary?.eligible_without_phone ?? _rowsToEnrich);
+                  const _skipped = Math.max(0, csvFile.rows.length - _withPhone - _eligibleForEnrichment);
+
+                  return (
+                    <>
+                      {/* Phase 5.1.1 — Unified dashboard */}
+                      <EnrichmentDashboard
+                        fileName={csvFile.fileName || "fichier importé"}
+                        totalRows={csvFile.rows.length}
+                        rowsWithPhone={_withPhone}
+                        rowsEligibleForEnrichment={_eligibleForEnrichment}
+                        rowsSkipped={_skipped}
+                        onDirectImport={() => {
+                          // Build phone-already-in-file rows and export immediately.
+                          // P1 fix: filter with pickBestPhone so rows counted in the
+                          // dashboard "with phone" bucket are exactly the rows exported here.
+                          const phoneRows = csvFile.rows
+                            .filter(r => pickBestPhone(r))
+                            .map(r => ({
+                              companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
+                                : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
+                              leadContact: r[colMap.leadContact] ? String(r[colMap.leadContact] || "").trim() : "",
+                              buildingAddress: [
+                                r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                                r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                                r[colMap.province] ? String(r[colMap.province] || "").trim() : "",
+                              ].filter(Boolean).join(", "),
+                              address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                              city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                              province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
+                              postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
+                              rawRow: r,
+                            }));
+                          const { leadsToExport } = buildDirectImportToLeads(phoneRows);
+                          if (!leadsToExport.length) {
+                            showToast(lang === "en" ? "No valid phones to import." : "Aucun téléphone valide à importer.", 3500);
+                            return;
+                          }
+                          if (typeof onExportFoundToLeads === "function") {
+                            Promise.resolve(onExportFoundToLeads(leadsToExport, { ownerGrouped: false }))
+                              .then(result => {
+                                const added = Number(result?.added || 0);
+                                const updated = Number(result?.updated || 0);
+                                showToast(
+                                  lang === "en"
+                                    ? `${leadsToExport.length} leads imported (${added} new · ${updated} updated) — no API cost.`
+                                    : `${leadsToExport.length} leads importés (${added} nouveaux · ${updated} mis à jour) — aucun coût API.`,
+                                  6000
+                                );
+                                if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
+                              })
+                              .catch(err => showToast(String(err?.message || err), 5000));
+                          } else {
+                            showToast(
+                              lang === "en" ? "Export handler not available." : "Exportation non disponible.",
+                              3500
+                            );
+                          }
+                        }}
+                        onEnrichMissing={() => {
+                          // Show the pipeline panel (scroll to it), or open it if not yet visible.
+                          setShowPipelinePanel(true);
+                          setTimeout(() => {
+                            if (pipelinePanelRef.current) {
+                              pipelinePanelRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }
+                          }, 80);
+                        }}
+                        onUseLegacy={() => {
+                          // Trigger the existing legacy "Rechercher N lignes" flow.
+                          searchCSV();
+                        }}
+                        estimatedCostBraveSubscription={Boolean(
+                          typeof process !== "undefined"
+                            ? process.env?.REACT_APP_BRAVE_API_KEY
+                            : false
+                        )}
+                        estimatedCostPlacesPerMiss={0.05}
+                        estimatedCostLegacy={_eligibleForEnrichment * 0.10}
+                      />
+
+                      {/* Phase 5.1.3: Pipeline panel — always mounted when data is present; */}
+                      {/* no pf_spdebug flag required. Toggle via "Enrichir N téléphones". */}
+                      {showPipelinePanel && (
+                        <div ref={pipelinePanelRefCallback} style={{ marginTop: 4 }}>
+                          <div style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            marginBottom: 8, padding: "0 2px",
+                          }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                              Enrichissement Brave Search + Places
+                            </div>
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => setShowPipelinePanel(false)}
+                              aria-label="Fermer le panneau d'enrichissement"
+                            >
+                              ✕ Réduire
+                            </button>
+                          </div>
+                          <SearchPackagePreview
+                            rows={[
+                              // P1 fix: use pickBestPhone so only rows not counted in
+                              // the dashboard "with phone" bucket enter enrichment.
+                              ...csvFile.rows.filter(r => !pickBestPhone(r)).map(r => ({
+                                companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
+                                  : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
+                                leadContact: r[colMap.leadContact] ? String(r[colMap.leadContact] || "").trim() : "",
+                                buildingAddress: [
+                                  r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                                  r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                                  r[colMap.province] ? String(r[colMap.province] || "").trim() : "",
+                                ].filter(Boolean).join(", "),
+                                address: r[colMap.address] ? String(r[colMap.address] || "").trim() : "",
+                                city: r[colMap.city] ? String(r[colMap.city] || "").trim() : "",
+                                province: r[colMap.province] ? String(r[colMap.province] || "").trim() : "QC",
+                                postalCode: r[colMap.postalCode] ? String(r[colMap.postalCode] || "").trim() : "",
+                                inputPhones: [],
+                                phone: "",
+                                rawRow: r,
+                              })),
+                            ]}
+                            onClose={() => setShowPipelinePanel(false)}
+                            onExportToLeads={typeof onExportFoundToLeads === "function" ? onExportFoundToLeads : undefined}
+                          />
+                        </div>
+                      )}
+
+                      {/* Original file info bar + legacy button kept as escape hatch */}
+                      <div style={{marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                        <div style={{fontSize:12,color:"var(--text2)"}}>
+                          <strong>{csvFile.rows.length}</strong>{" "}
+                          {lang === "en" ? "rows •" : "lignes •"}{" "}
+                          <strong>{Object.values(colMap).filter(Boolean).length}</strong>{" "}
+                          {lang === "en" ? "columns auto-detected" : "colonnes détectées automatiquement"}
+                          {" "}(<button style={{border:"none",background:"none",color:"var(--blue)",fontSize:12,cursor:"pointer",padding:0}} onClick={e => { e.stopPropagation(); setShowColMap(true); }}>{t("pf_csv_advanced_mapping")}</button>)
+                        </div>
+                        <button className="btn btn-gold" onClick={searchCSV} disabled={loading}>{loading ? t("pf_csv_running") : t("pf_csv_search_n", csvFile.rows.length)}</button>
+                      </div>
+                    </>
+                  );
+                })()}
                 {apiError && <div className="status-note error" style={{marginTop:8}}>{apiError}</div>}
               </div>
             )}
