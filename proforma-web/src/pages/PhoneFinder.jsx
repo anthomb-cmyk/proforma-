@@ -1258,10 +1258,30 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
    * Optional `onAfterImport` is called (no args) after a successful import —
    * the modal uses it to close itself and navigate to Leads.
    */
-  const handleDirectImportPhonesInFile = useCallback((onAfterImport) => {
-    if (!csvFile?.rows?.length) return;
-    const phoneRows = csvFile.rows
-      .filter(r => pickBestPhone(r))
+  // selectDirectImportSourceRows — pure helper (also aids unit testing).
+  // Returns the raw CSV rows to use for a direct-import operation.
+  // When planRows (pre-mapped rows from the GPT planner's use_file_phone
+  // bucket) are supplied, their embedded rawRow is used so we honour the
+  // planner's classification. Without planRows, we fall back to all csvFile
+  // rows that carry a phone (original behaviour).  (Codex P2-B)
+  function selectDirectImportSourceRows(csvRows, planRows) {
+    if (Array.isArray(planRows) && planRows.length > 0) {
+      // planRows are pre-mapped — each has a rawRow with the original CSV data.
+      return planRows.map(r => r.rawRow || r).filter(r => pickBestPhone(r));
+    }
+    return (csvRows || []).filter(r => pickBestPhone(r));
+  }
+
+  const handleDirectImportPhonesInFile = useCallback((onAfterImport, planRows = null) => {
+    // Respect GPT planner classification when a plan is active (Codex P2-B):
+    // use only the rows the planner tagged as "use_file_phone". Without a
+    // plan, fall back to all CSV rows that have a valid phone.
+    const sourceRawRows = selectDirectImportSourceRows(csvFile?.rows, planRows);
+    if (!sourceRawRows.length) {
+      showToast(lang === "en" ? "No valid phones to import." : "Aucun téléphone valide à importer.", 3500);
+      return;
+    }
+    const phoneRows = sourceRawRows
       .map(r => ({
         companyName: r[colMap.company] ? String(r[colMap.company] || "").trim()
           : (r[colMap.name] ? String(r[colMap.name] || "").trim() : ""),
@@ -1533,25 +1553,37 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                 <button className="btn" onClick={cancel} disabled={planningBusy}>
                   {t("pf_confirm_cancel")}
                 </button>
-                {fileCount > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={planningBusy}
-                    onClick={() => {
-                      handleDirectImportPhonesInFile(() => {
-                        setPendingLookup(null);
-                        setPlanResult(null);
-                        if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
-                      });
-                    }}
-                    style={{ padding: "8px 14px", fontSize: 13 }}
-                  >
-                    {lang === "en"
-                      ? `Import ${fileCount} already-on-file → Leads (no API cost)`
-                      : `Importer ${fileCount} déjà-au-fichier → Leads (aucun coût API)`}
-                  </button>
-                )}
+                {fileCount > 0 && (() => {
+                  // Codex P2-B: when the GPT planner has run, extract only the rows it
+                  // classified as "use_file_phone" so we never import rows the planner
+                  // intended to enrich. Without a plan, fall back to any-phone behavior.
+                  const plannerFileRows = planResult
+                    ? planResult.allRows.filter((_r, i) =>
+                        planResult.plans[i]?.strategy === "use_file_phone"
+                      )
+                    : null;
+                  const importCount = plannerFileRows ? plannerFileRows.length : fileCount;
+                  return (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={planningBusy}
+                      onClick={() => {
+                        // Respect GPT planner classification (Codex P2-B)
+                        handleDirectImportPhonesInFile(() => {
+                          setPendingLookup(null);
+                          setPlanResult(null);
+                          if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
+                        }, plannerFileRows);
+                      }}
+                      style={{ padding: "8px 14px", fontSize: 13 }}
+                    >
+                      {lang === "en"
+                        ? `Import ${importCount} already-on-file → Leads (no API cost)`
+                        : `Importer ${importCount} déjà-au-fichier → Leads (aucun coût API)`}
+                    </button>
+                  );
+                })()}
 {/* "Aperçu des paquets (dev)" removed — package preview is now
                     accessible via "Enrichir N téléphones manquants" in the dashboard.
                     Removing it here avoids leaking the new pipeline into the legacy

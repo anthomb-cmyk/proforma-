@@ -91,3 +91,33 @@ describe("extractCityFromAddress", () => {
     expect(extractCityFromAddress("100 boul. Y, Trois-Rivières, Québec, G1R 1A1")).toBe("Trois-Rivières");
   });
 });
+
+// ── Codex P2-A regression tests — expanded owner-mailing alias exclusions ──
+
+describe("pickBuildingCityFromRawRow — Codex P2-A owner alias exclusions", () => {
+  test("excludes ville_proprietaire (Codex P2-A)", () => {
+    expect(pickBuildingCityFromRawRow({ ville_proprietaire: "Montréal" })).toBe("");
+  });
+  test("excludes owner_ville (Codex P2-A)", () => {
+    expect(pickBuildingCityFromRawRow({ owner_ville: "Montréal" })).toBe("");
+  });
+  test("excludes mailing_ville (Codex P2-A)", () => {
+    expect(pickBuildingCityFromRawRow({ mailing_ville: "Montréal" })).toBe("");
+  });
+  test("excludes adresse_postale_ville (Codex P2-A)", () => {
+    expect(pickBuildingCityFromRawRow({ adresse_postale_ville: "Montréal" })).toBe("");
+  });
+  test("excludes correspondance_ville (Codex P2-A)", () => {
+    expect(pickBuildingCityFromRawRow({ correspondance_ville: "Montréal" })).toBe("");
+  });
+  test("still picks legitimate building-context columns", () => {
+    expect(pickBuildingCityFromRawRow({ ville_municipale: "Granby" })).toBe("Granby");
+    expect(pickBuildingCityFromRawRow({ ville_immeuble: "Granby" })).toBe("Granby");
+  });
+  test("still picks plain Ville/Ville1/Ville2 over owner aliases", () => {
+    expect(pickBuildingCityFromRawRow({
+      Ville: "Granby",
+      ville_proprietaire: "Montréal",
+    })).toBe("Granby");
+  });
+});
