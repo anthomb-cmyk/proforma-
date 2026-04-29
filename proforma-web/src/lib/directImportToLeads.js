@@ -4,7 +4,7 @@
 // export-ready lead records for the existing onExportFoundToLeads pipeline.
 // No API calls. No side effects. Testable in isolation.
 
-import { normalizePhoneKey, isValidNanpPhone } from "./phoneUtils.js";
+import { normalizePhoneKey, isValidNanpPhone, pickPhoneFromValueWithContext } from "./phoneUtils.js";
 
 // ── Phone validation ──────────────────────────────────────────────────────
 // Client-side inline check so this module has no server-side dependencies.
@@ -145,13 +145,28 @@ export function pickBestPhone(row) {
     if (n) return n;
   }
 
-  // 3. Walk the rawRow columns as a last-resort fallback.
+  // 3. Walk the rawRow COLUMNS — but ONLY columns whose name hints at "phone"
+  // content. Walking every column blindly causes false positives where long
+  // identifiers (matricules, cadastre numbers, lot codes) get sliced to 10
+  // digits and incorrectly accepted as NANP phones.
   const raw = row.rawRow || row;
-  for (const val of Object.values(raw)) {
-    if (typeof val === "string" || typeof val === "number") {
-      const n = normalizeValidPhone(String(val));
-      if (n) return n;
-    }
+  const PHONE_COL_RE = /\b(?:tel|phone|telephone|t[e\u00e9]l[e\u00e9]phone|mobile|cell|fax|numero|number|\bno[\s_-]+t[e\u00e9]l\b)\b/i;
+  for (const [key, val] of Object.entries(raw)) {
+    if (!PHONE_COL_RE.test(String(key))) continue;
+    if (typeof val !== "string" && typeof val !== "number") continue;
+    const n = pickPhoneFromValueWithContext(val);
+    if (n) return n;
+  }
+
+  // 4. Last-resort: walk ALL columns but with strict per-value validation.
+  // Only accept values whose original digit count matches a phone shape
+  // (10 digits exact, or 11 starting with 1). This catches phones in unmapped
+  // columns without producing matricule false-positives.
+  for (const [key, val] of Object.entries(raw)) {
+    if (PHONE_COL_RE.test(String(key))) continue; // already tried above
+    if (typeof val !== "string" && typeof val !== "number") continue;
+    const n = pickPhoneFromValueWithContext(val);
+    if (n) return n;
   }
 
   return null;
