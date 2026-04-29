@@ -33,6 +33,12 @@ import {
   persistRunsDiff,
   clearRunsFromStorage,
 } from "../lib/pfRunsStorage.js";
+import {
+  saveImportSession,
+  loadImportSession,
+  clearImportSession,
+} from "../lib/phoneFinderImportSession.js";
+import DirectImportResultCard from "../components/DirectImportResultCard.jsx";
 
 // Rows per API call — keeps POST /api/phone-lookup under the proxy timeout.
 const BATCH_SIZE = 10;
@@ -126,6 +132,11 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   const [csvFile, setCsvFile] = useState(null);
   const [colMap, setColMap] = useState({});
   const [showColMap, setShowColMap] = useState(false);
+  // PR #38: importStatusByRowIndex tracks which rows have been imported this session.
+  // Session-only (not persisted to localStorage — persisted to separate key via saveImportSession).
+  const [importStatusByRowIndex, setImportStatusByRowIndex] = useState({});
+  // PR #38: directImportResult holds the result of the last direct-import for the summary card.
+  const [directImportResult, setDirectImportResult] = useState(null);
   // filter.search is no longer used — we read the debounced searchInput
   // directly into filteredResults. Kept in state for status etc.
   const [filter, setFilter] = useState({ status:"all" });
@@ -155,6 +166,42 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
   // When the debounced search changes, jump back to page 1 so freshly
   // filtered matches are visible from the top.
   useEffect(() => { setPage(1); }, [debouncedSearch]);
+
+  // PR #38.2: Restore import session from localStorage on mount.
+  useEffect(() => {
+    const session = loadImportSession();
+    if (!session) return;
+    const { fileName, rows, headers, colMap: savedColMap } = session;
+    if (!rows?.length) return;
+    setCsvFile({ fileName, rows, headers, delim: "," });
+    setColMap(savedColMap || {});
+    // importStatusByRowIndex is NOT restored — session-only per spec.
+    showToast(
+      lang === "en"
+        ? `Previous session restored — ${fileName}, ${rows.length} rows`
+        : `Session précédente restaurée — ${fileName}, ${rows.length} lignes`,
+      4000
+    );
+  }, []); // run only on mount — intentionally empty deps (load once on mount)
+
+  // PR #38.2: Save import session to localStorage (throttled 500ms) when file/colMap changes.
+  const _saveSessionTimerRef = useRef(null);
+  useEffect(() => {
+    if (!csvFile?.rows?.length) return;
+    if (_saveSessionTimerRef.current) clearTimeout(_saveSessionTimerRef.current);
+    _saveSessionTimerRef.current = setTimeout(() => {
+      saveImportSession({
+        fileName: csvFile.fileName || "",
+        rows: csvFile.rows,
+        headers: csvFile.headers || [],
+        colMap,
+        importStatusByRowIndex,
+      });
+    }, 500);
+    return () => {
+      if (_saveSessionTimerRef.current) clearTimeout(_saveSessionTimerRef.current);
+    };
+  }, [csvFile, colMap, importStatusByRowIndex]);
 
   // Pre-flight confirmation before a CSV batch runs. `pendingLookup`
   // holds { rows, source } while the cost estimate modal is open.
@@ -1287,14 +1334,29 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         .then(result => {
           const added = Number(result?.added || 0);
           const updated = Number(result?.updated || 0);
-          showToast(
-            lang === "en"
-              ? `${leadsToExport.length} leads imported (${added} new · ${updated} updated) — no API cost.`
-              : `${leadsToExport.length} leads importés (${added} nouveaux · ${updated} mis à jour) — aucun coût API.`,
-            6000
-          );
+          const skipped = Number(result?.skipped || 0);
+
+          // PR #38.3: Show honest result summary card instead of misleading toast.
+          // The card stays on Recherche Tél. — no auto-navigation.
+          setDirectImportResult({ added, updated, skipped, totalSent: leadsToExport.length, at: Date.now() });
+
+          // PR #38.4: Mark each row that was sent as imported (session-only).
+          setImportStatusByRowIndex(prev => {
+            const next = { ...prev };
+            csvFile.rows.forEach((r, idx) => {
+              if (pickBestPhone(r)) next[idx] = "imported";
+            });
+            return next;
+          });
+
+          // Dev debugging: warn if nothing landed
+          if (added === 0 && updated === 0 && skipped > 0) {
+            // eslint-disable-next-line no-console
+            console.warn("[PhoneFinder] direct-import: 0 added / 0 updated / N skipped. First 3 sent rows:", leadsToExport.slice(0, 3));
+          }
+
           if (typeof onAfterImport === "function") onAfterImport();
-          else if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
+          // PR #38.1: Do NOT auto-navigate — onOpenLeads is only called via "View Leads" in the card.
         })
         .catch(err => showToast(String(err?.message || err), 5000));
     } else {
@@ -1303,7 +1365,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
         3500
       );
     }
-  }, [csvFile, colMap, lang, onExportFoundToLeads, onOpenLeads, showToast]);
+  }, [csvFile, colMap, lang, onExportFoundToLeads, showToast]);
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
@@ -1542,7 +1604,7 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                       handleDirectImportPhonesInFile(() => {
                         setPendingLookup(null);
                         setPlanResult(null);
-                        if (typeof onOpenLeads === "function") setTimeout(() => onOpenLeads(), 300);
+                        // PR #38.1: Do NOT auto-navigate — card will appear on Recherche Tél.
                       });
                     }}
                     style={{ padding: "8px 14px", fontSize: 13 }}
@@ -1706,16 +1768,37 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                   onClick={pickCSVFile}>
                   <FolderIcon size={32} style={{marginBottom:8,color:"var(--text3)"}} />
                   {csvFile
-                    ? <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
-                        {/* Inline the stats sentence so the separator can
-                            render inside a styled <code>. pf_csv_stats
-                            lives as a string for non-JSX callers (tests,
-                            csv import toast) but here we split manually. */}
-                        {csvFile.rows.length}
-                        {lang === "en" ? " rows · " : " lignes · "}
-                        {csvFile.headers.length}
-                        {lang === "en" ? " columns · separator: " : " colonnes · séparateur : "}
-                        <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? t("pf_sep_tab") : csvFile.delim}</code>
+                    ? <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                        <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                          {/* Inline the stats sentence so the separator can
+                              render inside a styled <code>. pf_csv_stats
+                              lives as a string for non-JSX callers (tests,
+                              csv import toast) but here we split manually. */}
+                          {csvFile.rows.length}
+                          {lang === "en" ? " rows · " : " lignes · "}
+                          {csvFile.headers.length}
+                          {lang === "en" ? " columns · separator: " : " colonnes · séparateur : "}
+                          <code style={{background:"#F0E8D8",padding:"1px 5px",borderRadius:4}}>{csvFile.delim === "\t" ? t("pf_sep_tab") : csvFile.delim}</code>
+                        </div>
+                        {/* PR #38.2: Clear current import button */}
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          style={{fontSize:11,color:"var(--text3)",flexShrink:0}}
+                          onClick={() => {
+                            const msg = lang === "en"
+                              ? "Clear the current import? This cannot be undone."
+                              : "Effacer l'importation en cours ? Cette action est irréversible.";
+                            if (!window.confirm(msg)) return;
+                            clearImportSession();
+                            setCsvFile(null);
+                            setColMap({});
+                            setImportStatusByRowIndex({});
+                            setDirectImportResult(null);
+                          }}
+                        >
+                          {lang === "en" ? "✕ Clear import" : "✕ Effacer l'import"}
+                        </button>
                       </div>
                     : <div style={{fontSize:13,fontWeight:700,color:"var(--text2)"}}>{t("pf_csv_drop")}</div>}
                   <div style={{fontSize:11,color:"var(--text3)",marginTop:4}}>{t("pf_csv_hint")}</div>
@@ -1752,8 +1835,24 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                   const _eligibleForEnrichment = Math.min(_rowsToEnrich, _audit.summary?.eligible_without_phone ?? _rowsToEnrich);
                   const _skipped = Math.max(0, csvFile.rows.length - _withPhone - _eligibleForEnrichment);
 
+                  // PR #38.4: count how many rows have been marked imported this session
+                  const _importedCount = Object.values(importStatusByRowIndex).filter(v => v === "imported").length;
+                  // PR #38.5: determine if post-import CTA swap applies
+                  const _hasSuccessfulImport = directImportResult
+                    && (directImportResult.added + directImportResult.updated) > 0;
+                  // All rows with phones have been imported — offer re-import label
+                  const _allWithPhoneImported = _withPhone > 0 && _importedCount >= _withPhone;
+
                   return (
                     <>
+                      {/* PR #38.3 — Honest result summary card (replaces misleading toast) */}
+                      <DirectImportResultCard
+                        result={directImportResult}
+                        onDismiss={() => setDirectImportResult(null)}
+                        onViewLeads={typeof onOpenLeads === "function" ? onOpenLeads : undefined}
+                        lang={lang}
+                      />
+
                       {/* Phase 5.1.1 — Unified dashboard */}
                       <EnrichmentDashboard
                         fileName={csvFile.fileName || "fichier importé"}
@@ -1761,6 +1860,9 @@ function PhoneFinder({ onExportFoundToLeads, onOpenLeads, t: tProp, lang: langPr
                         rowsWithPhone={_withPhone}
                         rowsEligibleForEnrichment={_eligibleForEnrichment}
                         rowsSkipped={_skipped}
+                        importedCount={_importedCount}
+                        allWithPhoneImported={_allWithPhoneImported}
+                        postImportMode={_hasSuccessfulImport}
                         onDirectImport={() => handleDirectImportPhonesInFile()}
                         onEnrichMissing={() => {
                           // Show the pipeline panel (scroll to it), or open it if not yet visible.
