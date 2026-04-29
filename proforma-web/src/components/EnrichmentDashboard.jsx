@@ -32,6 +32,9 @@ const PLACES_COST_PER_CALL = 0.05;     // ~$0.05 per Places lookup
  * @param {boolean}  [props.estimatedCostBraveSubscription=false]
  * @param {number}   [props.estimatedCostPlacesPerMiss=0.05]
  * @param {number}   [props.estimatedCostLegacy=0]
+ * @param {number}   [props.importedCount=0]       - rows marked imported this session
+ * @param {boolean}  [props.allWithPhoneImported=false] - all phone-rows already imported
+ * @param {boolean}  [props.postImportMode=false]  - swap CTA emphasis after successful import
  */
 export default function EnrichmentDashboard({
   fileName,
@@ -45,6 +48,9 @@ export default function EnrichmentDashboard({
   estimatedCostBraveSubscription = false,
   estimatedCostPlacesPerMiss = PLACES_COST_PER_CALL,
   estimatedCostLegacy = 0,
+  importedCount = 0,
+  allWithPhoneImported = false,
+  postImportMode = false,
 }) {
   // ── Cost estimate ────────────────────────────────────────────────────────
   const eligible = Number.isFinite(rowsEligibleForEnrichment)
@@ -180,7 +186,15 @@ export default function EnrichmentDashboard({
 
           <div style={statRow}>
             <div style={statNumber("#1A7A3F")}>{rowsWithPhone ?? 0}</div>
-            <div style={statLabel}>ont déjà un téléphone dans le fichier</div>
+            <div style={statLabel}>
+              ont déjà un téléphone dans le fichier
+              {/* PR #38.4: show imported sub-line if any were imported this session */}
+              {importedCount > 0 && (
+                <div style={{ fontSize: 11, color: "#1A7A3F", marginTop: 2, opacity: 0.85 }}>
+                  ↳ {importedCount} déjà importé{importedCount !== 1 ? "s" : ""} dans Leads ce session
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={statRow}>
@@ -200,29 +214,34 @@ export default function EnrichmentDashboard({
         <div>
           <div style={sectionTitle}>Actions</div>
 
-          {/* Action 1: direct import of rows that already have a phone */}
-          <button
-            style={btnGold}
-            onClick={onDirectImport}
-            disabled={!(rowsWithPhone > 0)}
-            title="Importer directement les lignes qui ont déjà un numéro — aucun appel API"
-          >
-            Importer {rowsWithPhone ?? 0} téléphones (déjà au fichier) → Leads
-            <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text3)", marginTop: 2 }}>
-              Aucun coût API · zéro appel réseau
-            </div>
-          </button>
-
+          {/* PR #38.5: after a successful import, swap CTA emphasis:
+               - Enrich becomes primary (gold)
+               - Direct import becomes secondary (blue / ghost) */}
           {/* Action 2: enrich missing phones via the new pipeline */}
           <button
-            style={btnBlue}
+            style={postImportMode ? btnGold : btnBlue}
             onClick={onEnrichMissing}
             disabled={!(rowsEligibleForEnrichment > 0)}
             title="Ouvrir le panneau d'enrichissement Brave Search + Places"
           >
             Enrichir {rowsEligibleForEnrichment ?? 0} téléphones manquants
-            <div style={{ fontSize: 11, fontWeight: 500, color: "#4A7FB0", marginTop: 2 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, color: postImportMode ? "var(--text3)" : "#4A7FB0", marginTop: 2 }}>
               Nouveau pipeline Brave Search · coût réduit
+            </div>
+          </button>
+
+          {/* Action 1: direct import of rows that already have a phone */}
+          <button
+            style={postImportMode ? btnGhost : btnGold}
+            onClick={onDirectImport}
+            disabled={!(rowsWithPhone > 0)}
+            title="Importer directement les lignes qui ont déjà un numéro — aucun appel API"
+          >
+            {allWithPhoneImported
+              ? `Ré-importer ${rowsWithPhone ?? 0} → Leads`
+              : `Importer ${rowsWithPhone ?? 0} téléphones (déjà au fichier) → Leads`}
+            <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text3)", marginTop: 2 }}>
+              Aucun coût API · zéro appel réseau
             </div>
           </button>
 
